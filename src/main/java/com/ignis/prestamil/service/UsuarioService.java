@@ -92,4 +92,39 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
         return encryptor.encrypt(password);
     }
 
+    /**
+     * Cambia la contraseña de un usuario
+     * @param usuarioId ID del usuario
+     * @param passwordActual Contraseña actual en texto plano
+     * @param passwordNueva Nueva contraseña en texto plano
+     */
+    public void cambiarPassword(Integer usuarioId, String passwordActual, String passwordNueva) {
+        Usuario usuario = repository.findById(usuarioId)
+            .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+
+        // Validar contraseña actual
+        String passwordDesencriptada = encryptor.decrypt(usuario.getPassword());
+        if (passwordDesencriptada == null || !passwordDesencriptada.equals(passwordActual)) {
+            throw new RuntimeException("La contraseña actual es incorrecta");
+        }
+
+        // Validar que la nueva contraseña sea diferente a la actual
+        if (passwordDesencriptada.equals(passwordNueva)) {
+            throw new RuntimeException("La nueva contraseña debe ser diferente a la contraseña actual");
+        }
+
+        // Validar que la nueva contraseña no esté vacía
+        if (passwordNueva == null || passwordNueva.isEmpty()) {
+            throw new RuntimeException("La nueva contraseña no puede estar vacía");
+        }
+
+        // Encriptar y actualizar la nueva contraseña
+        String passwordNuevaEncriptada = encryptor.encrypt(passwordNueva);
+        usuario.setPassword(passwordNuevaEncriptada);
+        usuario.setCambiarPassword(false);
+        usuario.setFechaCambioPass(java.time.LocalDate.now());
+        
+        repository.save(usuario);
+    }
+
 }

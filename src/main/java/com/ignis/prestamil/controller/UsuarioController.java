@@ -2,6 +2,7 @@ package com.ignis.prestamil.controller;
 
 import com.ignis.prestamil.mapper.UsuarioMapper;
 import com.ignis.prestamil.model.Usuario;
+import com.ignis.prestamil.request.CambiarPasswordRequest;
 import com.ignis.prestamil.response.UsuarioResponse;
 import com.ignis.prestamil.service.UsuarioService;
 import org.springframework.data.domain.Page;
@@ -10,7 +11,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -82,6 +85,32 @@ public class UsuarioController {
         
         Usuario updatedUsuario = usuarioService.update(usuario);
         return ResponseEntity.ok(usuarioMapper.toUsuarioResponse(updatedUsuario));
+    }
+
+    @PutMapping("/{id}/cambiar-password")
+    public ResponseEntity<Map<String, String>> cambiarPassword(
+            @PathVariable Integer id,
+            @RequestBody CambiarPasswordRequest request) {
+        
+        if (!usuarioService.existsById(id)) {
+            return ResponseEntity.notFound().build();
+        }
+
+        try {
+            usuarioService.cambiarPassword(id, request.getPasswordActual(), request.getPasswordNueva());
+            
+            Map<String, String> response = new HashMap<>();
+            response.put("message", "Contraseña cambiada exitosamente");
+            response.put("status", "success");
+            
+            return ResponseEntity.ok(response);
+        } catch (RuntimeException e) {
+            Map<String, String> errorResponse = new HashMap<>();
+            errorResponse.put("error", e.getMessage());
+            errorResponse.put("status", "error");
+            
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
+        }
     }
 
 }
