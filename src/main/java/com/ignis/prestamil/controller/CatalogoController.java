@@ -4,7 +4,6 @@ import com.ignis.prestamil.mapper.CatalogoMapper;
 import com.ignis.prestamil.model.Catalogo;
 import com.ignis.prestamil.response.CatalogoResponse;
 import com.ignis.prestamil.service.CatalogoService;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -38,12 +37,6 @@ public class CatalogoController {
         Optional<Catalogo> catalogo = catalogoService.findById(id);
         return catalogo.map(c -> ResponseEntity.ok(catalogoMapper.toCatalogoResponse(c)))
                 .orElse(ResponseEntity.notFound().build());
-    }
-
-    @PostMapping
-    public ResponseEntity<CatalogoResponse> create(@RequestBody Catalogo catalogo) {
-        Catalogo savedCatalogo = catalogoService.save(catalogo);
-        return ResponseEntity.status(HttpStatus.CREATED).body(catalogoMapper.toCatalogoResponse(savedCatalogo));
     }
 
     @PutMapping("/{id}")

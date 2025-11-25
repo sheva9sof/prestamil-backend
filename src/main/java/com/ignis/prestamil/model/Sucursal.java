@@ -17,6 +17,9 @@ public class Sucursal {
     @Column(name = "id", nullable = false)
     private Integer id;
 
+    @Column(name = "numero_sucursal")
+    private Integer numeroSucursal;
+
     @Column(name = "nombre", length = 50)
     private String nombre;
 
@@ -60,11 +63,10 @@ public class Sucursal {
     @Column(name = "rfc", length = 20)
     private String rfc;
 
-    @Column(name = "fechaRegistroProfeco")
+    @Column(name = "fechaRegistroProfeco", nullable = false)
     private LocalDateTime fechaRegistroProfeco;
 
-    @Column(name = "fechaContratoProfeco")
+    @Column(name = "fechaContratoProfeco", nullable = false)
     private LocalDateTime fechaContratoProfeco;
-
 }
 

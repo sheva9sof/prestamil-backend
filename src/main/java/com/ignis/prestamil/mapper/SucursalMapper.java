@@ -1,6 +1,7 @@
 package com.ignis.prestamil.mapper;
 
 import com.ignis.prestamil.model.Sucursal;
+import com.ignis.prestamil.request.SucursalRequest;
 import com.ignis.prestamil.response.SucursalResponse;
 import org.springframework.stereotype.Component;
 
@@ -17,10 +18,9 @@ public class SucursalMapper {
 
         SucursalResponse response = new SucursalResponse();
         response.setId(sucursal.getId());
+        response.setNumeroSucursal(sucursal.getNumeroSucursal());
         response.setNombre(sucursal.getNombre());
         response.setIdRazonSocial(sucursal.getEmpresa() != null ? sucursal.getEmpresa().getId() : null);
-        response.setNombreEmpresa(sucursal.getEmpresa() != null ? sucursal.getEmpresa().getNombre() : null);
-        response.setRazonSocial(sucursal.getEmpresa() != null ? sucursal.getEmpresa().getRazonSocial() : null);
         response.setCalle(sucursal.getCalle());
         response.setNoExterior(sucursal.getNoExterior());
         response.setNoInterior(sucursal.getNoInterior());
@@ -36,7 +36,41 @@ public class SucursalMapper {
         response.setFechaRegistroProfeco(sucursal.getFechaRegistroProfeco());
         response.setFechaContratoProfeco(sucursal.getFechaContratoProfeco());
 
+        if (sucursal.getEmpresa() != null) {
+            response.setNombreEmpresa(sucursal.getEmpresa().getNombre());
+            response.setRazonSocial(sucursal.getEmpresa().getRazonSocial());
+        }
+
         return response;
+    }
+
+    /**
+     * Convierte un SucursalRequest a Sucursal (sin el ID)
+     * Nota: La empresa se debe cargar en el servicio usando idRazonSocial
+     */
+    public Sucursal toSucursal(SucursalRequest request) {
+        if (request == null) {
+            return null;
+        }
+
+        Sucursal sucursal = new Sucursal();
+        sucursal.setNumeroSucursal(request.getNumeroSucursal());
+        sucursal.setNombre(request.getNombre());
+        sucursal.setCalle(request.getCalle());
+        sucursal.setNoExterior(request.getNoExterior());
+        sucursal.setNoInterior(request.getNoInterior());
+        sucursal.setColonia(request.getColonia());
+        sucursal.setMunicipio(request.getMunicipio());
+        sucursal.setCp(request.getCp());
+        sucursal.setEstado(request.getEstado());
+        sucursal.setPais(request.getPais());
+        sucursal.setLada(request.getLada());
+        sucursal.setTelefono(request.getTelefono());
+        sucursal.setFechaApertura(request.getFechaApertura());
+        sucursal.setRfc(request.getRfc());
+        sucursal.setFechaRegistroProfeco(request.getFechaRegistroProfeco());
+        sucursal.setFechaContratoProfeco(request.getFechaContratoProfeco());
+        return sucursal;
     }
 
 }

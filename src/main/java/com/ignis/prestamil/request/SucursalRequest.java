@@ -1,5 +1,6 @@
-package com.ignis.prestamil.response;
+package com.ignis.prestamil.request;
 
+import jakarta.validation.constraints.NotNull;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -8,13 +9,10 @@ import java.time.LocalDateTime;
 
 @Getter
 @Setter
-public class SucursalResponse {
-    private Integer id;
+public class SucursalRequest {
     private Integer numeroSucursal;
     private String nombre;
     private Integer idRazonSocial;
-    private String nombreEmpresa;
-    private String razonSocial;
     private String calle;
     private String noExterior;
     private String noInterior;
@@ -27,8 +25,11 @@ public class SucursalResponse {
     private String telefono;
     private LocalDate fechaApertura;
     private String rfc;
+    
+    @NotNull(message = "Fecha Registro PROFECO es obligatoria")
     private LocalDateTime fechaRegistroProfeco;
+    
+    @NotNull(message = "Fecha Contrato PROFECO es obligatoria")
     private LocalDateTime fechaContratoProfeco;
-    private LocalDate fechaAperturaNueva;
 }
 
