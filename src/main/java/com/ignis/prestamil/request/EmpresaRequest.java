@@ -1,12 +1,11 @@
-package com.ignis.prestamil.response;
+package com.ignis.prestamil.request;
 
 import lombok.Getter;
 import lombok.Setter;
 
 @Getter
 @Setter
-public class EmpresaResponse {
-    private Integer id;
+public class EmpresaRequest {
     private String nombre;
     private String razonSocial;
     private String calle;

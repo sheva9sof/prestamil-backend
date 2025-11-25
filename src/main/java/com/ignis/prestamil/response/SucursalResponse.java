@@ -29,6 +29,12 @@ public class SucursalResponse {
     private String rfc;
     private LocalDateTime fechaRegistroProfeco;
     private LocalDateTime fechaContratoProfeco;
-    private LocalDate fechaAperturaNueva;
+    private Boolean lunes;
+    private Boolean martes;
+    private Boolean miercoles;
+    private Boolean jueves;
+    private Boolean viernes;
+    private Boolean sabado;
+    private Boolean domingo;
 }
 

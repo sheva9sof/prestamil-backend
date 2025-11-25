@@ -31,5 +31,13 @@ public class SucursalRequest {
     
     @NotNull(message = "Fecha Contrato PROFECO es obligatoria")
     private LocalDateTime fechaContratoProfeco;
+    
+    private Boolean lunes;
+    private Boolean martes;
+    private Boolean miercoles;
+    private Boolean jueves;
+    private Boolean viernes;
+    private Boolean sabado;
+    private Boolean domingo;
 }
 

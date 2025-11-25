@@ -35,6 +35,13 @@ public class SucursalMapper {
         response.setRfc(sucursal.getRfc());
         response.setFechaRegistroProfeco(sucursal.getFechaRegistroProfeco());
         response.setFechaContratoProfeco(sucursal.getFechaContratoProfeco());
+        response.setLunes(sucursal.getLunes());
+        response.setMartes(sucursal.getMartes());
+        response.setMiercoles(sucursal.getMiercoles());
+        response.setJueves(sucursal.getJueves());
+        response.setViernes(sucursal.getViernes());
+        response.setSabado(sucursal.getSabado());
+        response.setDomingo(sucursal.getDomingo());
 
         if (sucursal.getEmpresa() != null) {
             response.setNombreEmpresa(sucursal.getEmpresa().getNombre());
@@ -70,6 +77,13 @@ public class SucursalMapper {
         sucursal.setRfc(request.getRfc());
         sucursal.setFechaRegistroProfeco(request.getFechaRegistroProfeco());
         sucursal.setFechaContratoProfeco(request.getFechaContratoProfeco());
+        sucursal.setLunes(request.getLunes());
+        sucursal.setMartes(request.getMartes());
+        sucursal.setMiercoles(request.getMiercoles());
+        sucursal.setJueves(request.getJueves());
+        sucursal.setViernes(request.getViernes());
+        sucursal.setSabado(request.getSabado());
+        sucursal.setDomingo(request.getDomingo());
         return sucursal;
     }
 

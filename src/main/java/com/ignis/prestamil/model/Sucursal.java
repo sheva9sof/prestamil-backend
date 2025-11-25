@@ -68,5 +68,27 @@ public class Sucursal {
 
     @Column(name = "fechaContratoProfeco", nullable = false)
     private LocalDateTime fechaContratoProfeco;
+
+    @Column(name = "lunes", columnDefinition = "SMALLINT")
+    private Boolean lunes;
+
+    @Column(name = "martes", columnDefinition = "SMALLINT")
+    private Boolean martes;
+
+    @Column(name = "miercoles", columnDefinition = "SMALLINT")
+    private Boolean miercoles;
+
+    @Column(name = "jueves", columnDefinition = "SMALLINT")
+    private Boolean jueves;
+
+    @Column(name = "viernes", columnDefinition = "SMALLINT")
+    private Boolean viernes;
+
+    @Column(name = "sabado", columnDefinition = "SMALLINT")
+    private Boolean sabado;
+
+    @Column(name = "domingo", columnDefinition = "SMALLINT")
+    private Boolean domingo;
+
 }
 
