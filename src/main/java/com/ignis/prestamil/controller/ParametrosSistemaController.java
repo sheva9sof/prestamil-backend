@@ -2,15 +2,13 @@ package com.ignis.prestamil.controller;
 
 import com.ignis.prestamil.mapper.ParametrosSistemaMapper;
 import com.ignis.prestamil.model.ParametrosSistema;
-import com.ignis.prestamil.request.ParametrosSistemaRequest;
 import com.ignis.prestamil.response.ParametrosSistemaResponse;
 import com.ignis.prestamil.service.ParametrosSistemaService;
-import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
-import java.util.Optional;
 import java.util.stream.Collectors;
 
 @RestController
@@ -26,29 +24,39 @@ public class ParametrosSistemaController {
     }
 
     @GetMapping
-    public ResponseEntity<List<ParametrosSistemaResponse>> findAll() {
-        List<ParametrosSistema> parametros = parametrosSistemaService.findAll();
-        List<ParametrosSistemaResponse> responses = parametros.stream()
+    public List<ParametrosSistemaResponse> findAll() {
+        return parametrosSistemaService.findAll().stream()
                 .map(parametrosSistemaMapper::toParametrosSistemaResponse)
                 .collect(Collectors.toList());
-        return ResponseEntity.ok(responses);
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<ParametrosSistemaResponse> findById(@PathVariable Integer id) {
-        Optional<ParametrosSistema> parametro = parametrosSistemaService.findById(id);
-        return parametro.map(p -> ResponseEntity.ok(parametrosSistemaMapper.toParametrosSistemaResponse(p)))
-                .orElse(ResponseEntity.notFound().build());
+    public ParametrosSistemaResponse findById(@PathVariable Integer id) {
+        ParametrosSistema parametro = parametrosSistemaService.findById(id);
+        return parametrosSistemaMapper.toParametrosSistemaResponse(parametro);
+    }
+
+    @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
+    public ParametrosSistemaResponse create(@RequestBody ParametrosSistema parametro) {
+        ParametrosSistema savedParametro = parametrosSistemaService.save(parametro);
+        return parametrosSistemaMapper.toParametrosSistemaResponse(savedParametro);
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<ParametrosSistemaResponse> update(@PathVariable Integer id, @Valid @RequestBody ParametrosSistemaRequest request) {
-        if (!parametrosSistemaService.existsById(id)) {
-            return ResponseEntity.notFound().build();
-        }
-        ParametrosSistemaResponse response = parametrosSistemaService.update(id, request);
-        return ResponseEntity.ok(response);
+    public ParametrosSistemaResponse update(@PathVariable Integer id, @RequestBody ParametrosSistema parametrosDetails) {
+        // Asumo que ParametrosSistemaService tendrá un método update como en UsuarioService
+        // Si no lo tiene, este método update genérico de BaseService funcionará si se envía el objeto completo
+        parametrosDetails.setId(id);
+        ParametrosSistema updatedParametro = parametrosSistemaService.update(parametrosDetails);
+        return parametrosSistemaMapper.toParametrosSistemaResponse(updatedParametro);
     }
 
+    @DeleteMapping("/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(@PathVariable Integer id) {
+        // Asumo un borrado físico para esta entidad.
+        // Necesito restaurar deleteById en BaseService para que esto funcione.
+        parametrosSistemaService.deleteById(id);
+    }
 }
-

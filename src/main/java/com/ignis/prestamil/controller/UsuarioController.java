@@ -7,14 +7,13 @@ import com.ignis.prestamil.response.UsuarioResponse;
 import com.ignis.prestamil.service.UsuarioService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.stream.Collectors;
 
 @RestController
@@ -30,87 +29,82 @@ public class UsuarioController {
     }
 
     @GetMapping
-    public ResponseEntity<List<UsuarioResponse>> findAll() {
+    public List<UsuarioResponse> findAll() {
         List<Usuario> usuarios = usuarioService.findAll();
-        List<UsuarioResponse> responses = usuarios.stream()
+        return usuarios.stream()
                 .map(usuarioMapper::toUsuarioResponse)
                 .collect(Collectors.toList());
-        return ResponseEntity.ok(responses);
     }
 
     @GetMapping("/page")
-    public ResponseEntity<Page<UsuarioResponse>> findAll(Pageable pageable) {
+    public Page<UsuarioResponse> findAll(Pageable pageable) {
         Page<Usuario> usuarios = usuarioService.findAll(pageable);
-        Page<UsuarioResponse> responses = usuarios.map(usuarioMapper::toUsuarioResponse);
-        return ResponseEntity.ok(responses);
+        return usuarios.map(usuarioMapper::toUsuarioResponse);
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<UsuarioResponse> findById(@PathVariable Integer id) {
-        Optional<Usuario> usuario = usuarioService.findById(id);
-        return usuario.map(u -> ResponseEntity.ok(usuarioMapper.toUsuarioResponse(u)))
-                .orElse(ResponseEntity.notFound().build());
+    public UsuarioResponse findById(@PathVariable Integer id) {
+        Usuario usuario = usuarioService.findById(id);
+        return usuarioMapper.toUsuarioResponse(usuario);
     }
 
     @PostMapping
-    public ResponseEntity<UsuarioResponse> create(@RequestBody Usuario usuario) {
-        // Encriptar password si se proporciona
-        if (usuario.getPassword() != null && !usuario.getPassword().isEmpty()) {
-            String passwordEncriptada = usuarioService.encryptPassword(usuario.getPassword());
-            usuario.setPassword(passwordEncriptada);
-        }
-        
+    @ResponseStatus(HttpStatus.CREATED)
+    public UsuarioResponse create(@RequestBody Usuario usuario) {
         Usuario savedUsuario = usuarioService.save(usuario);
-        return ResponseEntity.status(HttpStatus.CREATED).body(usuarioMapper.toUsuarioResponse(savedUsuario));
+        return usuarioMapper.toUsuarioResponse(savedUsuario);
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<UsuarioResponse> update(@PathVariable Integer id, @RequestBody Usuario usuario) {
-        if (!usuarioService.existsById(id)) {
-            return ResponseEntity.notFound().build();
+    public UsuarioResponse update(@PathVariable Integer id, @RequestBody Usuario usuarioDetails) {
+        Usuario updatedUsuario = usuarioService.update(id, usuarioDetails);
+        return usuarioMapper.toUsuarioResponse(updatedUsuario);
+    }
+
+    @DeleteMapping("/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(@PathVariable Integer id) {
+        usuarioService.deleteById(id);
+    }
+
+    @GetMapping("/buscar")
+    public List<UsuarioResponse> search(@RequestParam(required = false) String nombre,
+                                        @RequestParam(required = false) String nombreUsuario,
+                                        @RequestParam(required = false) Boolean estatus) {
+        
+        // Forma moderna de iniciar una Specification
+        Specification<Usuario> spec = (root, query, criteriaBuilder) -> criteriaBuilder.conjunction();
+
+        if (nombre != null && !nombre.isEmpty()) {
+            spec = spec.and((root, query, cb) -> cb.like(cb.lower(root.get("nombre")), "%" + nombre.toLowerCase() + "%"));
         }
-        
-        usuario.setId(id);
-        
-        // Si se proporciona un nuevo password, encriptarlo
-        if (usuario.getPassword() != null && !usuario.getPassword().isEmpty()) {
-            String passwordEncriptada = usuarioService.encryptPassword(usuario.getPassword());
-            usuario.setPassword(passwordEncriptada);
-        } else {
-            // Mantener el password existente si no se proporciona uno nuevo
-            Usuario usuarioExistente = usuarioService.findById(id)
-                    .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
-            usuario.setPassword(usuarioExistente.getPassword());
+
+        if (nombreUsuario != null && !nombreUsuario.isEmpty()) {
+            spec = spec.and((root, query, cb) -> cb.equal(root.get("nombreUsuario"), nombreUsuario));
         }
-        
-        Usuario updatedUsuario = usuarioService.update(usuario);
-        return ResponseEntity.ok(usuarioMapper.toUsuarioResponse(updatedUsuario));
+
+        if (estatus != null) {
+            spec = spec.and((root, query, cb) -> cb.equal(root.get("estatus"), estatus));
+        }
+
+        List<Usuario> usuarios = usuarioService.findAll(spec);
+        return usuarios.stream()
+                .map(usuarioMapper::toUsuarioResponse)
+                .collect(Collectors.toList());
     }
 
     @PutMapping("/{id}/cambiar-password")
-    public ResponseEntity<Map<String, String>> cambiarPassword(
+    public Map<String, String> cambiarPassword(
             @PathVariable Integer id,
             @RequestBody CambiarPasswordRequest request) {
         
-        if (!usuarioService.existsById(id)) {
-            return ResponseEntity.notFound().build();
-        }
-
-        try {
-            usuarioService.cambiarPassword(id, request.getPasswordActual(), request.getPasswordNueva());
-            
-            Map<String, String> response = new HashMap<>();
-            response.put("message", "Contraseña cambiada exitosamente");
-            response.put("status", "success");
-            
-            return ResponseEntity.ok(response);
-        } catch (RuntimeException e) {
-            Map<String, String> errorResponse = new HashMap<>();
-            errorResponse.put("error", e.getMessage());
-            errorResponse.put("status", "error");
-            
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
-        }
+        usuarioService.cambiarPassword(id, request.getPasswordActual(), request.getPasswordNueva());
+        
+        Map<String, String> response = new HashMap<>();
+        response.put("message", "Contraseña cambiada exitosamente");
+        response.put("status", "success");
+        
+        return response;
     }
 
 }

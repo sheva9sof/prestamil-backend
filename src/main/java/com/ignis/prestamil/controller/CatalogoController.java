@@ -4,11 +4,10 @@ import com.ignis.prestamil.mapper.CatalogoMapper;
 import com.ignis.prestamil.model.Catalogo;
 import com.ignis.prestamil.response.CatalogoResponse;
 import com.ignis.prestamil.service.CatalogoService;
-import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
-import java.util.Optional;
 import java.util.stream.Collectors;
 
 @RestController
@@ -24,30 +23,35 @@ public class CatalogoController {
     }
 
     @GetMapping
-    public ResponseEntity<List<CatalogoResponse>> findAll() {
-        List<Catalogo> catalogos = catalogoService.findAll();
-        List<CatalogoResponse> responses = catalogos.stream()
+    public List<CatalogoResponse> findAll() {
+        return catalogoService.findAll().stream()
                 .map(catalogoMapper::toCatalogoResponse)
                 .collect(Collectors.toList());
-        return ResponseEntity.ok(responses);
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<CatalogoResponse> findById(@PathVariable Integer id) {
-        Optional<Catalogo> catalogo = catalogoService.findById(id);
-        return catalogo.map(c -> ResponseEntity.ok(catalogoMapper.toCatalogoResponse(c)))
-                .orElse(ResponseEntity.notFound().build());
+    public CatalogoResponse findById(@PathVariable Integer id) {
+        Catalogo catalogo = catalogoService.findById(id);
+        return catalogoMapper.toCatalogoResponse(catalogo);
+    }
+
+    @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
+    public CatalogoResponse create(@RequestBody Catalogo catalogo) {
+        Catalogo savedCatalogo = catalogoService.save(catalogo);
+        return catalogoMapper.toCatalogoResponse(savedCatalogo);
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<CatalogoResponse> update(@PathVariable Integer id, @RequestBody Catalogo catalogo) {
-        if (!catalogoService.existsById(id)) {
-            return ResponseEntity.notFound().build();
-        }
-        catalogo.setId(id);
-        Catalogo updatedCatalogo = catalogoService.update(catalogo);
-        return ResponseEntity.ok(catalogoMapper.toCatalogoResponse(updatedCatalogo));
+    public CatalogoResponse update(@PathVariable Integer id, @RequestBody Catalogo catalogoDetails) {
+        catalogoDetails.setId(id);
+        Catalogo updatedCatalogo = catalogoService.update(catalogoDetails);
+        return catalogoMapper.toCatalogoResponse(updatedCatalogo);
     }
 
+    @DeleteMapping("/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(@PathVariable Integer id) {
+        catalogoService.deleteById(id);
+    }
 }
-

@@ -1,11 +1,11 @@
 package com.ignis.prestamil.service;
 
+import com.ignis.prestamil.exception.ResourceNotFoundException;
 import com.ignis.prestamil.repository.BaseRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
 import java.util.List;
-import java.util.Optional;
 
 public abstract class BaseService<T, ID, R extends BaseRepository<T, ID>> {
 
@@ -23,8 +23,9 @@ public abstract class BaseService<T, ID, R extends BaseRepository<T, ID>> {
         return repository.findAll(pageable);
     }
 
-    public Optional<T> findById(ID id) {
-        return repository.findById(id);
+    public T findById(ID id) {
+        return repository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Recurso no encontrado con id: " + id));
     }
 
     public T save(T entity) {
@@ -35,12 +36,15 @@ public abstract class BaseService<T, ID, R extends BaseRepository<T, ID>> {
         return repository.save(entity);
     }
 
-    public void deleteById(ID id) {
-        repository.deleteById(id);
-    }
-
     public void delete(T entity) {
         repository.delete(entity);
+    }
+
+    public void deleteById(ID id) {
+        if (!repository.existsById(id)) {
+            throw new ResourceNotFoundException("Recurso no encontrado con id: " + id);
+        }
+        repository.deleteById(id);
     }
 
     public boolean existsById(ID id) {
@@ -52,4 +56,3 @@ public abstract class BaseService<T, ID, R extends BaseRepository<T, ID>> {
     }
 
 }
-

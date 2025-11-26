@@ -9,7 +9,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
-import java.util.Optional;
 import java.util.stream.Collectors;
 
 @RestController
@@ -25,12 +24,10 @@ public class ClienteController {
     }
 
     @GetMapping
-    public ResponseEntity<List<ClienteResponse>> findAll() {
-        List<Cliente> clientes = clienteService.findAll();
-        List<ClienteResponse> responses = clientes.stream()
+    public List<ClienteResponse> findAll() {
+        return clienteService.findAll().stream()
                 .map(clienteMapper::toClienteResponse)
                 .collect(Collectors.toList());
-        return ResponseEntity.ok(responses);
     }
 
     @GetMapping("/search")
@@ -43,27 +40,28 @@ public class ClienteController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<ClienteResponse> findById(@PathVariable Integer id) {
-        Optional<Cliente> cliente = clienteService.findById(id);
-        return cliente.map(c -> ResponseEntity.ok(clienteMapper.toClienteResponse(c)))
-                .orElse(ResponseEntity.notFound().build());
+    public ClienteResponse findById(@PathVariable Integer id) {
+        Cliente cliente = clienteService.findById(id);
+        return clienteMapper.toClienteResponse(cliente);
     }
 
     @PostMapping
-    public ResponseEntity<ClienteResponse> create(@RequestBody Cliente cliente) {
+    @ResponseStatus(HttpStatus.CREATED)
+    public ClienteResponse create(@RequestBody Cliente cliente) {
         Cliente savedCliente = clienteService.save(cliente);
-        return ResponseEntity.status(HttpStatus.CREATED).body(clienteMapper.toClienteResponse(savedCliente));
+        return clienteMapper.toClienteResponse(savedCliente);
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<ClienteResponse> update(@PathVariable Integer id, @RequestBody Cliente cliente) {
-        if (!clienteService.existsById(id)) {
-            return ResponseEntity.notFound().build();
-        }
-        cliente.setId(id);
-        Cliente updatedCliente = clienteService.update(cliente);
-        return ResponseEntity.ok(clienteMapper.toClienteResponse(updatedCliente));
+    public ClienteResponse update(@PathVariable Integer id, @RequestBody Cliente clienteDetails) {
+        clienteDetails.setId(id);
+        Cliente updatedCliente = clienteService.update(clienteDetails);
+        return clienteMapper.toClienteResponse(updatedCliente);
     }
 
+    @DeleteMapping("/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(@PathVariable Integer id) {
+        clienteService.deleteById(id);
+    }
 }
-
