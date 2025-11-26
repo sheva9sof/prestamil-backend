@@ -5,6 +5,7 @@ import com.ignis.prestamil.model.Cliente;
 import com.ignis.prestamil.response.ClienteResponse;
 import com.ignis.prestamil.service.ClienteService;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -27,6 +28,15 @@ public class ClienteController {
         return clienteService.findAll().stream()
                 .map(clienteMapper::toClienteResponse)
                 .collect(Collectors.toList());
+    }
+
+    @GetMapping("/search")
+    public ResponseEntity<List<ClienteResponse>> search(@RequestParam String q) {
+        List<Cliente> clientes = clienteService.searchByNombreCompletoOrTelefono(q);
+        List<ClienteResponse> responses = clientes.stream()
+                .map(clienteMapper::toClienteResponse)
+                .collect(Collectors.toList());
+        return ResponseEntity.ok(responses);
     }
 
     @GetMapping("/{id}")
