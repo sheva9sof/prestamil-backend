@@ -2,12 +2,13 @@ package com.ignis.prestamil.repository;
 
 import com.ignis.prestamil.model.Usuario;
 import org.springframework.data.jpa.repository.EntityGraph;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.stereotype.Repository;
 
 import java.util.Optional;
 
 @Repository
-public interface UsuarioRepository extends BaseRepository<Usuario, Integer> {
+public interface UsuarioRepository extends BaseRepository<Usuario, Integer>, JpaSpecificationExecutor<Usuario> {
 
     Optional<Usuario> findByNombreUsuario(String nombreUsuario);
 
@@ -20,4 +21,3 @@ public interface UsuarioRepository extends BaseRepository<Usuario, Integer> {
     Optional<Usuario> findWithRolAndOpcionesById(Integer id);
 
 }
-
