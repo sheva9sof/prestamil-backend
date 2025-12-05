@@ -3,6 +3,7 @@ package com.ignis.prestamil.service;
 import com.ignis.prestamil.exception.BadRequestException;
 import com.ignis.prestamil.exception.ResourceNotFoundException;
 import com.ignis.prestamil.mapper.UsuarioMapper;
+import com.ignis.prestamil.model.Configuracion;
 import com.ignis.prestamil.model.Opcion;
 import com.ignis.prestamil.model.Rol;
 import com.ignis.prestamil.model.Usuario;
@@ -10,6 +11,8 @@ import com.ignis.prestamil.repository.RolRepository;
 import com.ignis.prestamil.repository.UsuarioRepository;
 import com.ignis.prestamil.request.LoginRequest;
 import com.ignis.prestamil.response.LoginResponse;
+import com.ignis.prestamil.response.TurnoResponse;
+import com.ignis.prestamil.util.Constantes;
 import com.ignis.prestamil.util.Encryptor;
 import com.ignis.prestamil.util.JwtUtil;
 
@@ -19,7 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.List;
+import java.util.*;
 
 @Service
 @Transactional
@@ -29,13 +32,18 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
     private final UsuarioMapper usuarioMapper;
     private final JwtUtil jwtUtil;
     private final RolRepository rolRepository;
+    private final TurnoService turnoService;
+    private final ConfiguracionService configuracionService;
 
-    public UsuarioService(UsuarioRepository repository, Encryptor encryptor, UsuarioMapper usuarioMapper, JwtUtil jwtUtil, RolRepository rolRepository) {
+    public UsuarioService(UsuarioRepository repository, Encryptor encryptor, UsuarioMapper usuarioMapper, JwtUtil jwtUtil, RolRepository rolRepository,
+                          TurnoService turnoService, ConfiguracionService configuracionService) {
         super(repository);
         this.encryptor = encryptor;
         this.usuarioMapper = usuarioMapper;
         this.jwtUtil = jwtUtil;
         this.rolRepository = rolRepository;
+        this.turnoService = turnoService;
+        this.configuracionService = configuracionService;
     }
 
     @Override
@@ -132,9 +140,10 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
         usuario.setUltimaActividad(now);
         repository.save(usuario);
 
-        // Obtener las opciones del usuario
+        // Obtener las opciones del usuario y filtrarlas según el estado del turno
         List<Opcion> opciones = getOpcionesByUsuario(usuario.getNombreUsuario());
-      
+        opciones = filtrarOpcionesPorTurno(opciones, usuario);
+
         // Generar token JWT
         String token = jwtUtil.generateToken(
             usuario.getNombreUsuario(),
@@ -146,6 +155,54 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
         LoginResponse response = usuarioMapper.toLoginResponse(usuario, opciones);
         response.setToken(token);
         return response;
+    }
+
+    public LoginResponse obtenerMiPerfil(String nombreUsuario) {
+        Usuario usuario = repository.findByNombreUsuario(nombreUsuario)
+                .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado"));
+        
+        // Obtener las opciones del usuario y filtrarlas según el estado del turno
+        List<Opcion> opciones = getOpcionesByUsuario(nombreUsuario);
+        try {
+            opciones = filtrarOpcionesPorTurno(opciones, usuario);
+        } catch (ResourceNotFoundException exception) {
+            opciones = new ArrayList<>();
+        }
+
+        // Reutilizamos el LoginResponse para devolver el perfil. El token será null, lo cual está bien.
+        return usuarioMapper.toLoginResponse(usuario, opciones);
+    }
+
+    private List<Opcion> filtrarOpcionesPorTurno(List<Opcion> opcionesOriginales, Usuario usuario) {
+        TurnoResponse turnoActivo = turnoService.obtenerTurnoActivo();
+
+        if (turnoActivo == null) {
+            // No hay turno activo, verificar si el usuario tiene permiso para abrir uno
+            Optional<Configuracion> configRolesOpt = configuracionService.findByConfiguracion(Constantes.ROLES_PERMITIDOS_APERTURA_TURNOS);
+            
+            if (configRolesOpt.isPresent() && usuario.getRol() != null) {
+                String rolesPermitidosStr = configRolesOpt.get().getValorCadena();
+                List<Integer> rolesPermitidos = Arrays.stream(rolesPermitidosStr.split(","))
+                                                    .map(String::trim)
+                                                    .map(Integer::parseInt)
+                                                    .toList();
+                
+                if (rolesPermitidos.contains(usuario.getRol().getId())) {
+                    // El usuario tiene un rol permitido, mostrar solo el menú "Turno"
+                    return opcionesOriginales.stream()
+                                    .filter(opcion -> Constantes.NOMBRE_MENU_TURNO.equals(opcion.getOpcion()))
+                                    .toList();
+                } else {
+                    // El usuario no tiene un rol permitido, no puede hacer nada
+                    throw new ResourceNotFoundException("No hay un turno activo y no tiene permiso para abrir uno.");
+                }
+            } else {
+                // Si no se encuentra el parámetro o el usuario no tiene rol, no puede hacer nada
+                throw new ResourceNotFoundException("No hay un turno activo en el sistema.");
+            }
+        }
+        // Si hay un turno activo, devolver la lista de opciones original sin cambios
+        return opcionesOriginales;
     }
 
     /**

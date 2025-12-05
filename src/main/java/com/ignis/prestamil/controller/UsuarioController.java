@@ -3,12 +3,14 @@ package com.ignis.prestamil.controller;
 import com.ignis.prestamil.mapper.UsuarioMapper;
 import com.ignis.prestamil.model.Usuario;
 import com.ignis.prestamil.request.CambiarPasswordRequest;
+import com.ignis.prestamil.response.LoginResponse;
 import com.ignis.prestamil.response.UsuarioResponse;
 import com.ignis.prestamil.service.UsuarioService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -26,6 +28,12 @@ public class UsuarioController {
     public UsuarioController(UsuarioService usuarioService, UsuarioMapper usuarioMapper) {
         this.usuarioService = usuarioService;
         this.usuarioMapper = usuarioMapper;
+    }
+
+    @GetMapping("/me")
+    public LoginResponse getMyProfile(Authentication authentication) {
+        String nombreUsuario = authentication.getName();
+        return usuarioService.obtenerMiPerfil(nombreUsuario);
     }
 
     @GetMapping
@@ -71,9 +79,7 @@ public class UsuarioController {
     public List<UsuarioResponse> search(@RequestParam(required = false) String nombre,
                                         @RequestParam(required = false) String nombreUsuario,
                                         @RequestParam(required = false) Boolean estatus) {
-        
-        // Forma moderna de iniciar una Specification
-        Specification<Usuario> spec = (root, query, criteriaBuilder) -> criteriaBuilder.conjunction();
+        Specification<Usuario> spec = Specification.where(null);
 
         if (nombre != null && !nombre.isEmpty()) {
             spec = spec.and((root, query, cb) -> cb.like(cb.lower(root.get("nombre")), "%" + nombre.toLowerCase() + "%"));
