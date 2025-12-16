@@ -1,10 +1,8 @@
 package com.ignis.prestamil.request;
 
-import lombok.Getter;
-import lombok.Setter;
+import lombok.Data;
 
-@Getter
-@Setter
+@Data
 public class CambiarPasswordRequest {
     private String passwordActual;
     private String passwordNueva;

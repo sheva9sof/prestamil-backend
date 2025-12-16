@@ -1,12 +1,9 @@
 package com.ignis.prestamil.request;
 
-import lombok.Getter;
-import lombok.Setter;
+import lombok.Data;
 
-@Getter
-@Setter
+@Data
 public class LoginRequest {
-    private String nombreUsuario;
+    private String username;
     private String password;
-    private Integer sucursal;
 }
