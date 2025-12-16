@@ -10,7 +10,7 @@ import java.util.List;
 @Getter
 @Setter
 public class LoginResponse {
-    private String nombreUsuario;
+    private String username;
     private String password;
     private String nombre;
     private String apellidos;
@@ -24,9 +24,7 @@ public class LoginResponse {
     private Boolean aplicaCambioPassword;
     private LocalDate fechaCambioPass;
     private Boolean editable;
-    private String sessionToken;
     private LocalDateTime ultimaActividad;
     private LocalDateTime inicioSesion;
     private List<MenuResponse> opciones;
-    private String token;
 }

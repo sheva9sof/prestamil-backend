@@ -1,5 +1,6 @@
 package com.ignis.prestamil.service;
 
+import com.ignis.prestamil.request.LoginRequest;
 import com.ignis.prestamil.exception.BadRequestException;
 import com.ignis.prestamil.exception.ResourceNotFoundException;
 import com.ignis.prestamil.mapper.UsuarioMapper;
@@ -9,13 +10,19 @@ import com.ignis.prestamil.model.Rol;
 import com.ignis.prestamil.model.Usuario;
 import com.ignis.prestamil.repository.RolRepository;
 import com.ignis.prestamil.repository.UsuarioRepository;
-import com.ignis.prestamil.request.LoginRequest;
 import com.ignis.prestamil.response.LoginResponse;
 import com.ignis.prestamil.response.TurnoResponse;
 import com.ignis.prestamil.util.Constantes;
 import com.ignis.prestamil.util.Encryptor;
-import com.ignis.prestamil.util.JwtUtil;
 
+import jakarta.servlet.http.HttpSession;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,17 +37,15 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
 
     private final Encryptor encryptor;
     private final UsuarioMapper usuarioMapper;
-    private final JwtUtil jwtUtil;
     private final RolRepository rolRepository;
     private final TurnoService turnoService;
     private final ConfiguracionService configuracionService;
 
-    public UsuarioService(UsuarioRepository repository, Encryptor encryptor, UsuarioMapper usuarioMapper, JwtUtil jwtUtil, RolRepository rolRepository,
+    public UsuarioService(UsuarioRepository repository, Encryptor encryptor, UsuarioMapper usuarioMapper, RolRepository rolRepository,
                           TurnoService turnoService, ConfiguracionService configuracionService) {
         super(repository);
         this.encryptor = encryptor;
         this.usuarioMapper = usuarioMapper;
-        this.jwtUtil = jwtUtil;
         this.rolRepository = rolRepository;
         this.turnoService = turnoService;
         this.configuracionService = configuracionService;
@@ -124,7 +129,7 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
     }
 
     public LoginResponse login(LoginRequest loginRequest) {
-        Usuario usuario = repository.findByNombreUsuario(loginRequest.getNombreUsuario())
+        Usuario usuario = repository.findByNombreUsuario(loginRequest.getUsername())
             .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado"));
         
         String passwordDesencriptada = encryptor.decrypt(usuario.getPassword());
@@ -140,20 +145,32 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
         usuario.setUltimaActividad(now);
         repository.save(usuario);
 
+        // --- INICIO CAMBIO: Registrar sesión en Spring Security ---
+        // Creamos la autoridad basada en el rol (si existe)
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        if (usuario.getRol() != null) {
+            authorities.add(new SimpleGrantedAuthority("ROLE_" + usuario.getRol().getId())); // O usa el nombre del rol
+        }
+        UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(usuario.getNombreUsuario(), null, authorities);
+        
+        SecurityContext securityContext = SecurityContextHolder.createEmptyContext();
+        securityContext.setAuthentication(authentication);
+        SecurityContextHolder.setContext(securityContext);
+
+        // Guardar explícitamente el contexto en la sesión HTTP (Requerido en Spring Boot 3)
+        ServletRequestAttributes attr = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+        if (attr != null) {
+            HttpSession session = attr.getRequest().getSession(true);
+            session.setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY, securityContext);
+        }
+        // --- FIN CAMBIO ---
+
         // Obtener las opciones del usuario y filtrarlas según el estado del turno
         List<Opcion> opciones = getOpcionesByUsuario(usuario.getNombreUsuario());
         opciones = filtrarOpcionesPorTurno(opciones, usuario);
 
-        // Generar token JWT
-        String token = jwtUtil.generateToken(
-            usuario.getNombreUsuario(),
-            usuario.getId(),
-            usuario.getRol() != null ? usuario.getRol().getId() : null
-        );
-      
         // Mapear Usuario a LoginResponse usando el mapper, incluyendo las opciones y el token
         LoginResponse response = usuarioMapper.toLoginResponse(usuario, opciones);
-        response.setToken(token);
         return response;
     }
 

@@ -20,6 +20,6 @@ public class Constantes {
     public static final int PORCENTAJE_SANCION_APARTADOS = 15;
 
     // Nombres de configuraciones y menús
-    public static final String ROLES_PERMITIDOS_APERTURA_TURNOS = "roles_permitidos_apertura_turnos";
+    public static final String ROLES_PERMITIDOS_APERTURA_TURNOS = "ROLES_PERMITIDOS_APERTURA_TURNOS";
     public static final String NOMBRE_MENU_TURNO = "Turnos";
 }
