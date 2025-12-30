@@ -5,6 +5,7 @@ import com.ignis.prestamil.model.Catalogo;
 import com.ignis.prestamil.response.CatalogoResponse;
 import com.ignis.prestamil.service.CatalogoService;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -27,6 +28,15 @@ public class CatalogoController {
         return catalogoService.findAll().stream()
                 .map(catalogoMapper::toCatalogoResponse)
                 .collect(Collectors.toList());
+    }
+
+    @GetMapping("/tipo/{idTipoCatalogo}")
+    public ResponseEntity<List<CatalogoResponse>> findByIdTipoCatalogo(@PathVariable Integer idTipoCatalogo) {
+        List<Catalogo> catalogos = catalogoService.findByIdTipoCatalogo(idTipoCatalogo);
+        List<CatalogoResponse> responses = catalogos.stream()
+                .map(catalogoMapper::toCatalogoResponse)
+                .collect(Collectors.toList());
+        return ResponseEntity.ok(responses);
     }
 
     @GetMapping("/{id}")

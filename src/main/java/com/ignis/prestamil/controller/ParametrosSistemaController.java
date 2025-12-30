@@ -5,7 +5,6 @@ import com.ignis.prestamil.model.ParametrosSistema;
 import com.ignis.prestamil.response.ParametrosSistemaResponse;
 import com.ignis.prestamil.service.ParametrosSistemaService;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;

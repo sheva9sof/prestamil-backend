@@ -2,15 +2,24 @@ package com.ignis.prestamil.mapper;
 
 import com.ignis.prestamil.model.Rol;
 import com.ignis.prestamil.response.RolResponse;
-import org.mapstruct.Mapper;
-import org.mapstruct.Mapping;
-import org.mapstruct.factory.Mappers;
+import org.springframework.stereotype.Component;
 
-@Mapper(componentModel = "spring")
-public interface RolMapper {
+@Component
+public class RolMapper {
 
-    RolMapper INSTANCE = Mappers.getMapper(RolMapper.class);
+    /**
+     * Convierte un Rol a RolResponse
+     * El campo "rol" del modelo se mapea al campo "nombre" del response
+     */
+    public RolResponse toRolResponse(Rol rol) {
+        if (rol == null) {
+            return null;
+        }
 
-    @Mapping(source = "rol", target = "nombre")
-    RolResponse toRolResponse(Rol rol);
+        RolResponse response = new RolResponse();
+        response.setId(rol.getId());
+        response.setNombre(rol.getRol()); // Mapeo especial: rol -> nombre
+        // Nota: RolResponse tiene un campo "descripcion" que no está en el modelo Rol
+        return response;
+    }
 }

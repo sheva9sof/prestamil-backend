@@ -1,16 +1,14 @@
 package com.ignis.prestamil.repository;
 
 import com.ignis.prestamil.model.Catalogo;
-import org.springframework.stereotype.Repository;
 
-import java.util.Optional;
+import java.util.List;
+
+import org.springframework.stereotype.Repository;
 
 @Repository
 public interface CatalogoRepository extends BaseRepository<Catalogo, Integer> {
 
-    Optional<Catalogo> findByNombre(String nombre);
-
-    boolean existsByNombre(String nombre);
-
+    List<Catalogo> findByIdTipoCatalogo(Integer idTipoCatalogo);
 }
 
