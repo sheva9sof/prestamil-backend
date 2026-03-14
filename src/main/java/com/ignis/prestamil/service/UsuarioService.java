@@ -15,14 +15,6 @@ import com.ignis.prestamil.response.TurnoResponse;
 import com.ignis.prestamil.util.Constantes;
 import com.ignis.prestamil.util.Encryptor;
 
-import jakarta.servlet.http.HttpSession;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
-import org.springframework.security.core.context.SecurityContext;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
-import org.springframework.web.context.request.RequestContextHolder;
-import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -145,25 +137,6 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
         usuario.setUltimaActividad(now);
         repository.save(usuario);
 
-        // --- INICIO CAMBIO: Registrar sesión en Spring Security ---
-        // Creamos la autoridad basada en el rol (si existe)
-        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
-        if (usuario.getRol() != null) {
-            authorities.add(new SimpleGrantedAuthority("ROLE_" + usuario.getRol().getId())); // O usa el nombre del rol
-        }
-        UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(usuario.getNombreUsuario(), null, authorities);
-        
-        SecurityContext securityContext = SecurityContextHolder.createEmptyContext();
-        securityContext.setAuthentication(authentication);
-        SecurityContextHolder.setContext(securityContext);
-
-        // Guardar explícitamente el contexto en la sesión HTTP (Requerido en Spring Boot 3)
-        ServletRequestAttributes attr = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
-        if (attr != null) {
-            HttpSession session = attr.getRequest().getSession(true);
-            session.setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY, securityContext);
-        }
-        // --- FIN CAMBIO ---
 
         // Obtener las opciones del usuario y filtrarlas según el estado del turno
         List<Opcion> opciones = getOpcionesByUsuario(usuario.getNombreUsuario());

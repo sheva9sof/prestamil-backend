@@ -53,8 +53,8 @@ public class Encryptor {
     }
     public static void main(String[] args) {
         Encryptor encryptor = new Encryptor();
-        String plaintext = "12345";
-        String ciphertext = encryptor.encrypt(plaintext);
+        String plaintext = "CfLvst1duF+e/+4gh87eJw==";
+        String ciphertext = encryptor.decrypt(plaintext);
         System.out.println(ciphertext);
         String decryptedText = encryptor.decrypt(ciphertext);
         System.out.println(decryptedText);
