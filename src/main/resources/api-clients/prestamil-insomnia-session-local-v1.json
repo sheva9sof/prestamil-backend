@@ -1,0 +1,126 @@
+{
+  "_type": "export",
+  "__export_format": 4,
+  "__export_date": "2026-04-17T00:00:00.000Z",
+  "__export_source": "prestamil-backend.insomnia",
+  "resources": [
+    {
+      "_id": "wrk_prestamil",
+      "_type": "workspace",
+      "name": "Prestamil Backend (Sesion)",
+      "description": "Coleccion para backend con autenticacion por sesion JSESSIONID"
+    },
+    {
+      "_id": "env_prestamil_base",
+      "_type": "environment",
+      "parentId": "wrk_prestamil",
+      "name": "Base Environment",
+      "data": {
+        "base_url": "http://localhost:8080",
+        "username": "admin",
+        "password": "cambia_este_valor"
+      }
+    },
+    {
+      "_id": "jar_prestamil",
+      "_type": "cookie_jar",
+      "parentId": "wrk_prestamil",
+      "name": "Default Jar",
+      "cookies": []
+    },
+    {
+      "_id": "fld_auth",
+      "_type": "request_group",
+      "parentId": "wrk_prestamil",
+      "name": "Auth",
+      "description": "Login/logout por sesion"
+    },
+    {
+      "_id": "req_login",
+      "_type": "request",
+      "parentId": "fld_auth",
+      "name": "POST Login",
+      "method": "POST",
+      "url": "{{ _.base_url }}/auth/login",
+      "description": "Crea sesion y guarda JSESSIONID en cookie jar",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"username\": \"{{ _.username }}\",\n  \"password\": \"{{ _.password }}\"\n}"
+      },
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ],
+      "settingStoreCookies": true,
+      "settingSendCookies": true
+    },
+    {
+      "_id": "req_logout_auth",
+      "_type": "request",
+      "parentId": "fld_auth",
+      "name": "POST Logout (AuthController)",
+      "method": "POST",
+      "url": "{{ _.base_url }}/auth/logout",
+      "description": "Invalida la sesion actual",
+      "headers": [],
+      "settingStoreCookies": true,
+      "settingSendCookies": true
+    },
+    {
+      "_id": "req_logout_security",
+      "_type": "request",
+      "parentId": "fld_auth",
+      "name": "POST Logout (Spring Security)",
+      "method": "POST",
+      "url": "{{ _.base_url }}/api/auth/logout",
+      "description": "Logout configurado en SecurityConfig",
+      "headers": [],
+      "settingStoreCookies": true,
+      "settingSendCookies": true
+    },
+    {
+      "_id": "fld_api",
+      "_type": "request_group",
+      "parentId": "wrk_prestamil",
+      "name": "API Protegida",
+      "description": "Requiere JSESSIONID valido"
+    },
+    {
+      "_id": "req_me",
+      "_type": "request",
+      "parentId": "fld_api",
+      "name": "GET Mi Perfil",
+      "method": "GET",
+      "url": "{{ _.base_url }}/api/usuarios/me",
+      "description": "Si no hay sesion devuelve 401",
+      "headers": [],
+      "settingStoreCookies": true,
+      "settingSendCookies": true
+    },
+    {
+      "_id": "req_empresas",
+      "_type": "request",
+      "parentId": "fld_api",
+      "name": "GET Empresas",
+      "method": "GET",
+      "url": "{{ _.base_url }}/api/empresas",
+      "headers": [],
+      "settingStoreCookies": true,
+      "settingSendCookies": true
+    },
+    {
+      "_id": "req_turno_activo",
+      "_type": "request",
+      "parentId": "fld_api",
+      "name": "GET Turno Activo",
+      "method": "GET",
+      "url": "{{ _.base_url }}/api/turnos/activo",
+      "headers": [],
+      "settingStoreCookies": true,
+      "settingSendCookies": true
+    }
+  ]
+}
+

@@ -1,0 +1,151 @@
+{
+  "info": {
+    "_postman_id": "5e7cc53d-b2f4-4f90-a4ea-0cbf16bcbe8c",
+    "name": "Prestamil Backend (Sesion)",
+    "description": "Coleccion equivalente al export de Insomnia para autenticacion por sesion (JSESSIONID). Ejecuta primero POST Login y luego endpoints /api/**.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "POST Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Crea sesion y permite que Postman guarde JSESSIONID en su cookie jar."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Logout (AuthController)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/auth/logout",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "logout"
+              ]
+            },
+            "description": "Invalida la sesion actual via AuthController."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Logout (Spring Security)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/logout",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "logout"
+              ]
+            },
+            "description": "Logout definido en SecurityConfig (logoutUrl /api/auth/logout)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "API Protegida",
+      "item": [
+        {
+          "name": "GET Mi Perfil",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/usuarios/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "usuarios",
+                "me"
+              ]
+            },
+            "description": "Requiere sesion activa; sin JSESSIONID valido responde 401."
+          },
+          "response": []
+        },
+        {
+          "name": "GET Empresas",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/empresas",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "empresas"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET Turno Activo",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/turnos/activo",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "turnos",
+                "activo"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
+

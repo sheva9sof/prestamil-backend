@@ -1,0 +1,28 @@
+{
+  "id": "1e0f57ef-aac7-4f42-b4b8-f0f06a483ef0",
+  "name": "Prestamil Local",
+  "values": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8080",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "username",
+      "value": "admin",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "password",
+      "value": "cambia_este_valor",
+      "type": "default",
+      "enabled": true
+    }
+  ],
+  "_postman_variable_scope": "environment",
+  "_postman_exported_at": "2026-04-17T00:00:00.000Z",
+  "_postman_exported_using": "prestamil-backend.manual-conversion"
+}
+
