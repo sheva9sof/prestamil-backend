@@ -53,7 +53,7 @@ public class AuthController {
 
         // 1. Validar credenciales mediante la lógica de negocio (lanza excepción si falla)
         LoginResponse loginResponse = usuarioService.login(loginRequest);
-
+        loginResponse.setPassword(null);
         // 2. Construir el token de autenticación con rol genérico
         //    (la lógica de roles detallada vive en la DB; ROLE_USER permite acceso a /api/**)
         UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
