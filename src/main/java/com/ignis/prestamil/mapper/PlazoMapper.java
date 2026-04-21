@@ -53,7 +53,7 @@ public class PlazoMapper {
      * Convierte un PlazoRequest a Plazo (sin el ID y sin los timestamps)
      * El campo activo tiene un valor por defecto de true si es null
      * Los campos creadoEn y actualizadoEn se ignoran ya que se manejan automáticamente
-     * Los tiposPrenda se ignoran ya que se manejan manualmente en el servicio
+     * tiposPrenda (lista de IDs en el request) se resuelve en el servicio
      */
     public Plazo toPlazo(PlazoRequest request) {
         if (request == null) {
@@ -67,7 +67,7 @@ public class PlazoMapper {
         // El campo activo tiene un valor por defecto de true si es null
         plazo.setActivo(request.getActivo() != null ? request.getActivo() : true);
         // Los campos creadoEn y actualizadoEn se ignoran ya que se manejan automáticamente
-        // Los tiposPrenda se manejan manualmente en el servicio
+        // tiposPrenda (IDs del request) se cargan en el servicio
         plazo.setTiposPrenda(new ArrayList<>());
 
         return plazo;

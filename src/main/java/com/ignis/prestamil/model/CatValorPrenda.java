@@ -19,8 +19,16 @@ public class CatValorPrenda {
     @JoinColumn(name = "id_atributo", nullable = false)
     private CatSubtipoPrenda subtipoPrenda;
 
-    @Column(name = "valor", length = 100, nullable = false)
-    private String valor;
+    @Column(name = "clave")
+    private Integer clave;
+
+    @Column(name = "descripcion", length = 100, nullable = false)
+    private String descripcion;
+
+    @Column(name = "kilataje")
+    private Integer kilataje;
+
+    @Column(name = "contiene_piedad")
+    private Boolean contienePiedad;
 
 }
-

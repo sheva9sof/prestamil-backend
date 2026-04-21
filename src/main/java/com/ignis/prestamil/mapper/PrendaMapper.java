@@ -50,7 +50,10 @@ public class PrendaMapper {
 
         CatValorPrendaResponse response = new CatValorPrendaResponse();
         response.setIdValorAtributo(catValorPrenda.getIdValorAtributo());
-        response.setValor(catValorPrenda.getValor());
+        response.setClave(catValorPrenda.getClave());
+        response.setDescripcion(catValorPrenda.getDescripcion());
+        response.setKilataje(catValorPrenda.getKilataje());
+        response.setContienePiedad(catValorPrenda.getContienePiedad());
 
         // Información del subtipo de prenda
         if (catValorPrenda.getSubtipoPrenda() != null) {

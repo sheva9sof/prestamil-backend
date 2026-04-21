@@ -40,9 +40,9 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
         Plazo plazo = plazoMapper.toPlazo(request);
 
         // Asignar tipos de prenda si se proporcionaron
-        if (request.getTiposPrendaIds() != null && !request.getTiposPrendaIds().isEmpty()) {
+        if (request.getTiposPrenda() != null && !request.getTiposPrenda().isEmpty()) {
             List<TipoPrenda> tiposPrenda = new ArrayList<>();
-            for (Integer tipoPrendaId : request.getTiposPrendaIds()) {
+            for (Integer tipoPrendaId : request.getTiposPrenda()) {
                 TipoPrenda tipoPrenda = tipoPrendaService.findById(tipoPrendaId);
                 tiposPrenda.add(tipoPrenda);
             }
@@ -76,10 +76,10 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
         }
 
         // Actualizar tipos de prenda si se proporcionaron
-        if (request.getTiposPrendaIds() != null) {
+        if (request.getTiposPrenda() != null) {
             List<TipoPrenda> tiposPrenda = new ArrayList<>();
-            if (!request.getTiposPrendaIds().isEmpty()) {
-                for (Integer tipoPrendaId : request.getTiposPrendaIds()) {
+            if (!request.getTiposPrenda().isEmpty()) {
+                for (Integer tipoPrendaId : request.getTiposPrenda()) {
                     TipoPrenda tipoPrenda = tipoPrendaService.findById(tipoPrendaId);
                     tiposPrenda.add(tipoPrenda);
                 }

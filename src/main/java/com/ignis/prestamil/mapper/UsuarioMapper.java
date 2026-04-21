@@ -22,6 +22,9 @@ public interface UsuarioMapper {
     UsuarioResponse toUsuarioResponse(Usuario usuario);
 
     @Mapping(source = "nombreIcono", target = "nombreIcono")
-    @Mapping(source = "nombreIcono", target = "icono") // Mapeamos nombreIcono a icono también por compatibilidad
+    @Mapping(source = "nombreIcono", target = "icono")
+    @Mapping(target = "url", ignore = true)
+    @Mapping(target = "descripcion", ignore = true)
+    @Mapping(target = "submenus", ignore = true)
     MenuResponse toMenuResponse(Opcion opcion);
 }

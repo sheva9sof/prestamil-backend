@@ -23,7 +23,7 @@ public class PlazoRequest {
 
     private Boolean activo;
 
-    private List<Integer> tiposPrendaIds = new ArrayList<>();
+    private List<Integer> tiposPrenda = new ArrayList<>();
 
 }
 
