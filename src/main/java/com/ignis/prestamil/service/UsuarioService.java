@@ -11,6 +11,7 @@ import com.ignis.prestamil.model.Usuario;
 import com.ignis.prestamil.repository.RolRepository;
 import com.ignis.prestamil.repository.UsuarioRepository;
 import com.ignis.prestamil.response.LoginResponse;
+import com.ignis.prestamil.response.MenuResponse;
 import com.ignis.prestamil.response.TurnoResponse;
 import com.ignis.prestamil.util.Constantes;
 import com.ignis.prestamil.util.Encryptor;
@@ -144,6 +145,8 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
 
         // Mapear Usuario a LoginResponse usando el mapper, incluyendo las opciones y el token
         LoginResponse response = usuarioMapper.toLoginResponse(usuario, opciones);
+        response.setOpciones(construirMenuJerarquico(opciones));
+        
         return response;
     }
 
@@ -160,7 +163,40 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
         }
 
         // Reutilizamos el LoginResponse para devolver el perfil. El token será null, lo cual está bien.
-        return usuarioMapper.toLoginResponse(usuario, opciones);
+        LoginResponse response = usuarioMapper.toLoginResponse(usuario, opciones);
+        response.setOpciones(construirMenuJerarquico(opciones));
+        return response;
+    }
+
+    private List<MenuResponse> construirMenuJerarquico(List<Opcion> opciones) {
+        if (opciones == null || opciones.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        Map<Integer, MenuResponse> menuPorId = new LinkedHashMap<>();
+        for (Opcion opcion : opciones) {
+            if (opcion.getId() != null) {
+                menuPorId.put(opcion.getId(), usuarioMapper.toMenuResponse(opcion));
+            }
+        }
+
+        List<MenuResponse> menusRaiz = new ArrayList<>();
+        for (Opcion opcion : opciones) {
+            if (opcion.getId() == null) {
+                continue;
+            }
+
+            MenuResponse menuActual = menuPorId.get(opcion.getId());
+            Integer idPadre = opcion.getIdPadre();
+
+            if (idPadre != null && menuPorId.containsKey(idPadre) && !idPadre.equals(opcion.getId())) {
+                menuPorId.get(idPadre).getSubmenus().add(menuActual);
+            } else {
+                menusRaiz.add(menuActual);
+            }
+        }
+
+        return menusRaiz;
     }
 
     private List<Opcion> filtrarOpcionesPorTurno(List<Opcion> opcionesOriginales, Usuario usuario) {
