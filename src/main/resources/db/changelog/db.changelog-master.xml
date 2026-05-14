@@ -7,5 +7,6 @@
 
     <include file="db/changelog/changes/001-initial-schema.sql"/>
     <include file="db/changelog/changes/002-initial-data.sql"/>
+    <include file="db/changelog/changes/003-session-params.sql"/>
 
 </databaseChangeLog>
