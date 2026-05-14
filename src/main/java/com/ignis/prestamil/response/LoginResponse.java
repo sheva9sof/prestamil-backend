@@ -10,6 +10,7 @@ import java.util.List;
 @Getter
 @Setter
 public class LoginResponse {
+    private Integer id;
     private String username;
     private String password;
     private String nombre;
