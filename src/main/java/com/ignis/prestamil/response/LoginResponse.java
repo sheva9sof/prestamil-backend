@@ -28,4 +28,6 @@ public class LoginResponse {
     private LocalDateTime ultimaActividad;
     private LocalDateTime inicioSesion;
     private List<MenuResponse> opciones;
+    private int sessionTimeoutMinutes = 30;
+    private int warningMinutes = 3;
 }
