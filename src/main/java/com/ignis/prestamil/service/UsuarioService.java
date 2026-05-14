@@ -151,10 +151,10 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
         LoginResponse response = usuarioMapper.toLoginResponse(usuario, opciones);
         response.setOpciones(construirMenuJerarquico(opciones));
 
-        int sessionTimeoutMinutes = parametrosSistemaRepository.findById(6)
+        int sessionTimeoutMinutes = parametrosSistemaRepository.findById(16)
             .map(p -> p.getValorNumerico() != null ? p.getValorNumerico().intValue() : 30)
             .orElse(30);
-        int warningMinutes = parametrosSistemaRepository.findById(7)
+        int warningMinutes = parametrosSistemaRepository.findById(17)
             .map(p -> p.getValorNumerico() != null ? p.getValorNumerico().intValue() : 3)
             .orElse(3);
         response.setSessionTimeoutMinutes(sessionTimeoutMinutes);

@@ -32,13 +32,13 @@ class SessionTimeoutListenerTest {
     @BeforeEach
     void setUp() {
         param6 = new ParametrosSistema();
-        param6.setId(6);
+        param6.setId(16);
         param6.setValorNumerico(new BigDecimal("45"));
     }
 
     @Test
     void setsMaxInactiveIntervalFromDb() {
-        when(parametrosSistemaRepository.findById(6)).thenReturn(Optional.of(param6));
+        when(parametrosSistemaRepository.findById(16)).thenReturn(Optional.of(param6));
 
         MapSession session = new MapSession();
         SessionCreatedEvent event = new SessionCreatedEvent(this, session);
@@ -50,7 +50,7 @@ class SessionTimeoutListenerTest {
 
     @Test
     void usesDefaultOf30MinutesWhenParamMissing() {
-        when(parametrosSistemaRepository.findById(6)).thenReturn(Optional.empty());
+        when(parametrosSistemaRepository.findById(16)).thenReturn(Optional.empty());
 
         MapSession session = new MapSession();
         SessionCreatedEvent event = new SessionCreatedEvent(this, session);

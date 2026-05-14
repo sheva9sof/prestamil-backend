@@ -17,7 +17,7 @@ public class SessionTimeoutListener implements ApplicationListener<SessionCreate
 
     @Override
     public void onApplicationEvent(SessionCreatedEvent event) {
-        int minutes = parametrosSistemaRepository.findById(6)
+        int minutes = parametrosSistemaRepository.findById(16)
             .map(p -> p.getValorNumerico() != null ? p.getValorNumerico().intValue() : 30)
             .orElse(30);
         Session session = event.getSession();
