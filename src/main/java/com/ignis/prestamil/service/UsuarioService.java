@@ -8,6 +8,7 @@ import com.ignis.prestamil.model.Configuracion;
 import com.ignis.prestamil.model.Opcion;
 import com.ignis.prestamil.model.Rol;
 import com.ignis.prestamil.model.Usuario;
+import com.ignis.prestamil.repository.ParametrosSistemaRepository;
 import com.ignis.prestamil.repository.RolRepository;
 import com.ignis.prestamil.repository.UsuarioRepository;
 import com.ignis.prestamil.response.LoginResponse;
@@ -33,15 +34,18 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
     private final RolRepository rolRepository;
     private final TurnoService turnoService;
     private final ConfiguracionService configuracionService;
+    private final ParametrosSistemaRepository parametrosSistemaRepository;
 
     public UsuarioService(UsuarioRepository repository, Encryptor encryptor, UsuarioMapper usuarioMapper, RolRepository rolRepository,
-                          TurnoService turnoService, ConfiguracionService configuracionService) {
+                          TurnoService turnoService, ConfiguracionService configuracionService,
+                          ParametrosSistemaRepository parametrosSistemaRepository) {
         super(repository);
         this.encryptor = encryptor;
         this.usuarioMapper = usuarioMapper;
         this.rolRepository = rolRepository;
         this.turnoService = turnoService;
         this.configuracionService = configuracionService;
+        this.parametrosSistemaRepository = parametrosSistemaRepository;
     }
 
     @Override
@@ -146,7 +150,16 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
         // Mapear Usuario a LoginResponse usando el mapper, incluyendo las opciones y el token
         LoginResponse response = usuarioMapper.toLoginResponse(usuario, opciones);
         response.setOpciones(construirMenuJerarquico(opciones));
-        
+
+        int sessionTimeoutMinutes = parametrosSistemaRepository.findById(6)
+            .map(p -> p.getValorNumerico() != null ? p.getValorNumerico().intValue() : 30)
+            .orElse(30);
+        int warningMinutes = parametrosSistemaRepository.findById(7)
+            .map(p -> p.getValorNumerico() != null ? p.getValorNumerico().intValue() : 3)
+            .orElse(3);
+        response.setSessionTimeoutMinutes(sessionTimeoutMinutes);
+        response.setWarningMinutes(warningMinutes);
+
         return response;
     }
 
