@@ -61,9 +61,6 @@ public class Usuario {
     @Column(nullable = false)
     private boolean editable;
 
-    @Column(name = "session_token", length = 100)
-    private String sessionToken;
-
     @Column(name = "ultima_actividad")
     private LocalDateTime ultimaActividad;
 

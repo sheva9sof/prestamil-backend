@@ -9,5 +9,6 @@
     <include file="db/changelog/changes/002-initial-data.sql"/>
     <include file="db/changelog/changes/003-session-params.sql"/>
     <include file="db/changelog/changes/004-search-indexes.sql"/>
+    <include file="db/changelog/changes/005-drop-session-token-usuarios.sql"/>
 
 </databaseChangeLog>
