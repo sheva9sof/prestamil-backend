@@ -15,9 +15,9 @@ import com.ignis.prestamil.response.LoginResponse;
 import com.ignis.prestamil.response.MenuResponse;
 import com.ignis.prestamil.response.TurnoResponse;
 import com.ignis.prestamil.util.Constantes;
-import com.ignis.prestamil.util.Encryptor;
 
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,18 +29,18 @@ import java.util.*;
 @Transactional
 public class UsuarioService extends BaseService<Usuario, Integer, UsuarioRepository> {
 
-    private final Encryptor encryptor;
+    private final PasswordEncoder passwordEncoder;
     private final UsuarioMapper usuarioMapper;
     private final RolRepository rolRepository;
     private final TurnoService turnoService;
     private final ConfiguracionService configuracionService;
     private final ParametrosSistemaRepository parametrosSistemaRepository;
 
-    public UsuarioService(UsuarioRepository repository, Encryptor encryptor, UsuarioMapper usuarioMapper, RolRepository rolRepository,
+    public UsuarioService(UsuarioRepository repository, PasswordEncoder passwordEncoder, UsuarioMapper usuarioMapper, RolRepository rolRepository,
                           TurnoService turnoService, ConfiguracionService configuracionService,
                           ParametrosSistemaRepository parametrosSistemaRepository) {
         super(repository);
-        this.encryptor = encryptor;
+        this.passwordEncoder = passwordEncoder;
         this.usuarioMapper = usuarioMapper;
         this.rolRepository = rolRepository;
         this.turnoService = turnoService;
@@ -129,9 +129,7 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
         Usuario usuario = repository.findByNombreUsuario(loginRequest.getUsername())
             .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado"));
         
-        String passwordDesencriptada = encryptor.decrypt(usuario.getPassword());
-        
-        if (passwordDesencriptada == null || !passwordDesencriptada.equals(loginRequest.getPassword())) {
+        if (!passwordEncoder.matches(loginRequest.getPassword(), usuario.getPassword())) {
             throw new BadRequestException("Password incorrecta");
         }
         
@@ -261,50 +259,32 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
         return usuario.getRol().getOpciones();
     }
 
-    /**
-     * Encripta un password
-     * @param password Password en texto plano
-     * @return Password encriptado
-     */
     public String encryptPassword(String password) {
         if (password == null || password.isEmpty()) {
             return null;
         }
-        return encryptor.encrypt(password);
+        return passwordEncoder.encode(password);
     }
 
-    /**
-     * Cambia la contraseña de un usuario
-     * @param usuarioId ID del usuario
-     * @param passwordActual Contraseña actual en texto plano
-     * @param passwordNueva Nueva contraseña en texto plano
-     */
     public void cambiarPassword(Integer usuarioId, String passwordActual, String passwordNueva) {
         Usuario usuario = repository.findById(usuarioId)
             .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado"));
 
-        // Validar contraseña actual
-        String passwordDesencriptada = encryptor.decrypt(usuario.getPassword());
-        if (passwordDesencriptada == null || !passwordDesencriptada.equals(passwordActual)) {
+        if (!passwordEncoder.matches(passwordActual, usuario.getPassword())) {
             throw new BadRequestException("La contraseña actual es incorrecta");
         }
 
-        // Validar que la nueva contraseña sea diferente a la actual
-        if (passwordDesencriptada.equals(passwordNueva)) {
-            throw new BadRequestException("La nueva contraseña debe ser diferente a la contraseña actual");
-        }
-
-        // Validar que la nueva contraseña no esté vacía
         if (passwordNueva == null || passwordNueva.isEmpty()) {
             throw new BadRequestException("La nueva contraseña no puede estar vacía");
         }
 
-        // Encriptar y actualizar la nueva contraseña
-        String passwordNuevaEncriptada = encryptor.encrypt(passwordNueva);
-        usuario.setPassword(passwordNuevaEncriptada);
+        if (passwordEncoder.matches(passwordNueva, usuario.getPassword())) {
+            throw new BadRequestException("La nueva contraseña debe ser diferente a la contraseña actual");
+        }
+
+        usuario.setPassword(passwordEncoder.encode(passwordNueva));
         usuario.setCambiarPassword(false);
         usuario.setFechaCambioPass(java.time.LocalDate.now());
-        
         repository.save(usuario);
     }
 

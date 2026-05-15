@@ -42,3 +42,8 @@ out/
 target/
 /output/
 /.mvn/wrapper/
+
+# Environment secrets - never commit
+.env
+.env.local
+.env.*.local

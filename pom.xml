@@ -74,6 +74,13 @@
 			<optional>true</optional>
 		</dependency>
 
+		<!-- .env file support for local development -->
+		<dependency>
+			<groupId>me.paulschwarz</groupId>
+			<artifactId>spring-dotenv</artifactId>
+			<version>4.0.0</version>
+		</dependency>
+
 		<!-- Other Dependencies -->
 		<dependency>
             <groupId>com.github.anastaciocintra</groupId>

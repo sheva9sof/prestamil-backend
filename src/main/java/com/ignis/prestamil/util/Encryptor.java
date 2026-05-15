@@ -1,5 +1,7 @@
 package com.ignis.prestamil.util;
 
+import jakarta.annotation.PostConstruct;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -15,12 +17,15 @@ import javax.crypto.NoSuchPaddingException;
 
 @Component
 public class Encryptor {
-    
+
+    @Value("${app.encryption.secret}")
+    private String secret;
+
     private SecretKeySpec secretKey;
     private Cipher cipher;
-    private String secret = "$L@v@yS3c@Ignis2023_";
 
-    public Encryptor() {
+    @PostConstruct
+    public void init() {
         try {
             MessageDigest sha = MessageDigest.getInstance("SHA-256");
             byte[] keyBytes = sha.digest(secret.getBytes(StandardCharsets.UTF_8));
@@ -50,13 +55,5 @@ public class Encryptor {
         } catch (InvalidKeyException | BadPaddingException | IllegalBlockSizeException e) {
             return null;
         }
-    }
-    public static void main(String[] args) {
-        Encryptor encryptor = new Encryptor();
-        String plaintext = "CfLvst1duF+e/+4gh87eJw==";
-        String ciphertext = encryptor.decrypt(plaintext);
-        System.out.println(ciphertext);
-        String decryptedText = encryptor.decrypt(ciphertext);
-        System.out.println(decryptedText);
     }
 }
