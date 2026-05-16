@@ -10,5 +10,6 @@
     <include file="db/changelog/changes/003-session-params.sql"/>
     <include file="db/changelog/changes/004-search-indexes.sql"/>
     <include file="db/changelog/changes/005-drop-session-token-usuarios.sql"/>
+    <include file="db/changelog/changes/006-plazos-sucursal.sql"/>
 
 </databaseChangeLog>
