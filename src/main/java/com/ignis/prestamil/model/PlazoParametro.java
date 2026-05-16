@@ -24,6 +24,10 @@ public class PlazoParametro {
     @Column(name = "tipo_prenda_id", nullable = false)
     private Integer tipoPrendaId;
 
+    @Id
+    @Column(name = "sucursal_id", nullable = false)
+    private Integer sucursalId;
+
     @Column(name = "porc_interes", nullable = false, precision = 9, scale = 4, columnDefinition = "DECIMAL(9,4) DEFAULT 0.0000")
     private BigDecimal porcInteres = BigDecimal.ZERO;
 
