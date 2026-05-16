@@ -1,10 +1,12 @@
 package com.ignis.prestamil.controller;
 
+import com.ignis.prestamil.exception.BadRequestException;
 import com.ignis.prestamil.mapper.PlazoMapper;
 import com.ignis.prestamil.mapper.PlazoParametroMapper;
 import com.ignis.prestamil.model.Plazo;
-import com.ignis.prestamil.model.PlazoParametro;
+import com.ignis.prestamil.request.PlazoParametroRequest;
 import com.ignis.prestamil.request.PlazoRequest;
+import com.ignis.prestamil.response.PlazoHechuraAlhajaResponse;
 import com.ignis.prestamil.response.PlazoParametroResponse;
 import com.ignis.prestamil.response.PlazoResponse;
 import com.ignis.prestamil.service.PlazoService;
@@ -13,7 +15,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @RestController
@@ -62,17 +66,85 @@ public class PlazoController {
     }
 
     /**
-     * Obtiene los parámetros de plazo para una combinación específica de plazo y tipo de prenda
-     * GET /api/plazos/{idPlazo}/parametros/{idTipoPrenda}
+     * Obtiene los parámetros de plazo para una combinación específica de plazo, tipo de prenda y sucursal.
+     * GET /api/plazos/{idPlazo}/parametros/{idTipoPrenda}?sucursalId=1
      */
     @GetMapping("/{idPlazo}/parametros/{idTipoPrenda}")
-    public ResponseEntity<PlazoParametroResponse> getParametrosPlazo(@PathVariable Long idPlazo, @PathVariable Integer idTipoPrenda) {
-        PlazoParametro parametro = plazoService.getParametrosPlazo(idPlazo, idTipoPrenda);
-        if (parametro == null) {
-            return ResponseEntity.notFound().build();
+    public ResponseEntity<PlazoParametroResponse> getParametrosPlazo(
+            @PathVariable Long idPlazo,
+            @PathVariable Integer idTipoPrenda,
+            @RequestParam(defaultValue = "1") Integer sucursalId) {
+        return ResponseEntity.ok(plazoService.getParametrosPlazo(idPlazo, idTipoPrenda, sucursalId));
+    }
+
+    /**
+     * Lista los parámetros de un plazo filtrados por sucursal.
+     * GET /api/plazos/{id}/parametros?sucursalId=1
+     */
+    @GetMapping("/{id}/parametros")
+    public ResponseEntity<List<PlazoParametroResponse>> getParametrosBySucursal(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "1") Integer sucursalId) {
+        return ResponseEntity.ok(plazoService.getParametrosBySucursal(id, sucursalId));
+    }
+
+    /**
+     * Crea o actualiza (upsert) los parámetros para una combinación plazo+tipoPrenda+sucursal.
+     * PUT /api/plazos/{id}/parametros/{tipoPrendaId}?sucursalId=1
+     */
+    @PutMapping("/{id}/parametros/{tipoPrendaId}")
+    public ResponseEntity<PlazoParametroResponse> guardarParametro(
+            @PathVariable Long id,
+            @PathVariable Integer tipoPrendaId,
+            @RequestParam(defaultValue = "1") Integer sucursalId,
+            @Valid @RequestBody PlazoParametroRequest request) {
+        return ResponseEntity.ok(plazoService.guardarParametro(id, tipoPrendaId, sucursalId, request));
+    }
+
+    /**
+     * Obtiene la tabla de hechuras de alhajas para un plazo y sucursal.
+     * GET /api/plazos/{id}/alhajas?sucursalId=1
+     */
+    @GetMapping("/{id}/alhajas")
+    public ResponseEntity<List<PlazoHechuraAlhajaResponse>> getTablaAlhajas(
+            @PathVariable Integer id,
+            @RequestParam(defaultValue = "1") Integer sucursalId) {
+        return ResponseEntity.ok(plazoService.getTablaAlhajas(id, sucursalId));
+    }
+
+    /**
+     * Actualiza el precio base de un kilataje+hechura específico y recalcula precioPrestamo.
+     * PUT /api/plazos/{id}/alhajas/{kilataje}/{hechura}?sucursalId=1
+     */
+    @PutMapping("/{id}/alhajas/{kilataje}/{hechura}")
+    public ResponseEntity<PlazoHechuraAlhajaResponse> actualizarPrecioBase(
+            @PathVariable Integer id,
+            @PathVariable Integer kilataje,
+            @PathVariable String hechura,
+            @RequestParam(defaultValue = "1") Integer sucursalId,
+            @RequestBody Map<String, BigDecimal> body) {
+        BigDecimal precioBase = body.get("precioBase");
+        if (precioBase == null) {
+            throw new BadRequestException("precioBase es requerido en el body");
         }
-        PlazoParametroResponse response = plazoParametroMapper.toPlazoParametroResponse(parametro);
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok(
+                plazoService.actualizarPrecioBase(id, sucursalId, kilataje, hechura, precioBase));
+    }
+
+    /**
+     * Recalcula todos los precios de hechuras usando el precio base del oro de 24K por onza troy.
+     * PUT /api/plazos/{id}/alhajas/precio-oro?sucursalId=1
+     */
+    @PutMapping("/{id}/alhajas/precio-oro")
+    public ResponseEntity<List<PlazoHechuraAlhajaResponse>> actualizarTodosPrecios(
+            @PathVariable Integer id,
+            @RequestParam(defaultValue = "1") Integer sucursalId,
+            @RequestBody Map<String, BigDecimal> body) {
+        BigDecimal precioBaseOro = body.get("precioBaseOro");
+        if (precioBaseOro == null) {
+            throw new BadRequestException("precioBaseOro es requerido en el body");
+        }
+        plazoService.actualizarTodosPrecios(id, sucursalId, precioBaseOro);
+        return ResponseEntity.ok(plazoService.getTablaAlhajas(id, sucursalId));
     }
 }
-
