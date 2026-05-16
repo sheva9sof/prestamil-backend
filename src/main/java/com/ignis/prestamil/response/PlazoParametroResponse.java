@@ -11,6 +11,7 @@ import java.time.LocalDateTime;
 public class PlazoParametroResponse {
     private Long plazoId;
     private Integer tipoPrendaId;
+    private Integer sucursalId;
     private TipoPrendaResponse tipoPrenda;
     private BigDecimal porcInteres;
     private BigDecimal porcAlmacen;

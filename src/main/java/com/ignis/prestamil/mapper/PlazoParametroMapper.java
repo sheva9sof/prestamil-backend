@@ -27,7 +27,8 @@ public class PlazoParametroMapper {
         PlazoParametroResponse response = new PlazoParametroResponse();
         response.setPlazoId(plazoParametro.getPlazoId());
         response.setTipoPrendaId(plazoParametro.getTipoPrendaId());
-        
+        response.setSucursalId(plazoParametro.getSucursalId());
+
         // Mapear tipo de prenda si está disponible
         if (plazoParametro.getTipoPrenda() != null) {
             response.setTipoPrenda(prendaMapper.toTipoPrendaResponse(plazoParametro.getTipoPrenda()));
@@ -55,6 +56,35 @@ public class PlazoParametroMapper {
         response.setActualizadoEn(plazoParametro.getActualizadoEn());
 
         return response;
+    }
+
+    /**
+     * Actualiza los campos editables de un PlazoParametro existente desde un request.
+     * No modifica la clave compuesta (plazoId, tipoPrendaId, sucursalId).
+     *
+     * @param entity  entidad a actualizar
+     * @param request DTO con los nuevos valores
+     */
+    public void actualizarDesdeRequest(PlazoParametro entity, PlazoParametroRequest request) {
+        if (request == null) return;
+        if (request.getPorcInteres() != null) entity.setPorcInteres(request.getPorcInteres());
+        if (request.getPorcAlmacen() != null) entity.setPorcAlmacen(request.getPorcAlmacen());
+        if (request.getPorcGastosAdmin() != null) entity.setPorcGastosAdmin(request.getPorcGastosAdmin());
+        if (request.getPorcInteresTotal() != null) entity.setPorcInteresTotal(request.getPorcInteresTotal());
+        if (request.getCat() != null) entity.setCat(request.getCat());
+        if (request.getNumMaxRefrendos() != null) entity.setNumMaxRefrendos(request.getNumMaxRefrendos());
+        if (request.getPorcPrestamoSAvaluo() != null) entity.setPorcPrestamoSAvaluo(request.getPorcPrestamoSAvaluo());
+        if (request.getUsaAvaluoReal() != null) entity.setUsaAvaluoReal(request.getUsaAvaluoReal());
+        if (request.getPorcPrestamoSAvaluoReal() != null) entity.setPorcPrestamoSAvaluoReal(request.getPorcPrestamoSAvaluoReal());
+        if (request.getCobrarReposicionContrato() != null) entity.setCobrarReposicionContrato(request.getCobrarReposicionContrato());
+        if (request.getReposicionEsPorcentaje() != null) entity.setReposicionEsPorcentaje(request.getReposicionEsPorcentaje());
+        if (request.getPorcReposicion() != null) entity.setPorcReposicion(request.getPorcReposicion());
+        if (request.getMontoReposicion() != null) entity.setMontoReposicion(request.getMontoReposicion());
+        if (request.getComisionPorVentaPrenda() != null) entity.setComisionPorVentaPrenda(request.getComisionPorVentaPrenda());
+        if (request.getAplicarSancionPorPeriodo() != null) entity.setAplicarSancionPorPeriodo(request.getAplicarSancionPorPeriodo());
+        if (request.getDiasGraciaSinInteres() != null) entity.setDiasGraciaSinInteres(request.getDiasGraciaSinInteres());
+        if (request.getDiasAntesPaseVenta() != null) entity.setDiasAntesPaseVenta(request.getDiasAntesPaseVenta());
+        if (request.getImporteMinPrestamo() != null) entity.setImporteMinPrestamo(request.getImporteMinPrestamo());
     }
 
     /**
