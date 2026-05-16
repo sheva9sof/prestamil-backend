@@ -3,7 +3,7 @@
 --changeset emm-a:006-1
 --comment: Agregar sucursal_id a plazo_parametro (default=1 para datos existentes)
 ALTER TABLE plazo_parametro
-  ADD COLUMN IF NOT EXISTS sucursal_id INT NOT NULL DEFAULT 1;
+  ADD COLUMN sucursal_id INT NOT NULL DEFAULT 1;
 
 --changeset emm-a:006-1b
 --comment: Eliminar FK fk_pp_plazo_categoria antes de modificar PK (previene error de integridad referencial)
@@ -29,7 +29,7 @@ ALTER TABLE plazo_parametro
 --changeset emm-a:006-4
 --comment: Agregar sucursal_id a plazo_hechura_alhaja
 ALTER TABLE plazo_hechura_alhaja
-  ADD COLUMN IF NOT EXISTS sucursal_id INT NOT NULL DEFAULT 1;
+  ADD COLUMN sucursal_id INT NOT NULL DEFAULT 1;
 
 --changeset emm-a:006-5
 --comment: FK plazo_hechura_alhaja.sucursal_id -> sucursal.id
@@ -38,4 +38,4 @@ ALTER TABLE plazo_hechura_alhaja
 
 --changeset emm-a:006-6
 --comment: Indice compuesto para busquedas por sucursal+plazo
-CREATE INDEX IF NOT EXISTS idx_pha_sucursal ON plazo_hechura_alhaja(sucursal_id, id_plazo);
+CREATE INDEX idx_pha_sucursal ON plazo_hechura_alhaja(sucursal_id, id_plazo);
