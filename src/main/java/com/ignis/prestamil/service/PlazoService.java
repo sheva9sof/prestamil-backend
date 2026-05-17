@@ -14,6 +14,7 @@ import com.ignis.prestamil.model.TipoPrenda;
 import com.ignis.prestamil.repository.PlazoHechuraAlhajaRepository;
 import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.PlazoRepository;
+import com.ignis.prestamil.request.PlazoHechuraAlhajaRequest;
 import com.ignis.prestamil.request.PlazoParametroRequest;
 import com.ignis.prestamil.request.PlazoRequest;
 import com.ignis.prestamil.response.PlazoHechuraAlhajaResponse;
@@ -225,6 +226,35 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
                 .multiply(BigDecimal.ONE.add(entity.getPorcAumento()))
                 .setScale(4, RoundingMode.HALF_UP);
         entity.setPrecioPrestamo(precioPrestamo);
+        return plazoHechuraAlhajaMapper.toResponse(plazoHechuraAlhajaRepository.save(entity));
+    }
+
+    /**
+     * Crea una nueva combinación de alhaja para un plazo y sucursal específicos.
+     * Calcula automáticamente el precioPrestamo a partir de precioBase * (1 + porcAumento).
+     *
+     * @param idPlazo    identificador del plazo
+     * @param sucursalId identificador de la sucursal
+     * @param request    datos de la nueva alhaja (kilataje, hechura, precioBase, porcAumento)
+     * @return PlazoHechuraAlhajaResponse de la alhaja creada
+     * @throws BadRequestException si ya existe la combinación plazo/sucursal/kilataje/hechura
+     */
+    public PlazoHechuraAlhajaResponse crearAlhaja(Integer idPlazo, Integer sucursalId, PlazoHechuraAlhajaRequest request) {
+        // 1. Validar duplicado
+        PlazoHechuraAlhajaId id = new PlazoHechuraAlhajaId(idPlazo, sucursalId, request.getKilataje(), request.getHechura());
+        if (plazoHechuraAlhajaRepository.existsById(id)) {
+            throw new BadRequestException("Ya existe una combinación " + request.getKilataje() + "K/" + request.getHechura() + " para este plazo/sucursal");
+        }
+        // 2. Construir entidad desde el request usando el mapper
+        PlazoHechuraAlhaja entity = plazoHechuraAlhajaMapper.toEntity(request, idPlazo, sucursalId);
+        // 3. tablaPrestamoId = 1 por defecto (iteración 1 del módulo)
+        entity.setTablaPrestamoId(1);
+        // 4. Calcular precioPrestamo = precioBase * (1 + porcAumento)
+        BigDecimal precioPrestamo = request.getPrecioBase()
+                .multiply(BigDecimal.ONE.add(request.getPorcAumento()))
+                .setScale(4, RoundingMode.HALF_UP);
+        entity.setPrecioPrestamo(precioPrestamo);
+        // 5. Guardar y mapear a response
         return plazoHechuraAlhajaMapper.toResponse(plazoHechuraAlhajaRepository.save(entity));
     }
 

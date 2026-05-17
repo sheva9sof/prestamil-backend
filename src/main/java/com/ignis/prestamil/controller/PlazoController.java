@@ -4,6 +4,7 @@ import com.ignis.prestamil.exception.BadRequestException;
 import com.ignis.prestamil.mapper.PlazoMapper;
 import com.ignis.prestamil.mapper.PlazoParametroMapper;
 import com.ignis.prestamil.model.Plazo;
+import com.ignis.prestamil.request.PlazoHechuraAlhajaRequest;
 import com.ignis.prestamil.request.PlazoParametroRequest;
 import com.ignis.prestamil.request.PlazoRequest;
 import com.ignis.prestamil.response.PlazoHechuraAlhajaResponse;
@@ -110,6 +111,19 @@ public class PlazoController {
             @PathVariable Integer id,
             @RequestParam(defaultValue = "1") Integer sucursalId) {
         return ResponseEntity.ok(plazoService.getTablaAlhajas(id, sucursalId));
+    }
+
+    /**
+     * Crea una nueva combinación de alhaja para un plazo/sucursal.
+     * POST /api/plazos/{id}/alhajas?sucursalId=1
+     */
+    @PostMapping("/{id}/alhajas")
+    public ResponseEntity<PlazoHechuraAlhajaResponse> crearAlhaja(
+            @PathVariable Integer id,
+            @RequestParam(defaultValue = "1") Integer sucursalId,
+            @Valid @RequestBody PlazoHechuraAlhajaRequest request) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(plazoService.crearAlhaja(id, sucursalId, request));
     }
 
     /**
