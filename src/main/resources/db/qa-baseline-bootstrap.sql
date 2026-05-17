@@ -60,7 +60,11 @@ CREATE TABLE IF NOT EXISTS `DATABASECHANGELOG` (
 -- DEPLOYMENT_ID is set to 'qa-baseline' so it is visually distinct
 -- from real deployments in your history.
 
-INSERT INTO `DATABASECHANGELOG`
+-- INSERT IGNORE skips any row whose ID already exists in DATABASECHANGELOG.
+-- Safe to re-run: if a changeset was already recorded (e.g. 001-schema was
+-- committed before a later changeset failed), the row is preserved as-is.
+
+INSERT IGNORE INTO `DATABASECHANGELOG`
   (`ID`, `AUTHOR`, `FILENAME`, `DATEEXECUTED`, `ORDEREXECUTED`, `EXECTYPE`,
    `MD5SUM`, `DESCRIPTION`, `COMMENTS`, `TAG`, `LIQUIBASE`, `CONTEXTS`, `LABELS`, `DEPLOYMENT_ID`)
 VALUES
@@ -71,7 +75,7 @@ VALUES
    NOW(), 1, 'EXECUTED',
    NULL, 'sql', '', NULL, '4.27.0', NULL, NULL, 'qa-baseline'),
 
-  -- 001 — trigger set_fecha_direccion (no IF NOT EXISTS guard)
+  -- 001 — trigger set_fecha_direccion (no IF NOT EXISTS guard, already exists in QA)
   ('001-trigger',
    'emmanuel',
    'db/changelog/changes/001-initial-schema.sql',
