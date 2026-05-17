@@ -47,3 +47,7 @@ target/
 .env
 .env.local
 .env.*.local
+
+# Liquibase Maven Plugin credentials - never commit
+liquibase-*.properties
+!liquibase-*.properties.example

@@ -1,0 +1,9 @@
+# Template for liquibase-qa.properties
+# Copy to liquibase-qa.properties and fill in the QA credentials.
+# DO NOT commit liquibase-qa.properties.
+
+changeLogFile=src/main/resources/db/changelog/db.changelog-master.xml
+driver=org.mariadb.jdbc.Driver
+url=jdbc:mariadb://YOUR_QA_HOST:3306/YOUR_QA_DB
+username=YOUR_QA_USER
+password=YOUR_QA_PASSWORD
