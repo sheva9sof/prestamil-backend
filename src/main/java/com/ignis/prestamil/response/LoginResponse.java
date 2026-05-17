@@ -10,6 +10,7 @@ import java.util.List;
 @Getter
 @Setter
 public class LoginResponse {
+    private Integer id;
     private String username;
     private String password;
     private String nombre;
@@ -27,4 +28,6 @@ public class LoginResponse {
     private LocalDateTime ultimaActividad;
     private LocalDateTime inicioSesion;
     private List<MenuResponse> opciones;
+    private int sessionTimeoutMinutes = 30;
+    private int warningMinutes = 3;
 }

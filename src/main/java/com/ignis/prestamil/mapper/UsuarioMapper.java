@@ -13,6 +13,7 @@ import java.util.List;
 @Mapper(componentModel = "spring")
 public interface UsuarioMapper {
 
+    @Mapping(source = "usuario.id", target = "id")
     @Mapping(source = "usuario.nombreUsuario", target = "username")
     @Mapping(source = "usuario.rol.id", target = "idRol")
     @Mapping(source = "opciones", target = "opciones")
