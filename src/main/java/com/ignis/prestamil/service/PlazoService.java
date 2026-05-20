@@ -295,4 +295,30 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
         }
         plazoHechuraAlhajaRepository.saveAll(registros);
     }
+
+    /**
+     * Calcula el avalúo que aparece en el contrato a partir del monto del préstamo
+     * y los parámetros del plazo. Si la sucursal no usa avalúo real (o el porcentaje
+     * configurado es cero/nulo), el avalúo del contrato es igual al monto del préstamo.
+     *
+     * Fórmula: avaluoContrato = montoPrestamo × (1 + porcPrestamoSAvaluoReal / 100)
+     *
+     * Ejemplo: préstamo $1,000 con 50% → avalúo en contrato $1,500.
+     *
+     * @param montoPrestamo monto efectivamente prestado al cliente
+     * @param parametro     parámetros del plazo/tipo de prenda/sucursal
+     * @return avalúo a imprimir en el contrato, con escala 2 (HALF_UP)
+     */
+    public BigDecimal calcularAvaluoContrato(BigDecimal montoPrestamo, PlazoParametro parametro) {
+        if (!parametro.getUsaAvaluoReal()
+            || parametro.getPorcPrestamoSAvaluoReal() == null
+            || parametro.getPorcPrestamoSAvaluoReal().compareTo(BigDecimal.ZERO) == 0) {
+            return montoPrestamo;
+        }
+        BigDecimal factor = BigDecimal.ONE.add(
+            parametro.getPorcPrestamoSAvaluoReal()
+                .divide(new BigDecimal("100"), 6, RoundingMode.HALF_UP)
+        );
+        return montoPrestamo.multiply(factor).setScale(2, RoundingMode.HALF_UP);
+    }
 }

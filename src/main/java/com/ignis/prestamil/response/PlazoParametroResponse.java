@@ -21,7 +21,7 @@ public class PlazoParametroResponse {
     private Integer numMaxRefrendos;
     private BigDecimal porcPrestamoSAvaluo;
     private Boolean usaAvaluoReal;
-    private BigDecimal porcPrestamoSAvaluoReal;
+    private BigDecimal porcIncrementoAvaluo;
     private Boolean cobrarReposicionContrato;
     private Boolean reposicionEsPorcentaje;
     private BigDecimal porcReposicion;
