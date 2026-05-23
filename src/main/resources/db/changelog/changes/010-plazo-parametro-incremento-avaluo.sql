@@ -8,7 +8,12 @@ ALTER TABLE `plazo_parametro`
 
 --changeset emm-a:010-2
 --comment: Insertar parámetros faltantes para Quincenal/Plata y Mensual/Varios
-INSERT INTO `plazo_parametro`
+-- Garantizar que plazo_prenda tiene los pares requeridos (idempotente)
+INSERT IGNORE INTO `plazo_prenda` (`plazo_id`, `tipo_prenda_id`) VALUES
+  (2, 4),
+  (3, 3);
+
+INSERT IGNORE INTO `plazo_parametro`
   (`plazo_id`, `tipo_prenda_id`, `sucursal_id`,
    `porc_interes`, `porc_almacen`, `porc_gastos_admin`, `porc_interes_total`,
    `cat`, `num_max_refrendos`, `porc_prestamo_s_avaluo`, `usa_avaluo_real`,
