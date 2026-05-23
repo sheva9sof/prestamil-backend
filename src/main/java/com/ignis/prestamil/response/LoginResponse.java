@@ -19,6 +19,7 @@ public class LoginResponse {
     private Boolean cambiarPassword;
     private LocalDateTime ultimoLogin;
     private Integer idRol;
+    private String rolNombre;
     private LocalDate fechaIni;
     private LocalDate fechaFin;
     private Boolean vigencia;
