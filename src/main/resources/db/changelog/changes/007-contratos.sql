@@ -8,7 +8,7 @@ CREATE TABLE contrato (
   id_cliente          INT NOT NULL,
   id_turno            INT NOT NULL,
   id_sucursal         INT NOT NULL DEFAULT 1,
-  id_plazo            BIGINT NOT NULL,
+  id_plazo            INT NOT NULL,
   id_usuario          INT NOT NULL,
   id_beneficiario     INT,
   nombre_beneficiario VARCHAR(200),

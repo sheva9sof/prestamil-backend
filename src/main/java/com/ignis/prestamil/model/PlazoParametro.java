@@ -52,6 +52,9 @@ public class PlazoParametro {
     @Column(name = "usa_avaluo_real", nullable = false, columnDefinition = "TINYINT(1) DEFAULT 0")
     private Boolean usaAvaluoReal = false;
 
+    @Column(name = "porc_incremento_avaluo", nullable = false, precision = 9, scale = 4, columnDefinition = "DECIMAL(9,4) DEFAULT 50.0000")
+    private BigDecimal porcIncrementoAvaluo = new BigDecimal("50.0000");
+
     @Column(name = "porc_prestamo_s_avaluo_real", nullable = false, precision = 9, scale = 4, columnDefinition = "DECIMAL(9,4) DEFAULT 0.0000")
     private BigDecimal porcPrestamoSAvaluoReal = BigDecimal.ZERO;
 

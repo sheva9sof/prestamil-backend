@@ -26,7 +26,11 @@ public class ClienteMapper {
         response.setCurp(cliente.getCurp());
         response.setRfc(cliente.getRfc());
         response.setActivo(cliente.getActivo());
-        
+        response.setNombreCompleto(String.join(" ",
+                cliente.getNombre(),
+                cliente.getApellidoPaterno(),
+                cliente.getApellidoMaterno() != null ? cliente.getApellidoMaterno() : "").trim());
+
         // Mapear dirección si está cargada
         if (cliente.getDireccion() != null) {
             response.setDireccion(toDireccionResponse(cliente.getDireccion()));

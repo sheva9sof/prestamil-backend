@@ -1,6 +1,5 @@
 package com.ignis.prestamil.request;
 
-import jakarta.validation.constraints.NotNull;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -9,12 +8,6 @@ import java.math.BigDecimal;
 @Getter
 @Setter
 public class PlazoParametroRequest {
-    
-    @NotNull(message = "El ID del plazo es obligatorio")
-    private Long plazoId;
-
-    @NotNull(message = "El ID del tipo de prenda es obligatorio")
-    private Integer tipoPrendaId;
 
     private BigDecimal porcInteres;
     private BigDecimal porcAlmacen;

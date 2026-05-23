@@ -12,5 +12,8 @@
     <include file="db/changelog/changes/005-drop-session-token-usuarios.sql"/>
     <include file="db/changelog/changes/006-plazos-sucursal.sql"/>
     <include file="db/changelog/changes/007-contratos.sql"/>
+    <include file="db/changelog/changes/008-menu-avaluos.sql"/>
+    <include file="db/changelog/changes/009-clientes-prueba.sql"/>
+    <include file="db/changelog/changes/010-plazo-parametro-incremento-avaluo.sql"/>
 
 </databaseChangeLog>
