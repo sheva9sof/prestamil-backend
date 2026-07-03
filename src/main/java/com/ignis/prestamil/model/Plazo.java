@@ -7,8 +7,8 @@ import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 @Entity
 @Table(name = "plazo")
@@ -52,7 +52,7 @@ public class Plazo {
         joinColumns = @JoinColumn(name = "plazo_id", nullable = false),
         inverseJoinColumns = @JoinColumn(name = "tipo_prenda_id", nullable = false)
     )
-    private List<TipoPrenda> tiposPrenda = new ArrayList<>();
+    private Set<TipoPrenda> tiposPrenda = new LinkedHashSet<>();
 
 }
 

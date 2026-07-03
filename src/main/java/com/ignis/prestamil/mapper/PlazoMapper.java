@@ -7,6 +7,7 @@ import com.ignis.prestamil.response.TipoPrendaResponse;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -68,7 +69,7 @@ public class PlazoMapper {
         plazo.setActivo(request.getActivo() != null ? request.getActivo() : true);
         // Los campos creadoEn y actualizadoEn se ignoran ya que se manejan automáticamente
         // tiposPrenda (IDs del request) se cargan en el servicio
-        plazo.setTiposPrenda(new ArrayList<>());
+        plazo.setTiposPrenda(new LinkedHashSet<>());
 
         return plazo;
     }

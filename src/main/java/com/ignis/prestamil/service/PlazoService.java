@@ -29,9 +29,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -82,7 +83,7 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
 
         // Asignar tipos de prenda si se proporcionaron
         if (request.getTiposPrenda() != null && !request.getTiposPrenda().isEmpty()) {
-            List<TipoPrenda> tiposPrenda = new ArrayList<>();
+            Set<TipoPrenda> tiposPrenda = new LinkedHashSet<>();
             for (Integer tipoPrendaId : request.getTiposPrenda()) {
                 TipoPrenda tipoPrenda = tipoPrendaService.findById(tipoPrendaId);
                 tiposPrenda.add(tipoPrenda);
@@ -116,16 +117,24 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
             plazo.setActivo(request.getActivo());
         }
 
-        // Actualizar tipos de prenda si se proporcionaron
+        // Actualizar tipos de prenda si se proporcionaron. IMPORTANTE: nunca reemplazar
+        // la referencia de la colección (plazo.setTiposPrenda(nuevoSet)) — Hibernate
+        // solo puede calcular qué filas insertar/borrar en plazo_prenda comparando el
+        // Set administrado ORIGINAL contra su propio contenido; si se sustituye por un
+        // Set nuevo, Hibernate ya no reconoce la colección como "la misma" y recrea
+        // TODAS las filas (DELETE de todo el plazo_id seguido de INSERT), lo que viola
+        // la FK fk_pp_plazo_categoria en cuanto plazo_parametro ya tiene filas para
+        // alguna combinación (plazo_id, tipo_prenda_id) existente. Mutar la colección
+        // administrada in situ (removeIf + addAll) deja intactos los tipos de prenda
+        // que no cambiaron, y solo genera DELETE/INSERT reales para los que sí cambian.
         if (request.getTiposPrenda() != null) {
-            List<TipoPrenda> tiposPrenda = new ArrayList<>();
-            if (!request.getTiposPrenda().isEmpty()) {
-                for (Integer tipoPrendaId : request.getTiposPrenda()) {
-                    TipoPrenda tipoPrenda = tipoPrendaService.findById(tipoPrendaId);
-                    tiposPrenda.add(tipoPrenda);
-                }
+            Set<TipoPrenda> tiposPrendaSolicitados = new LinkedHashSet<>();
+            for (Integer tipoPrendaId : request.getTiposPrenda()) {
+                tiposPrendaSolicitados.add(tipoPrendaService.findById(tipoPrendaId));
             }
-            plazo.setTiposPrenda(tiposPrenda);
+            Set<TipoPrenda> tiposPrendaActuales = plazo.getTiposPrenda();
+            tiposPrendaActuales.removeIf(tipoPrenda -> !tiposPrendaSolicitados.contains(tipoPrenda));
+            tiposPrendaActuales.addAll(tiposPrendaSolicitados);
         }
         // actualizadoEn se actualizará automáticamente por @UpdateTimestamp
 
