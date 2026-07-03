@@ -15,5 +15,7 @@
     <include file="db/changelog/changes/008-menu-avaluos.sql"/>
     <include file="db/changelog/changes/009-clientes-prueba.sql"/>
     <include file="db/changelog/changes/010-plazo-parametro-incremento-avaluo.sql"/>
+    <include file="db/changelog/changes/011-oro-sancion-plata.sql"/>
+    <include file="db/changelog/changes/012-oro-tabla-prestamo-cocae.sql"/>
 
 </databaseChangeLog>
