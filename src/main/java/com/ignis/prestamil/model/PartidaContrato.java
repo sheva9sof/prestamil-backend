@@ -47,6 +47,9 @@ public class PartidaContrato {
     @Column(name = "kilataje")
     private Integer kilataje;
 
+    @Column(name = "ley", precision = 9, scale = 4)
+    private BigDecimal ley;
+
     @Column(name = "hechura", length = 5)
     private String hechura;
 

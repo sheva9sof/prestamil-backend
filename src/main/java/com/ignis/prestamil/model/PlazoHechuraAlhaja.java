@@ -28,7 +28,7 @@ public class PlazoHechuraAlhaja {
     @Column(name = "precio_base", nullable = false, precision = 12, scale = 4)
     private BigDecimal precioBase;
 
-    @Column(name = "porc_aumento", nullable = false, precision = 5, scale = 4)
+    @Column(name = "porc_aumento", nullable = false, precision = 7, scale = 4)
     private BigDecimal porcAumento;
 
     @Column(name = "precio_prestamo", nullable = false, precision = 12, scale = 4)

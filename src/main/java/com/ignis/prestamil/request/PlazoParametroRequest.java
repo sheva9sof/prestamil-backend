@@ -24,6 +24,10 @@ public class PlazoParametroRequest {
     private BigDecimal montoReposicion;
     private BigDecimal comisionPorVentaPrenda;
     private Boolean aplicarSancionPorPeriodo;
+    private BigDecimal porcSancionSemanal;
+    private BigDecimal ley925;
+    private BigDecimal ley725;
+    private BigDecimal precioGramoPlata;
     private Integer diasGraciaSinInteres;
     private Integer diasAntesPaseVenta;
     private BigDecimal importeMinPrestamo;

@@ -40,6 +40,15 @@ public class MovimientoContrato {
     @Column(name = "interes", precision = 18, scale = 2)
     private BigDecimal interes;
 
+    @Column(name = "sancion", nullable = false, precision = 18, scale = 2, columnDefinition = "DECIMAL(18,2) DEFAULT 0.00")
+    private BigDecimal sancion = BigDecimal.ZERO;
+
+    @Column(name = "abono_capital", nullable = false, precision = 18, scale = 2, columnDefinition = "DECIMAL(18,2) DEFAULT 0.00")
+    private BigDecimal abonoCapital = BigDecimal.ZERO;
+
+    @Column(name = "semanas_vencidas", nullable = false, columnDefinition = "INT DEFAULT 0")
+    private Integer semanasVencidas = 0;
+
     @Column(name = "fecha", nullable = false)
     private LocalDateTime fecha;
 

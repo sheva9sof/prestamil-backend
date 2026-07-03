@@ -49,6 +49,10 @@ public class PlazoParametroMapper {
         response.setMontoReposicion(plazoParametro.getMontoReposicion());
         response.setComisionPorVentaPrenda(plazoParametro.getComisionPorVentaPrenda());
         response.setAplicarSancionPorPeriodo(plazoParametro.getAplicarSancionPorPeriodo());
+        response.setPorcSancionSemanal(plazoParametro.getPorcSancionSemanal());
+        response.setLey925(plazoParametro.getLey925());
+        response.setLey725(plazoParametro.getLey725());
+        response.setPrecioGramoPlata(plazoParametro.getPrecioGramoPlata());
         response.setDiasGraciaSinInteres(plazoParametro.getDiasGraciaSinInteres());
         response.setDiasAntesPaseVenta(plazoParametro.getDiasAntesPaseVenta());
         response.setImporteMinPrestamo(plazoParametro.getImporteMinPrestamo());
@@ -82,6 +86,10 @@ public class PlazoParametroMapper {
         if (request.getMontoReposicion() != null) entity.setMontoReposicion(request.getMontoReposicion());
         if (request.getComisionPorVentaPrenda() != null) entity.setComisionPorVentaPrenda(request.getComisionPorVentaPrenda());
         if (request.getAplicarSancionPorPeriodo() != null) entity.setAplicarSancionPorPeriodo(request.getAplicarSancionPorPeriodo());
+        if (request.getPorcSancionSemanal() != null) entity.setPorcSancionSemanal(request.getPorcSancionSemanal());
+        if (request.getLey925() != null) entity.setLey925(request.getLey925());
+        if (request.getLey725() != null) entity.setLey725(request.getLey725());
+        if (request.getPrecioGramoPlata() != null) entity.setPrecioGramoPlata(request.getPrecioGramoPlata());
         if (request.getDiasGraciaSinInteres() != null) entity.setDiasGraciaSinInteres(request.getDiasGraciaSinInteres());
         if (request.getDiasAntesPaseVenta() != null) entity.setDiasAntesPaseVenta(request.getDiasAntesPaseVenta());
         if (request.getImporteMinPrestamo() != null) entity.setImporteMinPrestamo(request.getImporteMinPrestamo());
@@ -111,6 +119,10 @@ public class PlazoParametroMapper {
         plazoParametro.setMontoReposicion(request.getMontoReposicion() != null ? request.getMontoReposicion() : BigDecimal.ZERO);
         plazoParametro.setComisionPorVentaPrenda(request.getComisionPorVentaPrenda() != null ? request.getComisionPorVentaPrenda() : BigDecimal.ZERO);
         plazoParametro.setAplicarSancionPorPeriodo(request.getAplicarSancionPorPeriodo() != null ? request.getAplicarSancionPorPeriodo() : false);
+        plazoParametro.setPorcSancionSemanal(request.getPorcSancionSemanal() != null ? request.getPorcSancionSemanal() : new BigDecimal("2.0000"));
+        plazoParametro.setLey925(request.getLey925() != null ? request.getLey925() : BigDecimal.ZERO);
+        plazoParametro.setLey725(request.getLey725() != null ? request.getLey725() : BigDecimal.ZERO);
+        plazoParametro.setPrecioGramoPlata(request.getPrecioGramoPlata() != null ? request.getPrecioGramoPlata() : BigDecimal.ZERO);
         plazoParametro.setDiasGraciaSinInteres(request.getDiasGraciaSinInteres() != null ? request.getDiasGraciaSinInteres() : 0);
         plazoParametro.setDiasAntesPaseVenta(request.getDiasAntesPaseVenta() != null ? request.getDiasAntesPaseVenta() : 0);
         plazoParametro.setImporteMinPrestamo(request.getImporteMinPrestamo() != null ? request.getImporteMinPrestamo() : BigDecimal.ZERO);

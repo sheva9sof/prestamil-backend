@@ -18,6 +18,7 @@ public class PartidaContratoResponse {
     private Integer cantidad;
     private BigDecimal pesoGramos;
     private Integer kilataje;
+    private BigDecimal ley;
     private String hechura;
     private BigDecimal precioXGramo;
     private BigDecimal avaluoReal;

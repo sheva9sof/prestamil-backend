@@ -1,6 +1,7 @@
 package com.ignis.prestamil.controller;
 
 import com.ignis.prestamil.response.ContratoResponse;
+import com.ignis.prestamil.response.VencimientoResponse;
 import com.ignis.prestamil.request.ContratoRequest;
 import com.ignis.prestamil.service.ContratoService;
 import jakarta.validation.Valid;
@@ -67,5 +68,14 @@ public class ContratoController {
     @GetMapping("/vencidos")
     public ResponseEntity<List<ContratoResponse>> findVencidos() {
         return ResponseEntity.ok(contratoService.getContratosVencidos());
+    }
+
+    /**
+     * Tabla de amortización (vencimientos por periodo) calculada al vuelo.
+     * GET /api/contratos/{id}/amortizacion
+     */
+    @GetMapping("/{id}/amortizacion")
+    public ResponseEntity<List<VencimientoResponse>> amortizacion(@PathVariable Long id) {
+        return ResponseEntity.ok(contratoService.calcularAmortizacion(id));
     }
 }

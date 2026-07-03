@@ -19,6 +19,8 @@ public class ContratoRequest {
     private Long idPlazo;
 
     private Integer idBeneficiario;
+
+    /** Nombre del beneficiario (opcional). */
     private String nombreBeneficiario;
     private String tipoIdentificacion;
     private String numIdentificacion;

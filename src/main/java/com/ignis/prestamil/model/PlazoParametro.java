@@ -76,6 +76,18 @@ public class PlazoParametro {
     @Column(name = "aplicar_sancion_por_periodo", nullable = false, columnDefinition = "TINYINT(1) DEFAULT 0")
     private Boolean aplicarSancionPorPeriodo = false;
 
+    @Column(name = "porc_sancion_semanal", nullable = false, precision = 9, scale = 4, columnDefinition = "DECIMAL(9,4) DEFAULT 2.0000")
+    private BigDecimal porcSancionSemanal = new BigDecimal("2.0000");
+
+    @Column(name = "ley_925", nullable = false, precision = 9, scale = 4, columnDefinition = "DECIMAL(9,4) DEFAULT 0.0000")
+    private BigDecimal ley925 = BigDecimal.ZERO;
+
+    @Column(name = "ley_725", nullable = false, precision = 9, scale = 4, columnDefinition = "DECIMAL(9,4) DEFAULT 0.0000")
+    private BigDecimal ley725 = BigDecimal.ZERO;
+
+    @Column(name = "precio_gramo_plata", nullable = false, precision = 12, scale = 4, columnDefinition = "DECIMAL(12,4) DEFAULT 0.0000")
+    private BigDecimal precioGramoPlata = BigDecimal.ZERO;
+
     @Column(name = "dias_gracia_sin_interes", nullable = false, columnDefinition = "INT DEFAULT 0")
     private Integer diasGraciaSinInteres = 0;
 
