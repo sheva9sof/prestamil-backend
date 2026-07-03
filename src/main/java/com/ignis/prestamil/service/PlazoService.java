@@ -6,12 +6,14 @@ import com.ignis.prestamil.request.PrecioOroRequest;
 import com.ignis.prestamil.mapper.PlazoHechuraAlhajaMapper;
 import com.ignis.prestamil.mapper.PlazoMapper;
 import com.ignis.prestamil.mapper.PlazoParametroMapper;
+import com.ignis.prestamil.model.OroTablaPrestamo;
 import com.ignis.prestamil.model.Plazo;
 import com.ignis.prestamil.model.PlazoHechuraAlhaja;
 import com.ignis.prestamil.model.PlazoHechuraAlhajaId;
 import com.ignis.prestamil.model.PlazoParametro;
 import com.ignis.prestamil.model.PlazoParametroId;
 import com.ignis.prestamil.model.TipoPrenda;
+import com.ignis.prestamil.repository.OroTablaPrestamoRepository;
 import com.ignis.prestamil.repository.PlazoHechuraAlhajaRepository;
 import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.PlazoRepository;
@@ -29,6 +31,8 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 @Transactional
@@ -44,6 +48,7 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
     private final PlazoHechuraAlhajaRepository plazoHechuraAlhajaRepository;
     private final PlazoHechuraAlhajaMapper plazoHechuraAlhajaMapper;
     private final com.ignis.prestamil.repository.PrecioOroRepository precioOroRepository;
+    private final OroTablaPrestamoRepository oroTablaPrestamoRepository;
 
     public PlazoService(PlazoRepository repository,
                         PlazoMapper plazoMapper,
@@ -52,7 +57,8 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
                         PlazoParametroMapper plazoParametroMapper,
                         PlazoHechuraAlhajaRepository plazoHechuraAlhajaRepository,
                         PlazoHechuraAlhajaMapper plazoHechuraAlhajaMapper,
-                        com.ignis.prestamil.repository.PrecioOroRepository precioOroRepository) {
+                        com.ignis.prestamil.repository.PrecioOroRepository precioOroRepository,
+                        OroTablaPrestamoRepository oroTablaPrestamoRepository) {
         super(repository);
         this.plazoMapper = plazoMapper;
         this.tipoPrendaService = tipoPrendaService;
@@ -61,6 +67,7 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
         this.plazoHechuraAlhajaRepository = plazoHechuraAlhajaRepository;
         this.plazoHechuraAlhajaMapper = plazoHechuraAlhajaMapper;
         this.precioOroRepository = precioOroRepository;
+        this.oroTablaPrestamoRepository = oroTablaPrestamoRepository;
     }
 
     /**
@@ -285,54 +292,56 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
         }
         com.ignis.prestamil.model.PrecioOro precio = precioOroRepository.findBySucursalId(sucursalId).orElse(null);
         int baseKilataje = precio != null && precio.getBaseKilataje() != null ? precio.getBaseKilataje() : 24;
-        BigDecimal factorFundir = precio != null && precio.getFactorFundir() != null ? precio.getFactorFundir() : new BigDecimal("90.0000");
-        BigDecimal factorNormal = precio != null && precio.getFactorNormal() != null ? precio.getFactorNormal() : new BigDecimal("100.0000");
-        BigDecimal factorEspecial = precio != null && precio.getFactorEspecial() != null ? precio.getFactorEspecial() : new BigDecimal("110.0000");
-        recalcularRegistros(registros, precioBaseOro, baseKilataje, factorFundir, factorNormal, factorEspecial);
+        recalcularRegistros(registros, precioBaseOro, baseKilataje, sucursalId);
         plazoHechuraAlhajaRepository.saveAll(registros);
     }
 
     /**
-     * Aplica el cálculo de oro a una lista de registros (sin persistir):
-     *   precioBase     = (precioGramoBase / baseKilataje) * kilataje
-     *   precioPrestamo = precioBase * (1 + porcAumento / 100)
+     * Aplica la formula real de COCAE a una lista de registros (sin persistir):
+     *   Paso 1 (intermedio, no se guarda): precioPorKilatePuro = precioGramoBase / baseKilataje
+     *   Paso 2: precioAvaluo(kilate) = precioPorKilatePuro * kilataje
+     *   Paso 3: precioBase(kilate,hechura) = precioAvaluo * %Prestamo(kilate,hechura) / 100
+     *           — %Prestamo viene de la tabla global oro_tabla_prestamo (24 celdas, irregular por diseno de COCAE)
+     *   Paso 4: precioPrestamo(kilate,hechura,plazo) = precioBase * (1 + porcAumento_propio_de_la_celda / 100)
+     *           — porcAumento NO se deriva ni se sobreescribe aqui; es el valor ya almacenado en la fila (ORO-02)
+     * Contrato de redondeo (D-06): pasos intermedios usan escala 10 HALF_UP (nunca se persisten);
+     * precioBase y precioPrestamo se persisten con escala 4 HALF_UP (coincide con DECIMAL(12,4) del schema).
      *
-     * @param registros      registros de hechura/kilataje a recalcular
+     * @param registros  registros de hechura/kilataje a recalcular
      * @param precioGramoBase precio del oro por gramo al kilataje base
-     * @param baseKilataje   kilataje de referencia del precio ingresado (21 o 24)
+     * @param baseKilataje kilataje de referencia del precio ingresado (21 o 24)
+     * @param sucursalId identificador de la sucursal, usado para resolver %Prestamo en oro_tabla_prestamo
+     * @throws ResourceNotFoundException si falta la celda (kilataje,hechura) en oro_tabla_prestamo para la sucursal
      */
     private void recalcularRegistros(List<PlazoHechuraAlhaja> registros,
-                                     BigDecimal precioGramoBase, int baseKilataje,
-                                     BigDecimal factorFundir, BigDecimal factorNormal, BigDecimal factorEspecial) {
+                                      BigDecimal precioGramoBase, int baseKilataje,
+                                      Integer sucursalId) {
         BigDecimal base = new BigDecimal(baseKilataje);
         BigDecimal precioPorKilatePuro = precioGramoBase.divide(base, 10, RoundingMode.HALF_UP);
+
+        Map<String, BigDecimal> porcPrestamoPorCelda = oroTablaPrestamoRepository
+                .findByIdSucursalId(sucursalId).stream()
+                .collect(Collectors.toMap(
+                        r -> r.getId().getKilataje() + "-" + r.getId().getHechura(),
+                        OroTablaPrestamo::getPorcPrestamo));
+
         for (PlazoHechuraAlhaja r : registros) {
-            // factor de hechura (calidad): Fundir 90%, Normal 100%, Especial 110% (configurable)
-            BigDecimal factorHechura = factorPorHechura(r.getId().getHechura(),
-                    factorFundir, factorNormal, factorEspecial)
-                    .divide(CIEN, 10, RoundingMode.HALF_UP);
-            // precioBase = (precioGramoBase / baseKilataje) * kilataje * factorHechura
-            BigDecimal precioBase = precioPorKilatePuro
-                    .multiply(new BigDecimal(r.getId().getKilataje()))
-                    .multiply(factorHechura)
+            String celda = r.getId().getKilataje() + "-" + r.getId().getHechura();
+            BigDecimal porcPrestamo = porcPrestamoPorCelda.get(celda);
+            if (porcPrestamo == null) {
+                throw new ResourceNotFoundException(
+                    "No hay %Prestamo COCAE configurado para sucursal=" + sucursalId
+                    + ", kilataje=" + r.getId().getKilataje() + ", hechura=" + r.getId().getHechura());
+            }
+            BigDecimal precioAvaluo = precioPorKilatePuro.multiply(new BigDecimal(r.getId().getKilataje()));
+            BigDecimal precioBase = precioAvaluo
+                    .multiply(porcPrestamo.divide(CIEN, 10, RoundingMode.HALF_UP))
                     .setScale(4, RoundingMode.HALF_UP);
             r.setPrecioBase(precioBase);
             r.setPrecioPrestamo(precioBase
                     .multiply(BigDecimal.ONE.add(r.getPorcAumento().divide(CIEN, 10, RoundingMode.HALF_UP)))
                     .setScale(4, RoundingMode.HALF_UP));
         }
-    }
-
-    /**
-     * Resuelve el factor de hechura según la clave. Acepta "F"/"N"/"E" o "HF"/"HN"/"HE"
-     * (se evalúa el último carácter). Devuelve el porcentaje (p.ej. 90, 100, 110).
-     */
-    private BigDecimal factorPorHechura(String hechura, BigDecimal factorFundir,
-                                        BigDecimal factorNormal, BigDecimal factorEspecial) {
-        String h = hechura != null ? hechura.trim().toUpperCase() : "";
-        if (h.endsWith("F")) return factorFundir;
-        if (h.endsWith("E")) return factorEspecial;
-        return factorNormal; // por defecto / "N"
     }
 
     /** Devuelve el primer argumento no nulo. */
@@ -378,8 +387,7 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
         // 2. Recalcular todas las tablas de la sucursal aplicando el factor de hechura
         List<PlazoHechuraAlhaja> registros = plazoHechuraAlhajaRepository.findByIdSucursalId(sucursalId);
         if (!registros.isEmpty()) {
-            recalcularRegistros(registros, request.getPrecioGramoBase(), baseKilataje,
-                    factorFundir, factorNormal, factorEspecial);
+            recalcularRegistros(registros, request.getPrecioGramoBase(), baseKilataje, sucursalId);
             plazoHechuraAlhajaRepository.saveAll(registros);
         }
 
