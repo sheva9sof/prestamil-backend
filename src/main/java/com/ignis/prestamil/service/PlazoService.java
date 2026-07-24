@@ -353,12 +353,23 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
         }
     }
 
-    /** Devuelve el primer argumento no nulo. */
-    private static BigDecimal primerNoNulo(BigDecimal... valores) {
-        for (BigDecimal v : valores) {
-            if (v != null) return v;
+    /**
+     * Recalcula precioBase y precioPrestamo de TODOS los PlazoHechuraAlhaja de la sucursal
+     * cuando cambia el %Prestamo de una celda en oro_tabla_prestamo. Reutiliza la formula
+     * COCAE de recalcularRegistros; preserva el porcAumento propio de cada plazo (ORO-06).
+     *
+     * @param sucursalId identificador de la sucursal cuya tabla de oro cambió
+     * @throws ResourceNotFoundException si no hay precio de oro configurado para la sucursal
+     */
+    public void recalcularPrecioBasePorTablaOro(Integer sucursalId) {
+        com.ignis.prestamil.model.PrecioOro precio = precioOroRepository.findBySucursalId(sucursalId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "No hay precio de oro configurado para la sucursal " + sucursalId));
+        List<PlazoHechuraAlhaja> registros = plazoHechuraAlhajaRepository.findByIdSucursalId(sucursalId);
+        if (!registros.isEmpty()) {
+            recalcularRegistros(registros, precio.getPrecioGramo24k(), 24, sucursalId);
+            plazoHechuraAlhajaRepository.saveAll(registros);
         }
-        return null;
     }
 
     /**
@@ -378,8 +389,8 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
         if (request.getPrecioGramoBase() == null || request.getPrecioGramoBase().compareTo(BigDecimal.ZERO) <= 0) {
             throw new BadRequestException("precioGramoBase debe ser mayor que cero");
         }
-        int baseKilataje = request.getBaseKilataje() != null ? request.getBaseKilataje() : 24;
-        String calcularSobre = request.getCalcularSobre() != null ? request.getCalcularSobre() : "PRESTAMO";
+        int baseKilataje = 24;
+        String calcularSobre = "PORCENTAJE";
 
         // 1. Cargar/crear el precio del oro y resolver factores efectivos
         //    (los del request mandan; si vienen nulos se conservan los vigentes).
@@ -389,10 +400,6 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
                     nuevo.setSucursalId(sucursalId);
                     return nuevo;
                 });
-        BigDecimal factorFundir = primerNoNulo(request.getFactorFundir(), precio.getFactorFundir(), new BigDecimal("90.0000"));
-        BigDecimal factorNormal = primerNoNulo(request.getFactorNormal(), precio.getFactorNormal(), new BigDecimal("100.0000"));
-        BigDecimal factorEspecial = primerNoNulo(request.getFactorEspecial(), precio.getFactorEspecial(), new BigDecimal("110.0000"));
-
         // 2. Recalcular todas las tablas de la sucursal aplicando el factor de hechura
         List<PlazoHechuraAlhaja> registros = plazoHechuraAlhajaRepository.findByIdSucursalId(sucursalId);
         if (!registros.isEmpty()) {
@@ -404,14 +411,10 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
         precio.setPrecioGramo24k(request.getPrecioGramoBase());
         precio.setBaseKilataje(baseKilataje);
         precio.setCalcularSobre(calcularSobre);
-        precio.setFactorFundir(factorFundir);
-        precio.setFactorNormal(factorNormal);
-        precio.setFactorEspecial(factorEspecial);
         precio.setActualizadoPor(usuario);
         com.ignis.prestamil.model.PrecioOro guardado = precioOroRepository.save(precio);
-        log.info("Precio del oro actualizado: sucursal={} precioGramo={} base={}K factores={}/{}/{} registros={}",
-                sucursalId, request.getPrecioGramoBase(), baseKilataje,
-                factorFundir, factorNormal, factorEspecial, registros.size());
+        log.info("Precio del oro actualizado: sucursal={} precioGramo={} base={}K registros={}",
+                sucursalId, request.getPrecioGramoBase(), baseKilataje, registros.size());
         return toPrecioOroResponse(guardado);
     }
 
@@ -437,9 +440,6 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
         r.setPrecioGramo24k(p.getPrecioGramo24k());
         r.setCalcularSobre(p.getCalcularSobre());
         r.setBaseKilataje(p.getBaseKilataje());
-        r.setFactorFundir(p.getFactorFundir());
-        r.setFactorNormal(p.getFactorNormal());
-        r.setFactorEspecial(p.getFactorEspecial());
         r.setActualizadoEn(p.getActualizadoEn());
         r.setActualizadoPor(p.getActualizadoPor());
         return r;

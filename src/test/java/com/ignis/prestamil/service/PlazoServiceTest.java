@@ -99,13 +99,9 @@ class PlazoServiceTest {
         return celda;
     }
 
-    private PrecioOro buildPrecioOro(Integer baseKilataje, BigDecimal factorFundir,
-                                      BigDecimal factorNormal, BigDecimal factorEspecial) {
+    private PrecioOro buildPrecioOro(Integer baseKilataje) {
         PrecioOro precio = new PrecioOro();
         precio.setBaseKilataje(baseKilataje);
-        precio.setFactorFundir(factorFundir);
-        precio.setFactorNormal(factorNormal);
-        precio.setFactorEspecial(factorEspecial);
         return precio;
     }
 
@@ -122,7 +118,7 @@ class PlazoServiceTest {
         OroTablaPrestamo celda21N = buildCelda(1, 21, "N", new BigDecimal("63.4400"));
         when(oroTablaPrestamoRepository.findByIdSucursalId(1)).thenReturn(List.of(celda21N));
 
-        PrecioOro precioOroConBase21 = buildPrecioOro(21, null, null, null);
+        PrecioOro precioOroConBase21 = buildPrecioOro(21);
         when(precioOroRepository.findBySucursalId(1)).thenReturn(Optional.of(precioOroConBase21));
 
         // When
@@ -141,35 +137,6 @@ class PlazoServiceTest {
     }
 
     @Test
-    void actualizarTodosPrecios_ignoraFactoresHechuraGlobales() {
-        // Given — mismo arrange que el test anterior, pero con factores de hechura globales
-        // no default (50/100/150). actualizarTodosPrecios ya no los lee: el resultado debe
-        // ser identico al del test 21K/Normal.
-        PlazoHechuraAlhaja fila21N = buildFila(1, 1, 21, "N", new BigDecimal("10.0000"));
-        when(plazoHechuraAlhajaRepository.findByIdIdPlazoAndIdSucursalId(1, 1)).thenReturn(List.of(fila21N));
-
-        OroTablaPrestamo celda21N = buildCelda(1, 21, "N", new BigDecimal("63.4400"));
-        when(oroTablaPrestamoRepository.findByIdSucursalId(1)).thenReturn(List.of(celda21N));
-
-        PrecioOro precioOroConFactoresNoDefault = buildPrecioOro(21,
-                new BigDecimal("50.0000"), new BigDecimal("100.0000"), new BigDecimal("150.0000"));
-        when(precioOroRepository.findBySucursalId(1)).thenReturn(Optional.of(precioOroConFactoresNoDefault));
-
-        // When
-        plazoService.actualizarTodosPrecios(1, 1, new BigDecimal("1679.50"));
-
-        // Then
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<PlazoHechuraAlhaja>> captor = ArgumentCaptor.forClass(List.class);
-        verify(plazoHechuraAlhajaRepository).saveAll(captor.capture());
-        PlazoHechuraAlhaja resultado = captor.getValue().get(0);
-
-        assertThat(resultado.getPrecioBase().compareTo(new BigDecimal("1065.4748"))).isEqualTo(0);
-        assertThat(resultado.getPrecioPrestamo().compareTo(new BigDecimal("1172.0223"))).isEqualTo(0);
-        assertThat(resultado.getPorcAumento().compareTo(new BigDecimal("10.0000"))).isEqualTo(0);
-    }
-
-    @Test
     void actualizarTodosPrecios_celdaSinPorcPrestamo_lanzaResourceNotFoundException() {
         // Given
         PlazoHechuraAlhaja fila14F = buildFila(1, 1, 14, "F", new BigDecimal("7.0000"));
@@ -177,7 +144,7 @@ class PlazoServiceTest {
 
         when(oroTablaPrestamoRepository.findByIdSucursalId(1)).thenReturn(List.of());
 
-        PrecioOro precioOroConBase21 = buildPrecioOro(21, null, null, null);
+        PrecioOro precioOroConBase21 = buildPrecioOro(21);
         when(precioOroRepository.findBySucursalId(1)).thenReturn(Optional.of(precioOroConBase21));
 
         // When / Then

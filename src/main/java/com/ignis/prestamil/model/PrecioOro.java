@@ -35,18 +35,6 @@ public class PrecioOro {
     @Column(name = "base_kilataje", nullable = false)
     private Integer baseKilataje = 24;
 
-    /** Factor de hechura "Fundir" (calidad baja). 90 = 90% del precio base. */
-    @Column(name = "factor_fundir", nullable = false, precision = 7, scale = 4)
-    private BigDecimal factorFundir = new BigDecimal("90.0000");
-
-    /** Factor de hechura "Normal". 100 = 100% del precio base. */
-    @Column(name = "factor_normal", nullable = false, precision = 7, scale = 4)
-    private BigDecimal factorNormal = new BigDecimal("100.0000");
-
-    /** Factor de hechura "Especial" (mayor calidad). 110 = 110% del precio base. */
-    @Column(name = "factor_especial", nullable = false, precision = 7, scale = 4)
-    private BigDecimal factorEspecial = new BigDecimal("110.0000");
-
     @UpdateTimestamp
     @Column(name = "actualizado_en", nullable = false)
     private LocalDateTime actualizadoEn;
