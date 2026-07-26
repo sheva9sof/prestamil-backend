@@ -440,6 +440,9 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
         r.setPrecioGramo24k(p.getPrecioGramo24k());
         r.setCalcularSobre(p.getCalcularSobre());
         r.setBaseKilataje(p.getBaseKilataje());
+        r.setFactorFundir(p.getFactorFundir());
+        r.setFactorNormal(p.getFactorNormal());
+        r.setFactorEspecial(p.getFactorEspecial());
         r.setActualizadoEn(p.getActualizadoEn());
         r.setActualizadoPor(p.getActualizadoPor());
         return r;

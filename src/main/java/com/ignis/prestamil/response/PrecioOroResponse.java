@@ -14,6 +14,9 @@ public class PrecioOroResponse {
     private BigDecimal precioGramo24k;
     private String calcularSobre;
     private Integer baseKilataje;
+    private BigDecimal factorFundir;
+    private BigDecimal factorNormal;
+    private BigDecimal factorEspecial;
     private LocalDateTime actualizadoEn;
     private String actualizadoPor;
 }

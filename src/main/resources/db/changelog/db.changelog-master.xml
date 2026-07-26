@@ -21,5 +21,6 @@
     <include file="db/changelog/changes/014-menu-configuracion-oro.sql"/>
     <include file="db/changelog/changes/015-normalizar-hechura-legacy.sql"/>
     <include file="db/changelog/changes/016-reparar-tabla-prestamo-oro.sql"/>
+    <include file="db/changelog/changes/017-restaurar-factores-hechura-precio-oro.sql"/>
 
 </databaseChangeLog>
