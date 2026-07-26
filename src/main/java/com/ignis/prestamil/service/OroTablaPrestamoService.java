@@ -24,6 +24,13 @@ import java.util.List;
  * {@code oro_tabla_prestamo} (8 kilates x 3 hechuras) con sus precios calculados
  * y permite editar el %Prestamo de una celda, disparando el recalculo en cascada
  * de {@link PlazoService#recalcularPrecioBasePorTablaOro(Integer)} (ORO-05, ORO-06, ORO-07).
+ *
+ * Formula completa del "Precio Prestamo (referencia)" (D-A, quick task 260726-lin):
+ * {@code precioPrestamo = precioAvaluo x %Prestamo/100 x factorDeHechura(hechura)/100}.
+ * El mismo factor de ajuste por hechura (Fundir/Normal/Especial, configurable por
+ * sucursal en {@code precio_oro}) se aplica en {@code PlazoService.recalcularRegistros}
+ * al derivar {@code PlazoHechuraAlhaja.precioBase} — para la misma celda kilataje/hechura,
+ * ambos numeros coinciden (ORO-09).
  */
 @Service
 @Transactional
@@ -38,7 +45,9 @@ public class OroTablaPrestamoService {
 
     /**
      * Lista las 24 celdas de %Prestamo de la sucursal con su precioAvaluo y precioPrestamo
-     * de referencia ya calculados.
+     * de referencia ya calculados: {@code precioPrestamo = precioAvaluo x %Prestamo/100
+     * x factorDeHechura(hechura)/100}. Este numero coincide con {@code PlazoHechuraAlhaja.precioBase}
+     * para la misma celda kilataje/hechura, porque ambos motores comparten {@link PrecioOro#factorDeHechura}.
      *
      * @param sucursalId identificador de la sucursal
      * @return lista de celdas ordenada por kilataje ascendente y luego hechura (F, N, E)
@@ -46,13 +55,11 @@ public class OroTablaPrestamoService {
     @Transactional(readOnly = true)
     public List<OroCeldaResponse> getTabla(Integer sucursalId) {
         PrecioOro precio = precioOroRepository.findBySucursalId(sucursalId).orElse(null);
-        BigDecimal precioGramo24k = precio != null ? precio.getPrecioGramo24k() : BigDecimal.ZERO;
-        int baseKilataje = precio != null && precio.getBaseKilataje() != null ? precio.getBaseKilataje() : 24;
 
         List<OroTablaPrestamo> celdas = oroTablaPrestamoRepository.findByIdSucursalId(sucursalId);
 
         return celdas.stream()
-                .map(celda -> toOroCeldaResponse(celda, precioGramo24k, baseKilataje))
+                .map(celda -> toOroCeldaResponse(celda, precio))
                 .sorted(Comparator.comparing(OroCeldaResponse::getKilataje)
                         .thenComparing(r -> ordenHechura(r.getHechura())))
                 .toList();
@@ -91,16 +98,17 @@ public class OroTablaPrestamoService {
         plazoService.recalcularPrecioBasePorTablaOro(sucursalId);
 
         PrecioOro precio = precioOroRepository.findBySucursalId(sucursalId).orElse(null);
-        BigDecimal precioGramo24k = precio != null ? precio.getPrecioGramo24k() : BigDecimal.ZERO;
-        int baseKilataje = precio != null && precio.getBaseKilataje() != null ? precio.getBaseKilataje() : 24;
 
-        return toOroCeldaResponse(guardada, precioGramo24k, baseKilataje);
+        return toOroCeldaResponse(guardada, precio);
     }
 
-    private OroCeldaResponse toOroCeldaResponse(OroTablaPrestamo celda, BigDecimal precioGramo24k, int baseKilataje) {
+    private OroCeldaResponse toOroCeldaResponse(OroTablaPrestamo celda, PrecioOro precio) {
         int kilataje = celda.getId().getKilataje();
         String hechura = celda.getId().getHechura();
         BigDecimal porcPrestamo = celda.getPorcPrestamo();
+
+        BigDecimal precioGramo24k = precio != null ? precio.getPrecioGramo24k() : BigDecimal.ZERO;
+        int baseKilataje = precio != null && precio.getBaseKilataje() != null ? precio.getBaseKilataje() : 24;
 
         BigDecimal precioAvaluo = precioGramo24k
                 .divide(new BigDecimal(baseKilataje), 10, RoundingMode.HALF_UP)
@@ -108,6 +116,7 @@ public class OroTablaPrestamoService {
                 .setScale(4, RoundingMode.HALF_UP);
         BigDecimal precioPrestamo = precioAvaluo
                 .multiply(porcPrestamo.divide(CIEN, 10, RoundingMode.HALF_UP))
+                .multiply(PrecioOro.factorDeHechura(precio, hechura).divide(CIEN, 10, RoundingMode.HALF_UP))
                 .setScale(4, RoundingMode.HALF_UP);
 
         OroCeldaResponse response = new OroCeldaResponse();

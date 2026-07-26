@@ -14,6 +14,8 @@ import com.ignis.prestamil.repository.PlazoHechuraAlhajaRepository;
 import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.PlazoRepository;
 import com.ignis.prestamil.repository.PrecioOroRepository;
+import com.ignis.prestamil.request.PrecioOroRequest;
+import com.ignis.prestamil.response.PrecioOroResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -100,8 +102,15 @@ class PlazoServiceTest {
     }
 
     private PrecioOro buildPrecioOro(Integer baseKilataje) {
+        return buildPrecioOro(baseKilataje, "100.0000", "100.0000", "100.0000");
+    }
+
+    private PrecioOro buildPrecioOro(Integer baseKilataje, String factorF, String factorN, String factorE) {
         PrecioOro precio = new PrecioOro();
         precio.setBaseKilataje(baseKilataje);
+        precio.setFactorFundir(new BigDecimal(factorF));
+        precio.setFactorNormal(new BigDecimal(factorN));
+        precio.setFactorEspecial(new BigDecimal(factorE));
         return precio;
     }
 
@@ -161,5 +170,151 @@ class PlazoServiceTest {
         assertThrows(ResourceNotFoundException.class,
                 () -> plazoService.actualizarTodosPrecios(1, 1, new BigDecimal("1679.50")));
         verify(plazoHechuraAlhajaRepository, never()).saveAll(any());
+    }
+
+    // -----------------------------------------------------------------------
+    // Factor de ajuste por hechura (quick task 260726-lin, ORO-09)
+    // Escenario base compartido: precioGramoBase="2400.0000", baseKilataje=24
+    // -> precioPorKilatePuro=100; celda 14K/"N" porcPrestamo="50.0000"
+    // -> precioAvaluo=1400.0000, precioBase sin factor=700.0000; porcAumento="10.0000"
+    // -----------------------------------------------------------------------
+
+    @Test
+    void actualizarTodosPrecios_factorNeutro100_precioBaseSinCambio() {
+        // Given
+        PlazoHechuraAlhaja fila14N = buildFila(1, 1, 14, "N", new BigDecimal("10.0000"));
+        when(plazoHechuraAlhajaRepository.findByIdIdPlazoAndIdSucursalId(1, 1)).thenReturn(List.of(fila14N));
+
+        OroTablaPrestamo celda14N = buildCelda(1, 14, "N", new BigDecimal("50.0000"));
+        when(oroTablaPrestamoRepository.findByIdSucursalId(1)).thenReturn(List.of(celda14N));
+
+        PrecioOro precio = buildPrecioOro(24, "100.0000", "100.0000", "100.0000");
+        when(precioOroRepository.findBySucursalId(1)).thenReturn(Optional.of(precio));
+
+        // When
+        plazoService.actualizarTodosPrecios(1, 1, new BigDecimal("2400.0000"));
+
+        // Then: no-regresion explicita con factor neutro
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<PlazoHechuraAlhaja>> captor = ArgumentCaptor.forClass(List.class);
+        verify(plazoHechuraAlhajaRepository).saveAll(captor.capture());
+        PlazoHechuraAlhaja resultado = captor.getValue().get(0);
+
+        assertThat(resultado.getPrecioBase().compareTo(new BigDecimal("700.0000"))).isEqualTo(0);
+        assertThat(resultado.getPrecioPrestamo().compareTo(new BigDecimal("770.0000"))).isEqualTo(0);
+    }
+
+    @Test
+    void actualizarTodosPrecios_factorNormal90_reducePrecioBaseProporcionalmente() {
+        // Given
+        PlazoHechuraAlhaja fila14N = buildFila(1, 1, 14, "N", new BigDecimal("10.0000"));
+        when(plazoHechuraAlhajaRepository.findByIdIdPlazoAndIdSucursalId(1, 1)).thenReturn(List.of(fila14N));
+
+        OroTablaPrestamo celda14N = buildCelda(1, 14, "N", new BigDecimal("50.0000"));
+        when(oroTablaPrestamoRepository.findByIdSucursalId(1)).thenReturn(List.of(celda14N));
+
+        PrecioOro precio = buildPrecioOro(24, "100.0000", "90.0000", "100.0000");
+        when(precioOroRepository.findBySucursalId(1)).thenReturn(Optional.of(precio));
+
+        // When
+        plazoService.actualizarTodosPrecios(1, 1, new BigDecimal("2400.0000"));
+
+        // Then: 700 x 0.90 = 630.0000; precioPrestamo = 630 x 1.10 = 693.0000
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<PlazoHechuraAlhaja>> captor = ArgumentCaptor.forClass(List.class);
+        verify(plazoHechuraAlhajaRepository).saveAll(captor.capture());
+        PlazoHechuraAlhaja resultado = captor.getValue().get(0);
+
+        assertThat(resultado.getPrecioBase().compareTo(new BigDecimal("630.0000"))).isEqualTo(0);
+        assertThat(resultado.getPrecioPrestamo().compareTo(new BigDecimal("693.0000"))).isEqualTo(0);
+        // D-10: el factor no contamina el porcAumento propio del plazo
+        assertThat(resultado.getPorcAumento().compareTo(new BigDecimal("10.0000"))).isEqualTo(0);
+    }
+
+    @Test
+    void actualizarTodosPrecios_sinPrecioOroConfigurado_usaFactorNeutro() {
+        // Given
+        PlazoHechuraAlhaja fila14N = buildFila(1, 1, 14, "N", new BigDecimal("10.0000"));
+        when(plazoHechuraAlhajaRepository.findByIdIdPlazoAndIdSucursalId(1, 1)).thenReturn(List.of(fila14N));
+
+        OroTablaPrestamo celda14N = buildCelda(1, 14, "N", new BigDecimal("50.0000"));
+        when(oroTablaPrestamoRepository.findByIdSucursalId(1)).thenReturn(List.of(celda14N));
+
+        when(precioOroRepository.findBySucursalId(1)).thenReturn(Optional.empty());
+
+        // When: sin PrecioOro configurado, baseKilataje cae al default 24 y el factor es neutro
+        plazoService.actualizarTodosPrecios(1, 1, new BigDecimal("2400.0000"));
+
+        // Then
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<PlazoHechuraAlhaja>> captor = ArgumentCaptor.forClass(List.class);
+        verify(plazoHechuraAlhajaRepository).saveAll(captor.capture());
+        PlazoHechuraAlhaja resultado = captor.getValue().get(0);
+
+        assertThat(resultado.getPrecioBase().compareTo(new BigDecimal("700.0000"))).isEqualTo(0);
+    }
+
+    @Test
+    void recalcularTodasLasTablas_aplicaFactorDelRequestEnElMismoRecalculo() {
+        // Given: PrecioOro vigente con factorNormal="100.0000"
+        PrecioOro precioVigente = buildPrecioOro(24, "100.0000", "100.0000", "100.0000");
+        precioVigente.setSucursalId(1);
+        when(precioOroRepository.findBySucursalId(1)).thenReturn(Optional.of(precioVigente));
+        when(precioOroRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        PlazoHechuraAlhaja fila14N = buildFila(1, 1, 14, "N", new BigDecimal("10.0000"));
+        when(plazoHechuraAlhajaRepository.findByIdSucursalId(1)).thenReturn(List.of(fila14N));
+
+        OroTablaPrestamo celda14N = buildCelda(1, 14, "N", new BigDecimal("50.0000"));
+        when(oroTablaPrestamoRepository.findByIdSucursalId(1)).thenReturn(List.of(celda14N));
+
+        // Request: precioGramoBase="2400.0000" y factorNormal="90.0000" (fundir/especial null -> conservan vigente)
+        PrecioOroRequest request = new PrecioOroRequest();
+        request.setPrecioGramoBase(new BigDecimal("2400.0000"));
+        request.setFactorNormal(new BigDecimal("90.0000"));
+
+        // When
+        PrecioOroResponse response = plazoService.recalcularTodasLasTablas(1, request, "tester");
+
+        // Then: el factor del request se aplico EN EL MISMO recalculo (700 x 0.90 = 630.0000)
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<PlazoHechuraAlhaja>> captor = ArgumentCaptor.forClass(List.class);
+        verify(plazoHechuraAlhajaRepository).saveAll(captor.capture());
+        PlazoHechuraAlhaja resultado = captor.getValue().get(0);
+        assertThat(resultado.getPrecioBase().compareTo(new BigDecimal("630.0000"))).isEqualTo(0);
+
+        // Y el PrecioOro persistido refleja el upsert: factorNormal del request, los otros conservan el vigente
+        ArgumentCaptor<PrecioOro> precioCaptor = ArgumentCaptor.forClass(PrecioOro.class);
+        verify(precioOroRepository).save(precioCaptor.capture());
+        PrecioOro guardado = precioCaptor.getValue();
+        assertThat(guardado.getFactorNormal().compareTo(new BigDecimal("90.0000"))).isEqualTo(0);
+        assertThat(guardado.getFactorFundir().compareTo(new BigDecimal("100.0000"))).isEqualTo(0);
+        assertThat(guardado.getFactorEspecial().compareTo(new BigDecimal("100.0000"))).isEqualTo(0);
+
+        assertThat(response.getFactorNormal().compareTo(new BigDecimal("90.0000"))).isEqualTo(0);
+    }
+
+    @Test
+    void recalcularPrecioBasePorTablaOro_usaElFactorPersistido() {
+        // Given
+        PrecioOro precio = buildPrecioOro(24, "100.0000", "90.0000", "100.0000");
+        precio.setPrecioGramo24k(new BigDecimal("2400.0000"));
+        when(precioOroRepository.findBySucursalId(1)).thenReturn(Optional.of(precio));
+
+        PlazoHechuraAlhaja fila14N = buildFila(1, 1, 14, "N", new BigDecimal("10.0000"));
+        when(plazoHechuraAlhajaRepository.findByIdSucursalId(1)).thenReturn(List.of(fila14N));
+
+        OroTablaPrestamo celda14N = buildCelda(1, 14, "N", new BigDecimal("50.0000"));
+        when(oroTablaPrestamoRepository.findByIdSucursalId(1)).thenReturn(List.of(celda14N));
+
+        // When
+        plazoService.recalcularPrecioBasePorTablaOro(1);
+
+        // Then: la cascada disparada desde OroTablaPrestamoService.actualizarCelda tambien lleva el factor
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<PlazoHechuraAlhaja>> captor = ArgumentCaptor.forClass(List.class);
+        verify(plazoHechuraAlhajaRepository).saveAll(captor.capture());
+        PlazoHechuraAlhaja resultado = captor.getValue().get(0);
+        assertThat(resultado.getPrecioBase().compareTo(new BigDecimal("630.0000"))).isEqualTo(0);
     }
 }

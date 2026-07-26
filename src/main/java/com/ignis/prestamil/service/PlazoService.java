@@ -301,7 +301,7 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
         }
         com.ignis.prestamil.model.PrecioOro precio = precioOroRepository.findBySucursalId(sucursalId).orElse(null);
         int baseKilataje = precio != null && precio.getBaseKilataje() != null ? precio.getBaseKilataje() : 24;
-        recalcularRegistros(registros, precioBaseOro, baseKilataje, sucursalId);
+        recalcularRegistros(registros, precioBaseOro, baseKilataje, sucursalId, precio);
         plazoHechuraAlhajaRepository.saveAll(registros);
     }
 
@@ -309,10 +309,14 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
      * Aplica la formula real de COCAE a una lista de registros (sin persistir):
      *   Paso 1 (intermedio, no se guarda): precioPorKilatePuro = precioGramoBase / baseKilataje
      *   Paso 2: precioAvaluo(kilate) = precioPorKilatePuro * kilataje
-     *   Paso 3: precioBase(kilate,hechura) = precioAvaluo * %Prestamo(kilate,hechura) / 100
+     *   Paso 3: precioBase(kilate,hechura) = precioAvaluo * %Prestamo(kilate,hechura)/100 * factor(hechura,sucursal)/100
      *           — %Prestamo viene de la tabla global oro_tabla_prestamo (24 celdas, irregular por diseno de COCAE)
+     *           — factor(hechura,sucursal) viene de precio_oro (configurable por sucursal, neutro = 100.0000,
+     *             ver {@link com.ignis.prestamil.model.PrecioOro#factorDeHechura}). Confirmado por el usuario
+     *             (quick task 260726-lin, ORO-09): este factor SI afecta el monto real del prestamo de contratos
+     *             nuevos. Los contratos ya emitidos (VIGENTE) no se recalculan retroactivamente (D-09).
      *   Paso 4: precioPrestamo(kilate,hechura,plazo) = precioBase * (1 + porcAumento_propio_de_la_celda / 100)
-     *           — porcAumento NO se deriva ni se sobreescribe aqui; es el valor ya almacenado en la fila (ORO-02)
+     *           — porcAumento NO se deriva ni se sobreescribe aqui; es el valor ya almacenado en la fila (ORO-02/D-10)
      * Contrato de redondeo (D-06): pasos intermedios usan escala 10 HALF_UP (nunca se persisten);
      * precioBase y precioPrestamo se persisten con escala 4 HALF_UP (coincide con DECIMAL(12,4) del schema).
      *
@@ -320,11 +324,14 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
      * @param precioGramoBase precio del oro por gramo al kilataje base
      * @param baseKilataje kilataje de referencia del precio ingresado (21 o 24)
      * @param sucursalId identificador de la sucursal, usado para resolver %Prestamo en oro_tabla_prestamo
+     * @param precio precio del oro vigente de la sucursal (puede ser null), del que se lee el factor de
+     *               hechura efectivo; se recibe por parametro para no releer un valor todavia no persistido
+     *               cuando se invoca desde {@link #recalcularTodasLasTablas}
      * @throws ResourceNotFoundException si falta la celda (kilataje,hechura) en oro_tabla_prestamo para la sucursal
      */
     private void recalcularRegistros(List<PlazoHechuraAlhaja> registros,
                                       BigDecimal precioGramoBase, int baseKilataje,
-                                      Integer sucursalId) {
+                                      Integer sucursalId, com.ignis.prestamil.model.PrecioOro precio) {
         BigDecimal base = new BigDecimal(baseKilataje);
         BigDecimal precioPorKilatePuro = precioGramoBase.divide(base, 10, RoundingMode.HALF_UP);
 
@@ -345,6 +352,8 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
             BigDecimal precioAvaluo = precioPorKilatePuro.multiply(new BigDecimal(r.getId().getKilataje()));
             BigDecimal precioBase = precioAvaluo
                     .multiply(porcPrestamo.divide(CIEN, 10, RoundingMode.HALF_UP))
+                    .multiply(com.ignis.prestamil.model.PrecioOro.factorDeHechura(precio, r.getId().getHechura())
+                            .divide(CIEN, 10, RoundingMode.HALF_UP))
                     .setScale(4, RoundingMode.HALF_UP);
             r.setPrecioBase(precioBase);
             r.setPrecioPrestamo(precioBase
@@ -367,7 +376,7 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
                         "No hay precio de oro configurado para la sucursal " + sucursalId));
         List<PlazoHechuraAlhaja> registros = plazoHechuraAlhajaRepository.findByIdSucursalId(sucursalId);
         if (!registros.isEmpty()) {
-            recalcularRegistros(registros, precio.getPrecioGramo24k(), 24, sucursalId);
+            recalcularRegistros(registros, precio.getPrecioGramo24k(), 24, sucursalId, precio);
             plazoHechuraAlhajaRepository.saveAll(registros);
         }
     }
@@ -393,17 +402,30 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
         String calcularSobre = "PORCENTAJE";
 
         // 1. Cargar/crear el precio del oro y resolver factores efectivos
-        //    (los del request mandan; si vienen nulos se conservan los vigentes).
+        //    (los del request mandan; si vienen nulos se conservan los vigentes). CRITICO:
+        //    este upsert debe ocurrir ANTES del recalculo del paso 2 -- si se aplicara en el
+        //    paso 3 (junto con precioGramo24k), el recalculo usaria los factores viejos.
         com.ignis.prestamil.model.PrecioOro precio = precioOroRepository.findBySucursalId(sucursalId)
                 .orElseGet(() -> {
                     com.ignis.prestamil.model.PrecioOro nuevo = new com.ignis.prestamil.model.PrecioOro();
                     nuevo.setSucursalId(sucursalId);
                     return nuevo;
                 });
-        // 2. Recalcular todas las tablas de la sucursal aplicando el factor de hechura
+        // Los factores del request mandan; si vienen nulos se conservan los vigentes.
+        if (request.getFactorFundir() != null) {
+            precio.setFactorFundir(request.getFactorFundir());
+        }
+        if (request.getFactorNormal() != null) {
+            precio.setFactorNormal(request.getFactorNormal());
+        }
+        if (request.getFactorEspecial() != null) {
+            precio.setFactorEspecial(request.getFactorEspecial());
+        }
+
+        // 2. Recalcular todas las tablas de la sucursal aplicando el factor de hechura ya resuelto
         List<PlazoHechuraAlhaja> registros = plazoHechuraAlhajaRepository.findByIdSucursalId(sucursalId);
         if (!registros.isEmpty()) {
-            recalcularRegistros(registros, request.getPrecioGramoBase(), baseKilataje, sucursalId);
+            recalcularRegistros(registros, request.getPrecioGramoBase(), baseKilataje, sucursalId, precio);
             plazoHechuraAlhajaRepository.saveAll(registros);
         }
 
