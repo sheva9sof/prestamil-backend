@@ -22,5 +22,9 @@
     <include file="db/changelog/changes/015-normalizar-hechura-legacy.sql"/>
     <include file="db/changelog/changes/016-reparar-tabla-prestamo-oro.sql"/>
     <include file="db/changelog/changes/017-restaurar-factores-hechura-precio-oro.sql"/>
+    <include file="db/changelog/changes/018-completar-kilatajes-plazos.sql"/>
+    <include file="db/changelog/changes/019-corregir-precio-prestamo-porcentaje.sql"/>
+    <include file="db/changelog/changes/020-restaurar-aumento-plazos.sql"/>
+    <include file="db/changelog/changes/021-eliminar-menu-parametros-prestamo.sql"/>
 
 </databaseChangeLog>

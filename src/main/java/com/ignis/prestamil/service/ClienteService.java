@@ -56,7 +56,19 @@ public class ClienteService extends BaseService<Cliente, Integer, ClienteReposit
         if (dir == null) return;
 
         if (dir.getId() != null) {
-            direccionRepository.findById(dir.getId()).ifPresent(cliente::setDireccion);
+            direccionRepository.findById(dir.getId()).ifPresent(existente -> {
+                existente.setTipoDireccion(dir.getTipoDireccion());
+                existente.setCalle(dir.getCalle());
+                existente.setNumeroExterior(dir.getNumeroExterior());
+                existente.setNumeroInterior(dir.getNumeroInterior());
+                existente.setColonia(dir.getColonia());
+                existente.setCiudad(dir.getCiudad());
+                existente.setEstado(dir.getEstado());
+                existente.setCodigoPostal(dir.getCodigoPostal());
+                existente.setReferencias(dir.getReferencias());
+                existente.setEsVerificada(dir.getEsVerificada());
+                cliente.setDireccion(direccionRepository.save(existente));
+            });
         } else {
             if (dir.getFechaRegistro() == null) dir.setFechaRegistro(LocalDate.now());
             cliente.setDireccion(direccionRepository.save(dir));

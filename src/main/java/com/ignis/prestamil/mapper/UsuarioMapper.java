@@ -21,6 +21,7 @@ public interface UsuarioMapper {
     LoginResponse toLoginResponse(Usuario usuario, List<Opcion> opciones);
 
     @Mapping(source = "rol.rol", target = "rolNombre")
+    @Mapping(source = "rol.id", target = "idRol")
     UsuarioResponse toUsuarioResponse(Usuario usuario);
 
     @Mapping(source = "nombreIcono", target = "nombreIcono")

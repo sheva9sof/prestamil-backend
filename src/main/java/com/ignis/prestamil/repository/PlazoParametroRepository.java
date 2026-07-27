@@ -36,4 +36,5 @@ public interface PlazoParametroRepository extends BaseRepository<PlazoParametro,
     Optional<PlazoParametro> findByPlazoIdAndTipoPrendaIdAndSucursalId(
             Long plazoId, Integer tipoPrendaId, Integer sucursalId);
 
+    void deleteByPlazoId(Long plazoId);
 }

@@ -8,8 +8,10 @@ import com.ignis.prestamil.model.OroTablaPrestamo;
 import com.ignis.prestamil.model.OroTablaPrestamoId;
 import com.ignis.prestamil.model.PlazoHechuraAlhaja;
 import com.ignis.prestamil.model.PlazoHechuraAlhajaId;
+import com.ignis.prestamil.model.Plazo;
 import com.ignis.prestamil.model.PrecioOro;
 import com.ignis.prestamil.repository.OroTablaPrestamoRepository;
+import com.ignis.prestamil.repository.ContratoRepository;
 import com.ignis.prestamil.repository.PlazoHechuraAlhajaRepository;
 import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.PlazoRepository;
@@ -31,6 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -64,6 +67,9 @@ class PlazoServiceTest {
     @Mock
     OroTablaPrestamoRepository oroTablaPrestamoRepository;
 
+    @Mock
+    ContratoRepository contratoRepository;
+
     PlazoService plazoService;
 
     @BeforeEach
@@ -77,7 +83,8 @@ class PlazoServiceTest {
                 plazoHechuraAlhajaRepository,
                 plazoHechuraAlhajaMapper,
                 precioOroRepository,
-                oroTablaPrestamoRepository
+                oroTablaPrestamoRepository,
+                contratoRepository
         );
     }
 
@@ -117,6 +124,39 @@ class PlazoServiceTest {
     // -----------------------------------------------------------------------
     // actualizarTodosPrecios tests
     // -----------------------------------------------------------------------
+
+    @Test
+    void eliminarPlazo_sinContratos_eliminaConfiguracionDependiente() {
+        Plazo plazo = new Plazo();
+        plazo.setId(7L);
+        when(repository.findById(7L)).thenReturn(Optional.of(plazo));
+        when(contratoRepository.existsByPlazoId(7L)).thenReturn(false);
+
+        plazoService.eliminarPlazo(7L);
+
+        org.mockito.InOrder orden = inOrder(
+                plazoParametroRepository, plazoHechuraAlhajaRepository, repository);
+        orden.verify(plazoParametroRepository).deleteByPlazoId(7L);
+        orden.verify(plazoParametroRepository).flush();
+        orden.verify(plazoHechuraAlhajaRepository).deleteByIdIdPlazo(7);
+        orden.verify(plazoHechuraAlhajaRepository).flush();
+        orden.verify(repository).saveAndFlush(plazo);
+        orden.verify(repository).delete(plazo);
+    }
+
+    @Test
+    void eliminarPlazo_conContratos_rechazaEliminacion() {
+        Plazo plazo = new Plazo();
+        plazo.setId(7L);
+        when(repository.findById(7L)).thenReturn(Optional.of(plazo));
+        when(contratoRepository.existsByPlazoId(7L)).thenReturn(true);
+
+        assertThrows(com.ignis.prestamil.exception.BadRequestException.class,
+                () -> plazoService.eliminarPlazo(7L));
+
+        verify(plazoParametroRepository, never()).deleteByPlazoId(any());
+        verify(repository, never()).delete(any());
+    }
 
     @Test
     void actualizarTodosPrecios_21K_Normal_coincideConCOCAE() {

@@ -25,4 +25,6 @@ public interface PlazoHechuraAlhajaRepository
      * @return lista de PlazoHechuraAlhaja de la sucursal
      */
     List<PlazoHechuraAlhaja> findByIdSucursalId(Integer sucursalId);
+
+    void deleteByIdIdPlazo(Integer idPlazo);
 }

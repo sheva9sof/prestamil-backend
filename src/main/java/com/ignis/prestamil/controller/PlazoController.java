@@ -66,6 +66,12 @@ public class PlazoController {
         return ResponseEntity.ok(response);
     }
 
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> delete(@PathVariable Long id) {
+        plazoService.eliminarPlazo(id);
+        return ResponseEntity.noContent().build();
+    }
+
     /**
      * Obtiene los parámetros de plazo para una combinación específica de plazo, tipo de prenda y sucursal.
      * GET /api/plazos/{idPlazo}/parametros/{idTipoPrenda}?sucursalId=1
@@ -143,6 +149,17 @@ public class PlazoController {
         }
         return ResponseEntity.ok(
                 plazoService.actualizarPrecioBase(id, sucursalId, kilataje, hechura, precioBase));
+    }
+
+    @PutMapping("/{id}/alhajas/{kilataje}/{hechura}/porcentaje-aumento")
+    public ResponseEntity<PlazoHechuraAlhajaResponse> actualizarPorcAumento(
+            @PathVariable Integer id,
+            @PathVariable Integer kilataje,
+            @PathVariable String hechura,
+            @RequestParam(defaultValue = "1") Integer sucursalId,
+            @RequestBody Map<String, BigDecimal> body) {
+        return ResponseEntity.ok(plazoService.actualizarPorcAumento(
+                id, sucursalId, kilataje, hechura, body.get("porcAumento")));
     }
 
     /**

@@ -17,6 +17,7 @@ import com.ignis.prestamil.response.TurnoResponse;
 import com.ignis.prestamil.util.Constantes;
 
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -119,10 +120,17 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
 
     @Override
     public void deleteById(Integer id) {
-        Usuario usuario = repository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado con id: " + id));
-        usuario.setEstatus(false);
-        repository.save(usuario);
+        if (!repository.existsById(id)) {
+            throw new ResourceNotFoundException("Usuario no encontrado con id: " + id);
+        }
+        // Eliminación física. El estatus se administra por separado desde la edición.
+        try {
+            repository.deleteById(id);
+            repository.flush();
+        } catch (DataIntegrityViolationException exception) {
+            throw new BadRequestException(
+                    "No se puede eliminar este usuario porque tiene turnos, contratos o movimientos relacionados.");
+        }
     }
 
     public LoginResponse login(LoginRequest loginRequest) {

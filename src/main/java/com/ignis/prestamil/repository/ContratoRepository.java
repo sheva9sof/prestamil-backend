@@ -15,4 +15,6 @@ public interface ContratoRepository extends BaseRepository<Contrato, Long> {
     List<Contrato> findByClienteIdOrderByCreadoEnDesc(Integer clienteId);
 
     List<Contrato> findByEstatusOrderByFechaVencimientoAsc(EstatusContrato estatus);
+
+    boolean existsByPlazoId(Long plazoId);
 }

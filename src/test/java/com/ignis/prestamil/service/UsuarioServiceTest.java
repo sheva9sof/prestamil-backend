@@ -146,34 +146,27 @@ class UsuarioServiceTest {
     // -----------------------------------------------------------------------
 
     @Test
-    void deleteById_isSoftDelete_setsEstatusFalse() {
+    void deleteById_existingUser_performsHardDelete() {
         // Given
-        Usuario activeUser = buildUsuario("jdoe", "hash");
-        activeUser.setId(1);
-        activeUser.setEstatus(true);
-
-        when(repository.findById(1)).thenReturn(Optional.of(activeUser));
-        when(repository.save(any(Usuario.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(repository.existsById(1)).thenReturn(true);
 
         // When
         usuarioService.deleteById(1);
 
         // Then
-        ArgumentCaptor<Usuario> captor = ArgumentCaptor.forClass(Usuario.class);
-        verify(repository).save(captor.capture());
-        assertThat(captor.getValue().isEstatus()).isFalse();
-
-        // Verify hard delete was NOT called
-        verify(repository, never()).deleteById(any());
+        verify(repository).deleteById(1);
+        verify(repository).flush();
+        verify(repository, never()).save(any());
     }
 
     @Test
     void deleteById_whenNotFound_throwsResourceNotFoundException() {
         // Given
-        when(repository.findById(999)).thenReturn(Optional.empty());
+        when(repository.existsById(999)).thenReturn(false);
 
         // When / Then
         assertThrows(ResourceNotFoundException.class, () -> usuarioService.deleteById(999));
+        verify(repository, never()).deleteById(any());
         verify(repository, never()).save(any());
     }
 
