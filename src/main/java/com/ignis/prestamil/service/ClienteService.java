@@ -1,11 +1,13 @@
 package com.ignis.prestamil.service;
 
 import com.ignis.prestamil.model.Cliente;
+import com.ignis.prestamil.model.Direccion;
 import com.ignis.prestamil.repository.ClienteRepository;
 import com.ignis.prestamil.repository.DireccionRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.util.List;
 
 @Service
@@ -50,9 +52,26 @@ public class ClienteService extends BaseService<Cliente, Integer, ClienteReposit
      * Carga la dirección si se proporciona el ID en el objeto dirección del cliente
      */
     private void loadDireccion(Cliente cliente) {
-        if (cliente.getDireccion() != null && cliente.getDireccion().getId() != null) {
-            direccionRepository.findById(cliente.getDireccion().getId())
-                    .ifPresent(cliente::setDireccion);
+        Direccion dir = cliente.getDireccion();
+        if (dir == null) return;
+
+        if (dir.getId() != null) {
+            direccionRepository.findById(dir.getId()).ifPresent(existente -> {
+                existente.setTipoDireccion(dir.getTipoDireccion());
+                existente.setCalle(dir.getCalle());
+                existente.setNumeroExterior(dir.getNumeroExterior());
+                existente.setNumeroInterior(dir.getNumeroInterior());
+                existente.setColonia(dir.getColonia());
+                existente.setCiudad(dir.getCiudad());
+                existente.setEstado(dir.getEstado());
+                existente.setCodigoPostal(dir.getCodigoPostal());
+                existente.setReferencias(dir.getReferencias());
+                existente.setEsVerificada(dir.getEsVerificada());
+                cliente.setDireccion(direccionRepository.save(existente));
+            });
+        } else {
+            if (dir.getFechaRegistro() == null) dir.setFechaRegistro(LocalDate.now());
+            cliente.setDireccion(direccionRepository.save(dir));
         }
     }
 

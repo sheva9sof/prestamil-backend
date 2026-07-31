@@ -1,36 +1,104 @@
 package com.ignis.prestamil.service;
 
+import com.ignis.prestamil.exception.BadRequestException;
+import com.ignis.prestamil.exception.ResourceNotFoundException;
+import com.ignis.prestamil.request.PrecioOroRequest;
+import com.ignis.prestamil.mapper.PlazoHechuraAlhajaMapper;
 import com.ignis.prestamil.mapper.PlazoMapper;
+import com.ignis.prestamil.mapper.PlazoParametroMapper;
+import com.ignis.prestamil.model.OroTablaPrestamo;
 import com.ignis.prestamil.model.Plazo;
+import com.ignis.prestamil.model.PlazoHechuraAlhaja;
+import com.ignis.prestamil.model.PlazoHechuraAlhajaId;
 import com.ignis.prestamil.model.PlazoParametro;
+import com.ignis.prestamil.model.PlazoParametroId;
 import com.ignis.prestamil.model.TipoPrenda;
+import com.ignis.prestamil.repository.OroTablaPrestamoRepository;
+import com.ignis.prestamil.repository.ContratoRepository;
+import com.ignis.prestamil.repository.PlazoHechuraAlhajaRepository;
 import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.PlazoRepository;
+import com.ignis.prestamil.request.PlazoHechuraAlhajaRequest;
+import com.ignis.prestamil.request.PlazoParametroRequest;
 import com.ignis.prestamil.request.PlazoRequest;
+import com.ignis.prestamil.response.PlazoHechuraAlhajaResponse;
+import com.ignis.prestamil.response.PlazoParametroResponse;
 import com.ignis.prestamil.response.PlazoResponse;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.ArrayList;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 @Transactional
+@Slf4j
 public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
+
+    private static final BigDecimal CIEN = new BigDecimal("100");
+    private static final Set<Integer> KILATAJES_ORO = Set.of(6, 8, 10, 12, 14, 18, 21, 24);
 
     private final PlazoMapper plazoMapper;
     private final TipoPrendaService tipoPrendaService;
     private final PlazoParametroRepository plazoParametroRepository;
+    private final PlazoParametroMapper plazoParametroMapper;
+    private final PlazoHechuraAlhajaRepository plazoHechuraAlhajaRepository;
+    private final PlazoHechuraAlhajaMapper plazoHechuraAlhajaMapper;
+    private final com.ignis.prestamil.repository.PrecioOroRepository precioOroRepository;
+    private final OroTablaPrestamoRepository oroTablaPrestamoRepository;
+    private final ContratoRepository contratoRepository;
 
-    public PlazoService(PlazoRepository repository, PlazoMapper plazoMapper, TipoPrendaService tipoPrendaService, PlazoParametroRepository plazoParametroRepository) {
+    public PlazoService(PlazoRepository repository,
+                        PlazoMapper plazoMapper,
+                        TipoPrendaService tipoPrendaService,
+                        PlazoParametroRepository plazoParametroRepository,
+                        PlazoParametroMapper plazoParametroMapper,
+                        PlazoHechuraAlhajaRepository plazoHechuraAlhajaRepository,
+                        PlazoHechuraAlhajaMapper plazoHechuraAlhajaMapper,
+                        com.ignis.prestamil.repository.PrecioOroRepository precioOroRepository,
+                        OroTablaPrestamoRepository oroTablaPrestamoRepository,
+                        ContratoRepository contratoRepository) {
         super(repository);
         this.plazoMapper = plazoMapper;
         this.tipoPrendaService = tipoPrendaService;
         this.plazoParametroRepository = plazoParametroRepository;
+        this.plazoParametroMapper = plazoParametroMapper;
+        this.plazoHechuraAlhajaRepository = plazoHechuraAlhajaRepository;
+        this.plazoHechuraAlhajaMapper = plazoHechuraAlhajaMapper;
+        this.precioOroRepository = precioOroRepository;
+        this.oroTablaPrestamoRepository = oroTablaPrestamoRepository;
+        this.contratoRepository = contratoRepository;
     }
 
     /**
-     * Crea un nuevo plazo
+     * Elimina un plazo y su configuración dependiente cuando aún no tiene contratos.
+     *
+     * @param id identificador del plazo
+     */
+    public void eliminarPlazo(Long id) {
+        Plazo plazo = super.findById(id);
+        if (contratoRepository.existsByPlazoId(id)) {
+            throw new BadRequestException(
+                    "No se puede eliminar el plazo porque ya está asociado a uno o más contratos. Puedes marcarlo como inactivo.");
+        }
+
+        plazoParametroRepository.deleteByPlazoId(id);
+        plazoParametroRepository.flush();
+        plazoHechuraAlhajaRepository.deleteByIdIdPlazo(Math.toIntExact(id));
+        plazoHechuraAlhajaRepository.flush();
+        plazo.getTiposPrenda().clear();
+        repository.saveAndFlush(plazo);
+        repository.delete(plazo);
+    }
+
+    /**
+     * Crea un nuevo plazo.
      *
      * @param request DTO con los datos del nuevo plazo
      * @return PlazoResponse con los datos del plazo creado
@@ -41,7 +109,7 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
 
         // Asignar tipos de prenda si se proporcionaron
         if (request.getTiposPrenda() != null && !request.getTiposPrenda().isEmpty()) {
-            List<TipoPrenda> tiposPrenda = new ArrayList<>();
+            Set<TipoPrenda> tiposPrenda = new LinkedHashSet<>();
             for (Integer tipoPrendaId : request.getTiposPrenda()) {
                 TipoPrenda tipoPrenda = tipoPrendaService.findById(tipoPrendaId);
                 tiposPrenda.add(tipoPrenda);
@@ -57,9 +125,9 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
     }
 
     /**
-     * Actualiza un plazo existente
+     * Actualiza un plazo existente.
      *
-     * @param id ID del plazo a actualizar
+     * @param id      ID del plazo a actualizar
      * @param request DTO con los datos a actualizar
      * @return PlazoResponse con los datos actualizados
      */
@@ -75,16 +143,24 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
             plazo.setActivo(request.getActivo());
         }
 
-        // Actualizar tipos de prenda si se proporcionaron
+        // Actualizar tipos de prenda si se proporcionaron. IMPORTANTE: nunca reemplazar
+        // la referencia de la colección (plazo.setTiposPrenda(nuevoSet)) — Hibernate
+        // solo puede calcular qué filas insertar/borrar en plazo_prenda comparando el
+        // Set administrado ORIGINAL contra su propio contenido; si se sustituye por un
+        // Set nuevo, Hibernate ya no reconoce la colección como "la misma" y recrea
+        // TODAS las filas (DELETE de todo el plazo_id seguido de INSERT), lo que viola
+        // la FK fk_pp_plazo_categoria en cuanto plazo_parametro ya tiene filas para
+        // alguna combinación (plazo_id, tipo_prenda_id) existente. Mutar la colección
+        // administrada in situ (removeIf + addAll) deja intactos los tipos de prenda
+        // que no cambiaron, y solo genera DELETE/INSERT reales para los que sí cambian.
         if (request.getTiposPrenda() != null) {
-            List<TipoPrenda> tiposPrenda = new ArrayList<>();
-            if (!request.getTiposPrenda().isEmpty()) {
-                for (Integer tipoPrendaId : request.getTiposPrenda()) {
-                    TipoPrenda tipoPrenda = tipoPrendaService.findById(tipoPrendaId);
-                    tiposPrenda.add(tipoPrenda);
-                }
+            Set<TipoPrenda> tiposPrendaSolicitados = new LinkedHashSet<>();
+            for (Integer tipoPrendaId : request.getTiposPrenda()) {
+                tiposPrendaSolicitados.add(tipoPrendaService.findById(tipoPrendaId));
             }
-            plazo.setTiposPrenda(tiposPrenda);
+            Set<TipoPrenda> tiposPrendaActuales = plazo.getTiposPrenda();
+            tiposPrendaActuales.removeIf(tipoPrenda -> !tiposPrendaSolicitados.contains(tipoPrenda));
+            tiposPrendaActuales.addAll(tiposPrendaSolicitados);
         }
         // actualizadoEn se actualizará automáticamente por @UpdateTimestamp
 
@@ -96,16 +172,401 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
     }
 
     /**
-     * Obtiene los parámetros de plazo para una combinación específica de plazo y tipo de prenda
+     * Obtiene los parámetros de préstamo para un plazo, tipo de prenda y sucursal.
      *
-     * @param idPlazo ID del plazo
-     * @param idTipoPrenda ID del tipo de prenda
-     * @return PlazoParametro para la combinación especificada, o null si no existe
+     * @param idPlazo      identificador del plazo
+     * @param idTipoPrenda identificador del tipo de prenda
+     * @param sucursalId   identificador de la sucursal
+     * @return PlazoParametroResponse con los parámetros configurados
+     * @throws ResourceNotFoundException si no existe configuración para la combinación
      */
-    public PlazoParametro getParametrosPlazo(Long idPlazo, Integer idTipoPrenda) {
-        return plazoParametroRepository.findByPlazoIdAndTipoPrendaId(idPlazo, idTipoPrenda)
-                .orElse(null);
+    public PlazoParametroResponse getParametrosPlazo(Long idPlazo, Integer idTipoPrenda, Integer sucursalId) {
+        PlazoParametroId id = new PlazoParametroId(idPlazo, idTipoPrenda, sucursalId);
+        return plazoParametroRepository.findById(id)
+                .map(plazoParametroMapper::toPlazoParametroResponse)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "PlazoParametro no encontrado: plazo=" + idPlazo + ",tipoPrenda=" + idTipoPrenda + ",sucursal=" + sucursalId));
     }
 
-}
+    /**
+     * Lista todos los parámetros de préstamo configurados para un plazo y sucursal.
+     *
+     * @param plazoId    identificador del plazo
+     * @param sucursalId identificador de la sucursal
+     * @return lista de PlazoParametroResponse para la sucursal indicada
+     */
+    public List<PlazoParametroResponse> getParametrosBySucursal(Long plazoId, Integer sucursalId) {
+        return plazoParametroRepository.findByPlazoIdAndSucursalId(plazoId, sucursalId)
+                .stream()
+                .map(plazoParametroMapper::toPlazoParametroResponse)
+                .toList();
+    }
 
+    /**
+     * Crea o actualiza (upsert) los parámetros para una combinación plazo+tipoPrenda+sucursal.
+     *
+     * @param plazoId      identificador del plazo
+     * @param tipoPrendaId identificador del tipo de prenda
+     * @param sucursalId   identificador de la sucursal
+     * @param request      DTO con los valores a guardar
+     * @return PlazoParametroResponse con los datos guardados
+     */
+    public PlazoParametroResponse guardarParametro(Long plazoId, Integer tipoPrendaId,
+                                                    Integer sucursalId, PlazoParametroRequest request) {
+        PlazoParametroId id = new PlazoParametroId(plazoId, tipoPrendaId, sucursalId);
+        PlazoParametro entity = plazoParametroRepository.findById(id)
+                .orElseGet(() -> {
+                    // Crear nueva entidad con clave compuesta
+                    PlazoParametro nuevo = new PlazoParametro();
+                    nuevo.setPlazoId(plazoId);
+                    nuevo.setTipoPrendaId(tipoPrendaId);
+                    nuevo.setSucursalId(sucursalId);
+                    return nuevo;
+                });
+        // Actualizar campos editables desde el request
+        plazoParametroMapper.actualizarDesdeRequest(entity, request);
+        PlazoParametro guardado = plazoParametroRepository.save(entity);
+        return plazoParametroMapper.toPlazoParametroResponse(guardado);
+    }
+
+    // =========================================================================
+    // Métodos para tabla de alhajas (plazo_hechura_alhaja)
+    // =========================================================================
+
+    /**
+     * Lista la tabla de hechuras de alhajas para un plazo y sucursal.
+     *
+     * @param idPlazo    identificador del plazo
+     * @param sucursalId identificador de la sucursal
+     * @return lista de PlazoHechuraAlhajaResponse ordenada por kilataje y hechura
+     */
+    public List<PlazoHechuraAlhajaResponse> getTablaAlhajas(Integer idPlazo, Integer sucursalId) {
+        return plazoHechuraAlhajaRepository.findByIdIdPlazoAndIdSucursalId(idPlazo, sucursalId)
+                .stream()
+                .map(plazoHechuraAlhajaMapper::toResponse)
+                .toList();
+    }
+
+    /**
+     * Actualiza el precio base de una hechura específica y recalcula el precio de préstamo:
+     *   precioPrestamo = precioBase * (1 + porcAumento / 100)
+     *
+     * @param idPlazo    identificador del plazo
+     * @param sucursalId identificador de la sucursal
+     * @param kilataje   kilataje del oro (p.ej. 10, 14, 18)
+     * @param hechura    clave de hechura ("F", "N" o "E")
+     * @param precioBase nuevo precio base en pesos
+     * @return PlazoHechuraAlhajaResponse actualizado
+     * @throws ResourceNotFoundException si no existe el registro para la combinación dada
+     */
+    public PlazoHechuraAlhajaResponse actualizarPrecioBase(Integer idPlazo, Integer sucursalId,
+                                                            Integer kilataje, String hechura,
+                                                            BigDecimal precioBase) {
+        PlazoHechuraAlhajaId id = new PlazoHechuraAlhajaId(idPlazo, sucursalId, kilataje, hechura);
+        PlazoHechuraAlhaja entity = plazoHechuraAlhajaRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "PlazoHechuraAlhaja no encontrado: idPlazo=" + idPlazo + ",sucursal=" + sucursalId + ",kilataje=" + kilataje + ",hechura=" + hechura));
+        BigDecimal precioBaseCalculado = calcularPrecioBaseGlobal(sucursalId, kilataje, hechura);
+        entity.setPrecioBase(precioBaseCalculado);
+        BigDecimal precioPrestamo = precioBaseCalculado
+                .multiply(BigDecimal.ONE.add(entity.getPorcAumento().divide(CIEN, 10, RoundingMode.HALF_UP)))
+                .setScale(4, RoundingMode.HALF_UP);
+        entity.setPrecioPrestamo(precioPrestamo);
+        return plazoHechuraAlhajaMapper.toResponse(plazoHechuraAlhajaRepository.save(entity));
+    }
+
+    /**
+     * Crea una nueva combinación de alhaja para un plazo y sucursal específicos.
+     * Calcula automáticamente el precioPrestamo a partir de precioBase * (1 + porcAumento / 100).
+     *
+     * @param idPlazo    identificador del plazo
+     * @param sucursalId identificador de la sucursal
+     * @param request    datos de la nueva alhaja (kilataje, hechura, precioBase, porcAumento)
+     * @return PlazoHechuraAlhajaResponse de la alhaja creada
+     * @throws BadRequestException si ya existe la combinación plazo/sucursal/kilataje/hechura
+     */
+    public PlazoHechuraAlhajaResponse crearAlhaja(Integer idPlazo, Integer sucursalId, PlazoHechuraAlhajaRequest request) {
+        if (!KILATAJES_ORO.contains(request.getKilataje())) {
+            throw new BadRequestException(
+                    "Kilataje no soportado. Valores permitidos: 6, 8, 10, 12, 14, 18, 21 y 24");
+        }
+        // 1. Validar duplicado
+        PlazoHechuraAlhajaId id = new PlazoHechuraAlhajaId(idPlazo, sucursalId, request.getKilataje(), request.getHechura());
+        if (plazoHechuraAlhajaRepository.existsById(id)) {
+            throw new BadRequestException("Ya existe una combinación " + request.getKilataje() + "K/" + request.getHechura() + " para este plazo/sucursal");
+        }
+        // 2. Construir entidad desde el request usando el mapper
+        PlazoHechuraAlhaja entity = plazoHechuraAlhajaMapper.toEntity(request, idPlazo, sucursalId);
+        // 3. tablaPrestamoId = 1 por defecto (iteración 1 del módulo)
+        entity.setTablaPrestamoId(1);
+        // 4. Calcular precioPrestamo = precioBase * (1 + porcAumento / 100)
+        BigDecimal precioBaseCalculado = calcularPrecioBaseGlobal(
+                sucursalId, request.getKilataje(), request.getHechura());
+        entity.setPrecioBase(precioBaseCalculado);
+        BigDecimal precioPrestamo = precioBaseCalculado
+                .multiply(BigDecimal.ONE.add(request.getPorcAumento().divide(CIEN, 10, RoundingMode.HALF_UP)))
+                .setScale(4, RoundingMode.HALF_UP);
+        entity.setPrecioPrestamo(precioPrestamo);
+        // 5. Guardar y mapear a response
+        return plazoHechuraAlhajaMapper.toResponse(plazoHechuraAlhajaRepository.save(entity));
+    }
+
+    /**
+     * Actualiza el porcentaje de aumento propio de un plazo y recalcula su precio de préstamo.
+     */
+    public PlazoHechuraAlhajaResponse actualizarPorcAumento(Integer idPlazo, Integer sucursalId,
+                                                            Integer kilataje, String hechura,
+                                                            BigDecimal porcAumento) {
+        if (porcAumento == null || porcAumento.compareTo(BigDecimal.ZERO) < 0) {
+            throw new BadRequestException("porcAumento debe ser mayor o igual a cero");
+        }
+        PlazoHechuraAlhajaId id = new PlazoHechuraAlhajaId(idPlazo, sucursalId, kilataje, hechura);
+        PlazoHechuraAlhaja entity = plazoHechuraAlhajaRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "No existe la celda " + kilataje + "K/" + hechura + " para el plazo " + idPlazo));
+
+        entity.setPorcAumento(porcAumento);
+        entity.setPrecioPrestamo(entity.getPrecioBase()
+                .multiply(BigDecimal.ONE.add(porcAumento.divide(CIEN, 10, RoundingMode.HALF_UP)))
+                .setScale(4, RoundingMode.HALF_UP));
+        return plazoHechuraAlhajaMapper.toResponse(plazoHechuraAlhajaRepository.save(entity));
+    }
+
+    /**
+     * Calcula el precio base canónico de una celda desde Configuración del Oro.
+     */
+    private BigDecimal calcularPrecioBaseGlobal(Integer sucursalId, Integer kilataje, String hechura) {
+        com.ignis.prestamil.model.PrecioOro precio = precioOroRepository.findBySucursalId(sucursalId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "No hay precio de oro configurado para la sucursal " + sucursalId));
+        OroTablaPrestamo celda = oroTablaPrestamoRepository
+                .findById(new com.ignis.prestamil.model.OroTablaPrestamoId(sucursalId, kilataje, hechura))
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "No hay configuración de oro para " + kilataje + "K/" + hechura));
+
+        return precio.getPrecioGramo24k()
+                .divide(new BigDecimal("24"), 10, RoundingMode.HALF_UP)
+                .multiply(new BigDecimal(kilataje))
+                .multiply(celda.getPorcPrestamo().divide(CIEN, 10, RoundingMode.HALF_UP))
+                .multiply(com.ignis.prestamil.model.PrecioOro.factorDeHechura(precio, hechura)
+                        .divide(CIEN, 10, RoundingMode.HALF_UP))
+                .setScale(4, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Recalcula precioBase y precioPrestamo para TODOS los registros del plazo+sucursal usando
+     * un precio base de oro de 24 kilates por onza troy.
+     *   precioBaseKilate = (precioBaseOro / 24) * kilataje * 31.1035
+     *   precioPrestamo   = precioBaseKilate * (1 + porcAumento / 100)
+     *
+     * @param idPlazo      identificador del plazo
+     * @param sucursalId   identificador de la sucursal
+     * @param precioBaseOro precio del oro de 24K por onza troy en pesos
+     * @throws ResourceNotFoundException si no hay registros para la combinación
+     * @throws BadRequestException       si precioBaseOro es menor o igual a cero
+     */
+    public void actualizarTodosPrecios(Integer idPlazo, Integer sucursalId, BigDecimal precioBaseOro) {
+        if (precioBaseOro == null || precioBaseOro.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BadRequestException("precioBaseOro debe ser mayor que cero");
+        }
+        List<PlazoHechuraAlhaja> registros =
+                plazoHechuraAlhajaRepository.findByIdIdPlazoAndIdSucursalId(idPlazo, sucursalId);
+        if (registros.isEmpty()) {
+            throw new ResourceNotFoundException(
+                    "PlazoHechuraAlhaja: no hay registros para plazo=" + idPlazo + ", sucursal=" + sucursalId);
+        }
+        com.ignis.prestamil.model.PrecioOro precio = precioOroRepository.findBySucursalId(sucursalId).orElse(null);
+        int baseKilataje = precio != null && precio.getBaseKilataje() != null ? precio.getBaseKilataje() : 24;
+        recalcularRegistros(registros, precioBaseOro, baseKilataje, sucursalId, precio);
+        plazoHechuraAlhajaRepository.saveAll(registros);
+    }
+
+    /**
+     * Aplica la formula real de COCAE a una lista de registros (sin persistir):
+     *   Paso 1 (intermedio, no se guarda): precioPorKilatePuro = precioGramoBase / baseKilataje
+     *   Paso 2: precioAvaluo(kilate) = precioPorKilatePuro * kilataje
+     *   Paso 3: precioBase(kilate,hechura) = precioAvaluo * %Prestamo(kilate,hechura)/100 * factor(hechura,sucursal)/100
+     *           — %Prestamo viene de la tabla global oro_tabla_prestamo (24 celdas, irregular por diseno de COCAE)
+     *           — factor(hechura,sucursal) viene de precio_oro (configurable por sucursal, neutro = 100.0000,
+     *             ver {@link com.ignis.prestamil.model.PrecioOro#factorDeHechura}). Confirmado por el usuario
+     *             (quick task 260726-lin, ORO-09): este factor SI afecta el monto real del prestamo de contratos
+     *             nuevos. Los contratos ya emitidos (VIGENTE) no se recalculan retroactivamente (D-09).
+     *   Paso 4: precioPrestamo(kilate,hechura,plazo) = precioBase * (1 + porcAumento_propio_de_la_celda / 100)
+     *           — porcAumento NO se deriva ni se sobreescribe aqui; es el valor ya almacenado en la fila (ORO-02/D-10)
+     * Contrato de redondeo (D-06): pasos intermedios usan escala 10 HALF_UP (nunca se persisten);
+     * precioBase y precioPrestamo se persisten con escala 4 HALF_UP (coincide con DECIMAL(12,4) del schema).
+     *
+     * @param registros  registros de hechura/kilataje a recalcular
+     * @param precioGramoBase precio del oro por gramo al kilataje base
+     * @param baseKilataje kilataje de referencia del precio ingresado (21 o 24)
+     * @param sucursalId identificador de la sucursal, usado para resolver %Prestamo en oro_tabla_prestamo
+     * @param precio precio del oro vigente de la sucursal (puede ser null), del que se lee el factor de
+     *               hechura efectivo; se recibe por parametro para no releer un valor todavia no persistido
+     *               cuando se invoca desde {@link #recalcularTodasLasTablas}
+     * @throws ResourceNotFoundException si falta la celda (kilataje,hechura) en oro_tabla_prestamo para la sucursal
+     */
+    private void recalcularRegistros(List<PlazoHechuraAlhaja> registros,
+                                      BigDecimal precioGramoBase, int baseKilataje,
+                                      Integer sucursalId, com.ignis.prestamil.model.PrecioOro precio) {
+        BigDecimal base = new BigDecimal(baseKilataje);
+        BigDecimal precioPorKilatePuro = precioGramoBase.divide(base, 10, RoundingMode.HALF_UP);
+
+        Map<String, BigDecimal> porcPrestamoPorCelda = oroTablaPrestamoRepository
+                .findByIdSucursalId(sucursalId).stream()
+                .collect(Collectors.toMap(
+                        r -> r.getId().getKilataje() + "-" + r.getId().getHechura(),
+                        OroTablaPrestamo::getPorcPrestamo));
+
+        for (PlazoHechuraAlhaja r : registros) {
+            String celda = r.getId().getKilataje() + "-" + r.getId().getHechura();
+            BigDecimal porcPrestamo = porcPrestamoPorCelda.get(celda);
+            if (porcPrestamo == null) {
+                throw new ResourceNotFoundException(
+                    "No hay %Prestamo COCAE configurado para sucursal=" + sucursalId
+                    + ", kilataje=" + r.getId().getKilataje() + ", hechura=" + r.getId().getHechura());
+            }
+            BigDecimal precioAvaluo = precioPorKilatePuro.multiply(new BigDecimal(r.getId().getKilataje()));
+            BigDecimal precioBase = precioAvaluo
+                    .multiply(porcPrestamo.divide(CIEN, 10, RoundingMode.HALF_UP))
+                    .multiply(com.ignis.prestamil.model.PrecioOro.factorDeHechura(precio, r.getId().getHechura())
+                            .divide(CIEN, 10, RoundingMode.HALF_UP))
+                    .setScale(4, RoundingMode.HALF_UP);
+            r.setPrecioBase(precioBase);
+            r.setPrecioPrestamo(precioBase
+                    .multiply(BigDecimal.ONE.add(r.getPorcAumento().divide(CIEN, 10, RoundingMode.HALF_UP)))
+                    .setScale(4, RoundingMode.HALF_UP));
+        }
+    }
+
+    /**
+     * Recalcula precioBase y precioPrestamo de TODOS los PlazoHechuraAlhaja de la sucursal
+     * cuando cambia el %Prestamo de una celda en oro_tabla_prestamo. Reutiliza la formula
+     * COCAE de recalcularRegistros; preserva el porcAumento propio de cada plazo (ORO-06).
+     *
+     * @param sucursalId identificador de la sucursal cuya tabla de oro cambió
+     * @throws ResourceNotFoundException si no hay precio de oro configurado para la sucursal
+     */
+    public void recalcularPrecioBasePorTablaOro(Integer sucursalId) {
+        com.ignis.prestamil.model.PrecioOro precio = precioOroRepository.findBySucursalId(sucursalId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "No hay precio de oro configurado para la sucursal " + sucursalId));
+        List<PlazoHechuraAlhaja> registros = plazoHechuraAlhajaRepository.findByIdSucursalId(sucursalId);
+        if (!registros.isEmpty()) {
+            recalcularRegistros(registros, precio.getPrecioGramo24k(), 24, sucursalId, precio);
+            plazoHechuraAlhajaRepository.saveAll(registros);
+        }
+    }
+
+    /**
+     * Punto de entrada ÚNICO para el precio del oro: persiste el precio del gramo base
+     * y los factores de hechura para la sucursal y recalcula TODAS las tablas de
+     * hechura/kilataje de esa sucursal (todos los plazos) en una sola operación.
+     * Control global de "Precio del Oro" en la pantalla de Plazos y Periodos.
+     *
+     * @param sucursalId identificador de la sucursal
+     * @param request    precio del gramo base, kilataje de referencia, modo de cálculo y factores
+     * @param usuario    nombre del usuario que realiza el cambio (auditoría)
+     * @return PrecioOroResponse con el precio vigente persistido
+     * @throws BadRequestException si el precio es nulo o menor o igual a cero
+     */
+    public com.ignis.prestamil.response.PrecioOroResponse recalcularTodasLasTablas(
+            Integer sucursalId, PrecioOroRequest request, String usuario) {
+        if (request.getPrecioGramoBase() == null || request.getPrecioGramoBase().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BadRequestException("precioGramoBase debe ser mayor que cero");
+        }
+        int baseKilataje = 24;
+        String calcularSobre = "PORCENTAJE";
+
+        // 1. Cargar/crear el precio del oro y resolver factores efectivos
+        //    (los del request mandan; si vienen nulos se conservan los vigentes). CRITICO:
+        //    este upsert debe ocurrir ANTES del recalculo del paso 2 -- si se aplicara en el
+        //    paso 3 (junto con precioGramo24k), el recalculo usaria los factores viejos.
+        com.ignis.prestamil.model.PrecioOro precio = precioOroRepository.findBySucursalId(sucursalId)
+                .orElseGet(() -> {
+                    com.ignis.prestamil.model.PrecioOro nuevo = new com.ignis.prestamil.model.PrecioOro();
+                    nuevo.setSucursalId(sucursalId);
+                    return nuevo;
+                });
+        // Los factores del request mandan; si vienen nulos se conservan los vigentes.
+        if (request.getFactorFundir() != null) {
+            precio.setFactorFundir(request.getFactorFundir());
+        }
+        if (request.getFactorNormal() != null) {
+            precio.setFactorNormal(request.getFactorNormal());
+        }
+        if (request.getFactorEspecial() != null) {
+            precio.setFactorEspecial(request.getFactorEspecial());
+        }
+
+        // 2. Recalcular todas las tablas de la sucursal aplicando el factor de hechura ya resuelto
+        List<PlazoHechuraAlhaja> registros = plazoHechuraAlhajaRepository.findByIdSucursalId(sucursalId);
+        if (!registros.isEmpty()) {
+            recalcularRegistros(registros, request.getPrecioGramoBase(), baseKilataje, sucursalId, precio);
+            plazoHechuraAlhajaRepository.saveAll(registros);
+        }
+
+        // 3. Persistir (upsert) el precio del oro vigente para la sucursal
+        precio.setPrecioGramo24k(request.getPrecioGramoBase());
+        precio.setBaseKilataje(baseKilataje);
+        precio.setCalcularSobre(calcularSobre);
+        precio.setActualizadoPor(usuario);
+        com.ignis.prestamil.model.PrecioOro guardado = precioOroRepository.save(precio);
+        log.info("Precio del oro actualizado: sucursal={} precioGramo={} base={}K registros={}",
+                sucursalId, request.getPrecioGramoBase(), baseKilataje, registros.size());
+        return toPrecioOroResponse(guardado);
+    }
+
+    /**
+     * Obtiene el precio del oro vigente para una sucursal.
+     *
+     * @param sucursalId identificador de la sucursal
+     * @return PrecioOroResponse vigente
+     * @throws ResourceNotFoundException si no hay precio configurado
+     */
+    @Transactional(readOnly = true)
+    public com.ignis.prestamil.response.PrecioOroResponse getPrecioOro(Integer sucursalId) {
+        return precioOroRepository.findBySucursalId(sucursalId)
+                .map(this::toPrecioOroResponse)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "No hay precio de oro configurado para la sucursal " + sucursalId));
+    }
+
+    private com.ignis.prestamil.response.PrecioOroResponse toPrecioOroResponse(com.ignis.prestamil.model.PrecioOro p) {
+        com.ignis.prestamil.response.PrecioOroResponse r = new com.ignis.prestamil.response.PrecioOroResponse();
+        r.setId(p.getId());
+        r.setSucursalId(p.getSucursalId());
+        r.setPrecioGramo24k(p.getPrecioGramo24k());
+        r.setCalcularSobre(p.getCalcularSobre());
+        r.setBaseKilataje(p.getBaseKilataje());
+        r.setFactorFundir(p.getFactorFundir());
+        r.setFactorNormal(p.getFactorNormal());
+        r.setFactorEspecial(p.getFactorEspecial());
+        r.setActualizadoEn(p.getActualizadoEn());
+        r.setActualizadoPor(p.getActualizadoPor());
+        return r;
+    }
+
+    /**
+     * Calcula el avalúo que aparece en el contrato a partir del monto del préstamo
+     * y los parámetros del plazo. Si la sucursal no usa avalúo real (o el porcentaje
+     * configurado es cero/nulo), el avalúo del contrato es igual al monto del préstamo.
+     *
+     * Fórmula: avaluoContrato = montoPrestamo × (1 + porcPrestamoSAvaluoReal / 100)
+     *
+     * @param montoPrestamo monto efectivamente prestado al cliente
+     * @param parametro     parámetros del plazo/tipo de prenda/sucursal
+     * @return avalúo a imprimir en el contrato, con escala 2 (HALF_UP)
+     */
+    public BigDecimal calcularAvaluoContrato(BigDecimal montoPrestamo, PlazoParametro parametro) {
+        if (!parametro.getUsaAvaluoReal()
+            || parametro.getPorcPrestamoSAvaluoReal() == null
+            || parametro.getPorcPrestamoSAvaluoReal().compareTo(BigDecimal.ZERO) == 0) {
+            return montoPrestamo;
+        }
+        BigDecimal factor = BigDecimal.ONE.add(
+            parametro.getPorcPrestamoSAvaluoReal()
+                .divide(new BigDecimal("100"), 6, RoundingMode.HALF_UP)
+        );
+        return montoPrestamo.multiply(factor).setScale(2, RoundingMode.HALF_UP);
+    }
+}

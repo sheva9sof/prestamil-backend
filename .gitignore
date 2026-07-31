@@ -40,3 +40,14 @@ out/
 
 # Maven build output
 target/
+/output/
+/.mvn/wrapper/
+
+# Environment secrets - never commit
+.env
+.env.local
+.env.*.local
+
+# Liquibase Maven Plugin credentials - never commit
+liquibase-*.properties
+!liquibase-*.properties.example

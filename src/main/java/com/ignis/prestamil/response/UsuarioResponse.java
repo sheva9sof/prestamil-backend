@@ -12,6 +12,7 @@ public class UsuarioResponse {
     private String nombre;
     private String apellidos;
     private boolean estatus;
+    private Integer idRol;
     private String rolNombre;
     private LocalDate fechaIni;
     private LocalDate fechaFin;

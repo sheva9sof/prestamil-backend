@@ -23,5 +23,29 @@ public class TipoPrenda {
     @OneToMany(mappedBy = "tipoPrenda", fetch = FetchType.LAZY, cascade = CascadeType.ALL, orphanRemoval = true)
     private List<CatSubtipoPrenda> subtiposPrenda = new ArrayList<>();
 
+    /**
+     * Igualdad basada en id (patrón recomendado para entidades JPA usadas en
+     * colecciones Set): necesario para que Hibernate pueda calcular el diff real
+     * de Plazo.tiposPrenda (Set) y no borre/reinserte toda la fila cuando el
+     * conjunto de tipos de prenda no cambió. hashCode constante evita que el
+     * elemento "se mueva de bucket" al pasar de transitorio a persistente.
+     */
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof TipoPrenda)) {
+            return false;
+        }
+        TipoPrenda other = (TipoPrenda) o;
+        return id != null && id.equals(other.id);
+    }
+
+    @Override
+    public int hashCode() {
+        return getClass().hashCode();
+    }
+
 }
 

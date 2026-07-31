@@ -8,14 +8,17 @@ import com.ignis.prestamil.model.Configuracion;
 import com.ignis.prestamil.model.Opcion;
 import com.ignis.prestamil.model.Rol;
 import com.ignis.prestamil.model.Usuario;
+import com.ignis.prestamil.repository.ParametrosSistemaRepository;
 import com.ignis.prestamil.repository.RolRepository;
 import com.ignis.prestamil.repository.UsuarioRepository;
 import com.ignis.prestamil.response.LoginResponse;
+import com.ignis.prestamil.response.MenuResponse;
 import com.ignis.prestamil.response.TurnoResponse;
 import com.ignis.prestamil.util.Constantes;
-import com.ignis.prestamil.util.Encryptor;
 
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,20 +30,23 @@ import java.util.*;
 @Transactional
 public class UsuarioService extends BaseService<Usuario, Integer, UsuarioRepository> {
 
-    private final Encryptor encryptor;
+    private final PasswordEncoder passwordEncoder;
     private final UsuarioMapper usuarioMapper;
     private final RolRepository rolRepository;
     private final TurnoService turnoService;
     private final ConfiguracionService configuracionService;
+    private final ParametrosSistemaRepository parametrosSistemaRepository;
 
-    public UsuarioService(UsuarioRepository repository, Encryptor encryptor, UsuarioMapper usuarioMapper, RolRepository rolRepository,
-                          TurnoService turnoService, ConfiguracionService configuracionService) {
+    public UsuarioService(UsuarioRepository repository, PasswordEncoder passwordEncoder, UsuarioMapper usuarioMapper, RolRepository rolRepository,
+                          TurnoService turnoService, ConfiguracionService configuracionService,
+                          ParametrosSistemaRepository parametrosSistemaRepository) {
         super(repository);
-        this.encryptor = encryptor;
+        this.passwordEncoder = passwordEncoder;
         this.usuarioMapper = usuarioMapper;
         this.rolRepository = rolRepository;
         this.turnoService = turnoService;
         this.configuracionService = configuracionService;
+        this.parametrosSistemaRepository = parametrosSistemaRepository;
     }
 
     @Override
@@ -114,19 +120,24 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
 
     @Override
     public void deleteById(Integer id) {
-        Usuario usuario = repository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado con id: " + id));
-        usuario.setEstatus(false);
-        repository.save(usuario);
+        if (!repository.existsById(id)) {
+            throw new ResourceNotFoundException("Usuario no encontrado con id: " + id);
+        }
+        // Eliminación física. El estatus se administra por separado desde la edición.
+        try {
+            repository.deleteById(id);
+            repository.flush();
+        } catch (DataIntegrityViolationException exception) {
+            throw new BadRequestException(
+                    "No se puede eliminar este usuario porque tiene turnos, contratos o movimientos relacionados.");
+        }
     }
 
     public LoginResponse login(LoginRequest loginRequest) {
         Usuario usuario = repository.findByNombreUsuario(loginRequest.getUsername())
             .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado"));
         
-        String passwordDesencriptada = encryptor.decrypt(usuario.getPassword());
-        
-        if (passwordDesencriptada == null || !passwordDesencriptada.equals(loginRequest.getPassword())) {
+        if (!passwordEncoder.matches(loginRequest.getPassword(), usuario.getPassword())) {
             throw new BadRequestException("Password incorrecta");
         }
         
@@ -144,6 +155,17 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
 
         // Mapear Usuario a LoginResponse usando el mapper, incluyendo las opciones y el token
         LoginResponse response = usuarioMapper.toLoginResponse(usuario, opciones);
+        response.setOpciones(construirMenuJerarquico(opciones));
+
+        int sessionTimeoutMinutes = parametrosSistemaRepository.findById(16)
+            .map(p -> p.getValorNumerico() != null ? p.getValorNumerico().intValue() : 30)
+            .orElse(30);
+        int warningMinutes = parametrosSistemaRepository.findById(17)
+            .map(p -> p.getValorNumerico() != null ? p.getValorNumerico().intValue() : 3)
+            .orElse(3);
+        response.setSessionTimeoutMinutes(sessionTimeoutMinutes);
+        response.setWarningMinutes(warningMinutes);
+
         return response;
     }
 
@@ -160,7 +182,40 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
         }
 
         // Reutilizamos el LoginResponse para devolver el perfil. El token será null, lo cual está bien.
-        return usuarioMapper.toLoginResponse(usuario, opciones);
+        LoginResponse response = usuarioMapper.toLoginResponse(usuario, opciones);
+        response.setOpciones(construirMenuJerarquico(opciones));
+        return response;
+    }
+
+    private List<MenuResponse> construirMenuJerarquico(List<Opcion> opciones) {
+        if (opciones == null || opciones.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        Map<Integer, MenuResponse> menuPorId = new LinkedHashMap<>();
+        for (Opcion opcion : opciones) {
+            if (opcion.getId() != null) {
+                menuPorId.put(opcion.getId(), usuarioMapper.toMenuResponse(opcion));
+            }
+        }
+
+        List<MenuResponse> menusRaiz = new ArrayList<>();
+        for (Opcion opcion : opciones) {
+            if (opcion.getId() == null) {
+                continue;
+            }
+
+            MenuResponse menuActual = menuPorId.get(opcion.getId());
+            Integer idPadre = opcion.getIdPadre();
+
+            if (idPadre != null && menuPorId.containsKey(idPadre) && !idPadre.equals(opcion.getId())) {
+                menuPorId.get(idPadre).getSubmenus().add(menuActual);
+            } else {
+                menusRaiz.add(menuActual);
+            }
+        }
+
+        return menusRaiz;
     }
 
     private List<Opcion> filtrarOpcionesPorTurno(List<Opcion> opcionesOriginales, Usuario usuario) {
@@ -212,50 +267,32 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
         return usuario.getRol().getOpciones();
     }
 
-    /**
-     * Encripta un password
-     * @param password Password en texto plano
-     * @return Password encriptado
-     */
     public String encryptPassword(String password) {
         if (password == null || password.isEmpty()) {
             return null;
         }
-        return encryptor.encrypt(password);
+        return passwordEncoder.encode(password);
     }
 
-    /**
-     * Cambia la contraseña de un usuario
-     * @param usuarioId ID del usuario
-     * @param passwordActual Contraseña actual en texto plano
-     * @param passwordNueva Nueva contraseña en texto plano
-     */
     public void cambiarPassword(Integer usuarioId, String passwordActual, String passwordNueva) {
         Usuario usuario = repository.findById(usuarioId)
             .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado"));
 
-        // Validar contraseña actual
-        String passwordDesencriptada = encryptor.decrypt(usuario.getPassword());
-        if (passwordDesencriptada == null || !passwordDesencriptada.equals(passwordActual)) {
+        if (!passwordEncoder.matches(passwordActual, usuario.getPassword())) {
             throw new BadRequestException("La contraseña actual es incorrecta");
         }
 
-        // Validar que la nueva contraseña sea diferente a la actual
-        if (passwordDesencriptada.equals(passwordNueva)) {
-            throw new BadRequestException("La nueva contraseña debe ser diferente a la contraseña actual");
-        }
-
-        // Validar que la nueva contraseña no esté vacía
         if (passwordNueva == null || passwordNueva.isEmpty()) {
             throw new BadRequestException("La nueva contraseña no puede estar vacía");
         }
 
-        // Encriptar y actualizar la nueva contraseña
-        String passwordNuevaEncriptada = encryptor.encrypt(passwordNueva);
-        usuario.setPassword(passwordNuevaEncriptada);
+        if (passwordEncoder.matches(passwordNueva, usuario.getPassword())) {
+            throw new BadRequestException("La nueva contraseña debe ser diferente a la contraseña actual");
+        }
+
+        usuario.setPassword(passwordEncoder.encode(passwordNueva));
         usuario.setCambiarPassword(false);
         usuario.setFechaCambioPass(java.time.LocalDate.now());
-        
         repository.save(usuario);
     }
 

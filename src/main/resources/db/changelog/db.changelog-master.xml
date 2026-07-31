@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        https://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <include file="db/changelog/changes/001-initial-schema.sql"/>
+    <include file="db/changelog/changes/002-initial-data.sql"/>
+    <include file="db/changelog/changes/003-session-params.sql"/>
+    <include file="db/changelog/changes/004-search-indexes.sql"/>
+    <include file="db/changelog/changes/005-drop-session-token-usuarios.sql"/>
+    <include file="db/changelog/changes/006-plazos-sucursal.sql"/>
+    <include file="db/changelog/changes/007-contratos.sql"/>
+    <include file="db/changelog/changes/008-menu-avaluos.sql"/>
+    <include file="db/changelog/changes/009-clientes-prueba.sql"/>
+    <include file="db/changelog/changes/010-plazo-parametro-incremento-avaluo.sql"/>
+    <include file="db/changelog/changes/011-oro-sancion-plata.sql"/>
+    <include file="db/changelog/changes/012-oro-tabla-prestamo-cocae.sql"/>
+    <include file="db/changelog/changes/013-drop-factores-hechura-precio-oro.sql"/>
+    <include file="db/changelog/changes/014-menu-configuracion-oro.sql"/>
+    <include file="db/changelog/changes/015-normalizar-hechura-legacy.sql"/>
+    <include file="db/changelog/changes/016-reparar-tabla-prestamo-oro.sql"/>
+    <include file="db/changelog/changes/017-restaurar-factores-hechura-precio-oro.sql"/>
+    <include file="db/changelog/changes/018-completar-kilatajes-plazos.sql"/>
+    <include file="db/changelog/changes/019-corregir-precio-prestamo-porcentaje.sql"/>
+    <include file="db/changelog/changes/020-restaurar-aumento-plazos.sql"/>
+    <include file="db/changelog/changes/021-eliminar-menu-parametros-prestamo.sql"/>
+
+</databaseChangeLog>

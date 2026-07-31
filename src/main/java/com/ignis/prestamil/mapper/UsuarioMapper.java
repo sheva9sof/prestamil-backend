@@ -13,12 +13,15 @@ import java.util.List;
 @Mapper(componentModel = "spring")
 public interface UsuarioMapper {
 
+    @Mapping(source = "usuario.id", target = "id")
     @Mapping(source = "usuario.nombreUsuario", target = "username")
     @Mapping(source = "usuario.rol.id", target = "idRol")
+    @Mapping(source = "usuario.rol.rol", target = "rolNombre")
     @Mapping(source = "opciones", target = "opciones")
     LoginResponse toLoginResponse(Usuario usuario, List<Opcion> opciones);
 
     @Mapping(source = "rol.rol", target = "rolNombre")
+    @Mapping(source = "rol.id", target = "idRol")
     UsuarioResponse toUsuarioResponse(Usuario usuario);
 
     @Mapping(source = "nombreIcono", target = "nombreIcono")

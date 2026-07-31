@@ -12,9 +12,9 @@ public class ClienteResponse {
     private String apellidoMaterno;
     private String telefono;
     private String curp;
+    private String nombreCompleto; // nombre + apellidoPaterno + apellidoMaterno
     private String rfc;
     private Boolean activo;
-    private Integer direccionId;
     private DireccionResponse direccion;
 }
 
