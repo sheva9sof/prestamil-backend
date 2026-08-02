@@ -93,6 +93,7 @@ El sistema debe permitir registrar y consultar clientes y contratos de empeño d
 - Documento de diseño existente: `.planning/codebase/AVALUOS.md` (fórmulas y decisiones de negocio previas — varias quedaron resueltas en la reunión con Jorge: libre avalúo solo a la baja, beneficiario obligatorio, sanción 2%/semana, reposición de contrato confirmada)
 - Bug conocido: discrepancia entre lo cobrado por reposición/reimpresión de contrato y lo reflejado en reportes de caja — corregir como parte de este milestone
 - CORS solo permite `http://localhost:4200`; el sistema corre en un solo servidor
+- **Reconciliación 2026-08-02:** se encontraron commits del 2026-07-26 hechos directamente por el usuario en ambos repos, fuera del flujo GSD, sin documentar hasta ahora. Incluyen groundwork real de Phase 6/7 (ver `ROADMAP.md`/`REQUIREMENTS.md`) y un cambio de `UsuarioService.deleteById` de soft-delete a hard-delete físico que **contradice la tabla de arquitectura de `CLAUDE.md`** ("Soft-delete estatus=false") — pendiente decidir si se revierte el código o se actualiza `CLAUDE.md`. Detalle completo en `STATE.md`.
 
 ## Constraints
 
@@ -130,4 +131,4 @@ Este documento evoluciona en cada transición de fase y milestone.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-26 after Phase 4.1 (Configuración del Oro — Admin UI) completion y quick task 260726-lin Tasks 1-4 (ORO-09, factor de hechura reinstaurado); Task 5 de verificación humana sigue pendiente*
+*Last updated: 2026-08-02 — reconciliado con commits directos del usuario del 2026-07-26 (fuera de GSD) en backend/frontend: groundwork de Phase 6/7, cambio de soft-delete a hard-delete en UsuarioService, nuevos endpoints de administración de plazos. Phase 4.1 (Configuración del Oro) completa desde 2026-07-26; quick task 260726-lin Tasks 1-4 completas, Task 5 de verificación humana sigue pendiente*

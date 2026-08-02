@@ -46,6 +46,8 @@ Requisitos del milestone anterior. Se conservan como registro histórico; ya no 
 
 #### Motor de Plata
 
+**Groundwork parcial fuera de roadmap (2026-07-03/2026-07-26, sin test, ver STATE.md):** `PartidaContrato.ley` ya existe como columna/DTO en backend (commit `7e5e4ec`) y en los modelos de frontend (commit `a796a8d`), pero **no hay ningún método de cálculo de avalúo de plata** (`calcularAvaluoPlata` o análogo) en `ContratoService` — es solo el dato, no la fórmula. Los 3 requisitos siguen sin implementar en sustancia.
+
 - [ ] **PLATA-01:** El sistema calcula el avalúo de piezas de plata a partir de la ley (925/720, pendiente verificar cifra exacta contra COCAE) y el precio del gramo de plata, en un método server-side análogo a `calcularAvaluoContrato` de oro
 - [ ] **PLATA-02:** El servidor recalcula el avalúo real de una partida PLATA en `ContratoService.buildPartida`, en vez de confiar en el valor enviado por el cliente (mismo cierre de brecha de confianza que oro)
 - [ ] **PLATA-03:** El préstamo máximo para piezas de plata respeta el límite calculado por el servidor (ajuste manual solo hacia abajo, nunca por encima), igual que alhajas de oro
@@ -58,9 +60,11 @@ Requisitos del milestone anterior. Se conservan como registro histórico; ya no 
 
 #### Sanción por Extemporaneidad (verificación)
 
+**Groundwork sustancial ya implementado fuera de roadmap (commit `7e5e4ec`, 2026-07-03), sin tests (ver STATE.md):** `MovimientoContratoController`/`MovimientoContratoService` existen completos (`refrendar`, `cobrarReposicion`, `getMovimientos`, 3 endpoints REST bajo `/api/movimientos`), con `calcularSemanasVencidas` y cálculo de `sancion` ya implementados y expuestos en `MovimientoResponse`. El frontend empezó a consumirlos el 2026-07-26 (`MovimientoService` nuevo). Falta: `MovimientoContratoServiceTest` (no existe ningún test) y la verificación de la regla de redondeo contra capturas reales de COCAE — por eso los 3 siguen marcados Pending pese al código ya funcionar.
+
 - [ ] **SANC-01:** La regla de redondeo de semanas vencidas (`calcularSemanasVencidas`) coincide con la que usa COCAE, verificado contra capturas de refrendos extemporáneos reales
 - [ ] **SANC-02:** El refrendo de un contrato vencido por múltiples periodos consecutivos (plazos cortos como Diario) extiende correctamente la fecha de vencimiento sin perder periodos vencidos intermedios
-- [ ] **SANC-03:** El monto de sanción calculado queda disponible en `MovimientoResponse` para su futura visualización en el contrato impreso
+- [ ] **SANC-03:** El monto de sanción calculado queda disponible en `MovimientoResponse` para su futura visualización en el contrato impreso — **implementado** (`MovimientoContratoService` calcula y setea `sancion`), falta solo verificación end-to-end y test
 
 ### v2 Requirements (Deferred)
 
@@ -94,15 +98,15 @@ Requisitos del milestone anterior. Se conservan como registro histórico; ya no 
 | ORO-07 | Phase 4.1 | Complete |
 | ORO-08 | Phase 4.1 | Superseded (por ORO-09, 2026-07-26) |
 | ORO-09 | quick 260726-lin | Complete |
-| PLATA-01 | Phase 6 | Pending |
+| PLATA-01 | Phase 6 | Pending (solo dato `ley`, sin fórmula) |
 | PLATA-02 | Phase 6 | Pending |
 | PLATA-03 | Phase 6 | Pending |
 | BENEF-01 | Phase 5 | Pending |
 | BENEF-02 | Phase 5 | Pending |
 | BENEF-03 | Phase 5 | Pending |
-| SANC-01 | Phase 7 | Pending |
-| SANC-02 | Phase 7 | Pending |
-| SANC-03 | Phase 7 | Pending |
+| SANC-01 | Phase 7 | Pending (código existe desde 2026-07-03, sin test ni verificación COCAE) |
+| SANC-02 | Phase 7 | Pending (código existe desde 2026-07-03, sin test ni verificación COCAE) |
+| SANC-03 | Phase 7 | Pending (implementado funcionalmente, falta test/verificación) |
 
 **Coverage:**
 - v1 requirements: 13 total
@@ -111,5 +115,5 @@ Requisitos del milestone anterior. Se conservan como registro histórico; ya no 
 
 ---
 *Requirements defined: 2026-05-14 (v1.0), 2026-07-02 (v1.1)*
-*Last updated: 2026-07-26 — ORO-05/06/07 completadas (Phase 4.1), ORO-08 superseded por ORO-09 (quick task 260726-lin, Tasks 1-4 completas, Task 5 de verificación humana pendiente)*
+*Last updated: 2026-08-02 — ORO-05/06/07 completadas (Phase 4.1), ORO-08 superseded por ORO-09 (quick task 260726-lin, Task 5 de verificación humana pendiente); reconciliado con commits directos del usuario del 2026-07-26 fuera de GSD — groundwork de Phase 6 (campo `ley`) y Phase 7 (`MovimientoContratoController`/`Service` completo, sin tests) documentado por primera vez*
 </content>

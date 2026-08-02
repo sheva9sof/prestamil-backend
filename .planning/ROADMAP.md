@@ -92,6 +92,7 @@ Plans:
 **Goal**: El avalúo y el préstamo máximo de piezas de plata se calculan en el servidor a partir de la ley y el precio del gramo, con el mismo control de riesgo que las piezas de oro
 **Depends on**: Phase 3 (independiente de Phase 4 — código y campos distintos: `ley925`/`ley725`/`precioGramoPlata` vs `PlazoHechuraAlhaja`)
 **Requirements**: PLATA-01, PLATA-02, PLATA-03
+**Nota (2026-08-02):** hay groundwork parcial fuera de este roadmap — `PartidaContrato.ley` existe en backend (commit `7e5e4ec`, 2026-07-03) y frontend (commit `a796a8d`, 2026-07-26), pero sin ningún método de cálculo de avalúo. Ver `STATE.md` para detalle.
 **Success Criteria** (what must be TRUE):
   1. El sistema calcula el avalúo de una pieza de plata a partir de su ley (925/720) y el precio vigente del gramo de plata, en un método server-side análogo a `calcularAvaluoContrato` de oro
   2. Al crear un contrato con una partida PLATA, el avalúo real que queda registrado es el que calcula el servidor en `ContratoService.buildPartida` — un valor enviado por el cliente no tiene efecto
@@ -102,6 +103,7 @@ Plans:
 **Goal**: La sanción de 2% semanal por refrendo extemporáneo se comporta de forma verificablemente idéntica a COCAE y su monto queda disponible para el contrato impreso
 **Depends on**: Phase 4 (la sanción es un porcentaje del monto de préstamo, que debe ser correcto primero)
 **Requirements**: SANC-01, SANC-02, SANC-03
+**Nota (2026-08-02):** el grueso de la implementación ya existe fuera de este roadmap — `MovimientoContratoController`/`Service` completo (`refrendar`, `cobrarReposicion`, `getMovimientos`) desde el commit `7e5e4ec` (2026-07-03), consumido por el frontend desde el commit `a796a8d` (2026-07-26). Falta: tests (`MovimientoContratoServiceTest` no existe) y verificación de la regla de redondeo contra COCAE. Ver `STATE.md` para detalle.
 **Success Criteria** (what must be TRUE):
   1. Para un conjunto de refrendos extemporáneos reales de COCAE, `calcularSemanasVencidas` produce el mismo número de semanas vencidas que el sistema legacy
   2. Al refrendar un contrato vencido por múltiples periodos consecutivos (plazo Diario u otro plazo corto), la nueva fecha de vencimiento se extiende correctamente sin saltarse ni duplicar periodos vencidos intermedios
@@ -121,8 +123,8 @@ Phases execute in numeric order: 1, 2, 3, 4, 5, 6, 7
 | 4. Motor de Oro | 3/3 | Done | 2026-07-03 |
 | 4.1. Configuración del Oro — Admin UI (INSERTED) | 3/3 | Done | 2026-07-26 |
 | 5. Beneficiario Obligatorio | 0/? | Not started | - |
-| 6. Motor de Plata | 0/? | Not started | - |
-| 7. Sanción — Verificación | 0/? | Not started | - |
+| 6. Motor de Plata | 0/? | Not started (groundwork parcial sin roadmap, ver nota) | - |
+| 7. Sanción — Verificación | 0/? | Not started (implementación sustancial sin tests, ver nota) | - |
 
 **Fuera del roadmap:** quick task `260726-lin` (reinstaurar factor de ajuste por hechura, ORO-09) — Tasks 1-4 completas y commiteadas, Task 5 (verificación humana, checkpoint bloqueante) pendiente. Ver `.planning/STATE.md` y `.planning/quick/260726-lin-reinstaurar-factor-de-ajuste-por-hechura/260726-lin-SUMMARY.md`.
 </content>
