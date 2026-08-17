@@ -22,7 +22,7 @@ public class ClienteService extends BaseService<Cliente, Integer, ClienteReposit
     }
 
     /**
-     * Busca clientes por nombre completo o teléfono
+     * Busca clientes activos por nombre completo, teléfono, CURP o RFC.
      * @param searchTerm Término de búsqueda
      * @return Lista de clientes que coinciden con la búsqueda
      */

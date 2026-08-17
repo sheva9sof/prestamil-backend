@@ -16,13 +16,16 @@ public interface ClienteRepository extends BaseRepository<Cliente, Integer> {
     boolean existsByTelefono(String telefono);
 
     /**
-     * Busca clientes por nombre completo (nombre, apellido_paterno, apellido_materno) o teléfono
-     * @param searchTerm Término de búsqueda que se busca en los campos de nombre completo o teléfono
-     * @return Lista de clientes que coinciden con el término de búsqueda
+     * Busca clientes activos por nombre completo, teléfono, CURP o RFC.
+     * @param searchTerm Término de búsqueda
+     * @return Lista de clientes activos que coinciden con el término de búsqueda
      */
-    @Query("SELECT c FROM Cliente c WHERE " +
+    @Query("SELECT c FROM Cliente c WHERE c.activo = true AND (" +
            "LOWER(CONCAT(c.nombre, ' ', c.apellidoPaterno, ' ', c.apellidoMaterno)) LIKE LOWER(CONCAT('%', :searchTerm, '%')) OR " +
-           "LOWER(c.telefono) LIKE LOWER(CONCAT('%', :searchTerm, '%'))")
+           "LOWER(c.telefono) LIKE LOWER(CONCAT('%', :searchTerm, '%')) OR " +
+           "LOWER(COALESCE(c.curp, '')) LIKE LOWER(CONCAT('%', :searchTerm, '%')) OR " +
+           "LOWER(COALESCE(c.rfc, '')) LIKE LOWER(CONCAT('%', :searchTerm, '%'))) " +
+           "ORDER BY c.nombre, c.apellidoPaterno, c.apellidoMaterno")
     List<Cliente> searchByNombreCompletoOrTelefono(@Param("searchTerm") String searchTerm);
 
 }
