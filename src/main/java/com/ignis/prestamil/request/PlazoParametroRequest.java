@@ -18,6 +18,8 @@ public class PlazoParametroRequest {
     private BigDecimal porcPrestamoSAvaluo;
     private Boolean usaAvaluoReal;
     private BigDecimal porcIncrementoAvaluo;
+    // Campo canónico del incremento de avalúo (gate: usaAvaluoReal)
+    private BigDecimal porcPrestamoSAvaluoReal;
     private Boolean cobrarReposicionContrato;
     private Boolean reposicionEsPorcentaje;
     private BigDecimal porcReposicion;
