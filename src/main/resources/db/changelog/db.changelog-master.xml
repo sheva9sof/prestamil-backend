@@ -26,5 +26,6 @@
     <include file="db/changelog/changes/019-corregir-precio-prestamo-porcentaje.sql"/>
     <include file="db/changelog/changes/020-restaurar-aumento-plazos.sql"/>
     <include file="db/changelog/changes/021-eliminar-menu-parametros-prestamo.sql"/>
+    <include file="db/changelog/changes/022-sucursal-horario-atencion.sql"/>
 
 </databaseChangeLog>

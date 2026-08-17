@@ -36,5 +36,6 @@ public class SucursalResponse {
     private Boolean viernes;
     private Boolean sabado;
     private Boolean domingo;
+    private String horarioAtencion;
 }
 

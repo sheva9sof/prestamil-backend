@@ -42,6 +42,7 @@ public class SucursalMapper {
         response.setViernes(sucursal.getViernes());
         response.setSabado(sucursal.getSabado());
         response.setDomingo(sucursal.getDomingo());
+        response.setHorarioAtencion(sucursal.getHorarioAtencion());
 
         if (sucursal.getEmpresa() != null) {
             response.setNombreEmpresa(sucursal.getEmpresa().getNombre());
@@ -84,6 +85,7 @@ public class SucursalMapper {
         sucursal.setViernes(request.getViernes());
         sucursal.setSabado(request.getSabado());
         sucursal.setDomingo(request.getDomingo());
+        sucursal.setHorarioAtencion(request.getHorarioAtencion());
         return sucursal;
     }
 

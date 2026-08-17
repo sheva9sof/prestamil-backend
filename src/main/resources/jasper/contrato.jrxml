@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Created with Jaspersoft Studio version 6.20.6.final using JasperReports Library version 6.20.6-5c96b6aa8a39ac1dc6b6bea4b81168e16dd39231  -->
 <jasperReport xmlns="http://jasperreports.sourceforge.net/jasperreports" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://jasperreports.sourceforge.net/jasperreports http://jasperreports.sourceforge.net/xsd/jasperreport.xsd" name="contrato" pageWidth="607" pageHeight="1003" columnWidth="607" leftMargin="0" rightMargin="0" topMargin="0" bottomMargin="0" uuid="37caac55-8636-41b7-962e-5f993225c8f5">
+	<property name="net.sf.jasperreports.components.barcode4j.image.producer" value="net.sf.jasperreports.components.barcode4j.BarcodeRasterizedImageProducer"/>
 	<property name="com.jaspersoft.studio.unit." value="pixel"/>
 	<property name="com.jaspersoft.studio.unit.pageHeight" value="pixel"/>
 	<property name="com.jaspersoft.studio.unit.pageWidth" value="pixel"/>
@@ -262,9 +263,9 @@
 			</textField>
 			<componentElement>
 				<reportElement x="490" y="20" width="100" height="45" uuid="8e93e5dd-8aad-490b-b06a-330ad9a35c7f"/>
-				<jr:barbecue xmlns:jr="http://jasperreports.sourceforge.net/jasperreports/components" xsi:schemaLocation="http://jasperreports.sourceforge.net/jasperreports/components http://jasperreports.sourceforge.net/xsd/components.xsd" type="Code128" drawText="true" checksumRequired="false">
+				<jr:Code128 xmlns:jr="http://jasperreports.sourceforge.net/jasperreports/components" xsi:schemaLocation="http://jasperreports.sourceforge.net/jasperreports/components http://jasperreports.sourceforge.net/xsd/components.xsd" textPosition="bottom" moduleWidth="0.8">
 					<jr:codeExpression><![CDATA[$P{P_NUMERO_CONTRATO}]]></jr:codeExpression>
-				</jr:barbecue>
+				</jr:Code128>
 			</componentElement>
 			<textField>
 				<reportElement x="400" y="813" width="190" height="15" uuid="399b397c-5a97-4883-89aa-d25a8b3a761d">
@@ -1114,7 +1115,7 @@
 								<textElement>
 									<font fontName="Arial" size="8"/>
 								</textElement>
-								<textFieldExpression><![CDATA[$F{intereses}]]></textFieldExpression>
+								<textFieldExpression><![CDATA[$F{almacenaje}]]></textFieldExpression>
 							</textField>
 						</jr:detailCell>
 					</jr:column>
