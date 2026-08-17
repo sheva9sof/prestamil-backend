@@ -4,8 +4,11 @@ import com.ignis.prestamil.response.ContratoResponse;
 import com.ignis.prestamil.response.VencimientoResponse;
 import com.ignis.prestamil.request.ContratoRequest;
 import com.ignis.prestamil.service.ContratoService;
+import com.ignis.prestamil.service.ContratoPdfService;
 import jakarta.validation.Valid;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -17,9 +20,11 @@ import java.util.List;
 public class ContratoController {
 
     private final ContratoService contratoService;
+    private final ContratoPdfService contratoPdfService;
 
-    public ContratoController(ContratoService contratoService) {
+    public ContratoController(ContratoService contratoService, ContratoPdfService contratoPdfService) {
         this.contratoService = contratoService;
+        this.contratoPdfService = contratoPdfService;
     }
 
     /**
@@ -77,5 +82,18 @@ public class ContratoController {
     @GetMapping("/{id}/amortizacion")
     public ResponseEntity<List<VencimientoResponse>> amortizacion(@PathVariable Long id) {
         return ResponseEntity.ok(contratoService.calcularAmortizacion(id));
+    }
+
+    /**
+     * Genera el PDF del contrato de mutuo (para visualización/impresión en el sistema).
+     * GET /api/contratos/{id}/pdf
+     */
+    @GetMapping("/{id}/pdf")
+    public ResponseEntity<byte[]> pdf(@PathVariable Long id) {
+        byte[] pdf = contratoPdfService.generarPdf(id);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_PDF);
+        headers.add(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=contrato-" + id + ".pdf");
+        return new ResponseEntity<>(pdf, headers, HttpStatus.OK);
     }
 }

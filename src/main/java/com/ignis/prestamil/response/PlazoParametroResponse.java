@@ -22,6 +22,8 @@ public class PlazoParametroResponse {
     private BigDecimal porcPrestamoSAvaluo;
     private Boolean usaAvaluoReal;
     private BigDecimal porcIncrementoAvaluo;
+    // Campo canónico del incremento de avalúo (avaluoContrato = prestamo × (1 + %/100) si usaAvaluoReal)
+    private BigDecimal porcPrestamoSAvaluoReal;
     private Boolean cobrarReposicionContrato;
     private Boolean reposicionEsPorcentaje;
     private BigDecimal porcReposicion;

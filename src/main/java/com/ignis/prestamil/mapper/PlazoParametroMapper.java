@@ -43,6 +43,7 @@ public class PlazoParametroMapper {
         response.setPorcPrestamoSAvaluo(plazoParametro.getPorcPrestamoSAvaluo());
         response.setUsaAvaluoReal(plazoParametro.getUsaAvaluoReal());
         response.setPorcIncrementoAvaluo(plazoParametro.getPorcIncrementoAvaluo());
+        response.setPorcPrestamoSAvaluoReal(plazoParametro.getPorcPrestamoSAvaluoReal());
         response.setCobrarReposicionContrato(plazoParametro.getCobrarReposicionContrato());
         response.setReposicionEsPorcentaje(plazoParametro.getReposicionEsPorcentaje());
         response.setPorcReposicion(plazoParametro.getPorcReposicion());
@@ -80,6 +81,7 @@ public class PlazoParametroMapper {
         if (request.getPorcPrestamoSAvaluo() != null) entity.setPorcPrestamoSAvaluo(request.getPorcPrestamoSAvaluo());
         if (request.getUsaAvaluoReal() != null) entity.setUsaAvaluoReal(request.getUsaAvaluoReal());
         if (request.getPorcIncrementoAvaluo() != null) entity.setPorcIncrementoAvaluo(request.getPorcIncrementoAvaluo());
+        if (request.getPorcPrestamoSAvaluoReal() != null) entity.setPorcPrestamoSAvaluoReal(request.getPorcPrestamoSAvaluoReal());
         if (request.getCobrarReposicionContrato() != null) entity.setCobrarReposicionContrato(request.getCobrarReposicionContrato());
         if (request.getReposicionEsPorcentaje() != null) entity.setReposicionEsPorcentaje(request.getReposicionEsPorcentaje());
         if (request.getPorcReposicion() != null) entity.setPorcReposicion(request.getPorcReposicion());
@@ -113,6 +115,7 @@ public class PlazoParametroMapper {
         plazoParametro.setPorcPrestamoSAvaluo(request.getPorcPrestamoSAvaluo() != null ? request.getPorcPrestamoSAvaluo() : BigDecimal.ZERO);
         plazoParametro.setUsaAvaluoReal(request.getUsaAvaluoReal() != null ? request.getUsaAvaluoReal() : false);
         plazoParametro.setPorcIncrementoAvaluo(request.getPorcIncrementoAvaluo() != null ? request.getPorcIncrementoAvaluo() : new BigDecimal("50.0000"));
+        plazoParametro.setPorcPrestamoSAvaluoReal(request.getPorcPrestamoSAvaluoReal() != null ? request.getPorcPrestamoSAvaluoReal() : BigDecimal.ZERO);
         plazoParametro.setCobrarReposicionContrato(request.getCobrarReposicionContrato() != null ? request.getCobrarReposicionContrato() : false);
         plazoParametro.setReposicionEsPorcentaje(request.getReposicionEsPorcentaje() != null ? request.getReposicionEsPorcentaje() : false);
         plazoParametro.setPorcReposicion(request.getPorcReposicion() != null ? request.getPorcReposicion() : BigDecimal.ZERO);

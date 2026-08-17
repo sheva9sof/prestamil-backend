@@ -36,6 +36,15 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
     private final PlazoHechuraAlhajaRepository plazoHechuraAlhajaRepository;
 
     private static final List<Integer> KILATAJES_COCAE = List.of(6, 8, 10, 12, 14, 18, 21, 24);
+    private static final BigDecimal LEY_925 = new BigDecimal("925");
+    // Ley de plata baja: COCAE la maneja como 720 (fineness estándar 0.720). La columna de precio
+    // sigue llamándose ley_725 por compatibilidad; almacena el precio por gramo de esta ley.
+    private static final BigDecimal LEY_720 = new BigDecimal("720");
+    // IVA sobre el interés total. COCAE aplica 16% y lo TRUNCA a 2 decimales (verificado con capturas).
+    private static final BigDecimal IVA_PORCENTAJE = new BigDecimal("16");
+    private static final String MSG_PLATA_SIN_CONFIG =
+            "No hay configuración de plazo para plata (plazo/tipo de prenda/sucursal); "
+            + "configure el precio por gramo en Plazos y Periodos";
 
     public ContratoService(ContratoRepository repository,
                            ClienteRepository clienteRepository,
@@ -221,14 +230,22 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
                 .findByPlazoIdAndTipoPrendaIdAndSucursalId(plazoId, tipoPrenda.getId(), sucursalId)
                 .orElse(null);
 
-        // Avalúo real: para ALHAJA lo calcula el servidor a partir de PlazoHechuraAlhaja (D-07).
-        // Para otros tipos (Varios/electrónicos, avalúo libre del valuador) se conserva el valor del cliente.
+        // Avalúo real: para ALHAJA lo calcula el servidor a partir de PlazoHechuraAlhaja (D-07 de Phase 4);
+        // para PLATAS lo calcula el servidor a partir de ley925/ley725 del PlazoParametro (D-05/D-06 de Phase 6).
+        // Para el resto (Varios/electrónicos, avalúo libre del valuador) se conserva el valor del cliente.
         BigDecimal avaluoReal = esAlhaja(tipoPrenda)
                 ? calcularAvaluoRealAlhaja(pr, plazoId, sucursalId)
-                : (pr.getAvaluoReal() != null ? pr.getAvaluoReal() : BigDecimal.ZERO);
+                : esPlata(tipoPrenda)
+                    ? calcularAvaluoRealPlata(pr, parametro)
+                    : (pr.getAvaluoReal() != null ? pr.getAvaluoReal() : BigDecimal.ZERO);
 
-        // Préstamo máximo autorizado para esta partida, a partir del avalúo YA recalculado por el servidor
-        BigDecimal prestamoMaximo = calcularPrestamoMaximo(avaluoReal, parametro);
+        // Préstamo máximo autorizado para esta partida, a partir del avalúo YA recalculado por el servidor.
+        // PLATA: el precio por gramo YA es el precio de préstamo (COCAE: "Calcular sobre Préstamo"),
+        // así que el techo es peso × precio (= avaluoReal), SIN aplicar % Préstamo s/Avalúo (ese
+        // recorte no aplica a plata; el precio por gramo ya incorpora el préstamo). Alinea con COCAE.
+        BigDecimal prestamoMaximo = esPlata(tipoPrenda)
+                ? avaluoReal
+                : calcularPrestamoMaximo(avaluoReal, parametro);
 
         // El préstamo solicitado NUNCA puede superar el máximo (solo ajuste hacia abajo)
         if (pr.getMontoPrestamo() == null || pr.getMontoPrestamo().compareTo(BigDecimal.ZERO) <= 0) {
@@ -263,7 +280,11 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
         partida.setKilataje(pr.getKilataje());
         partida.setLey(pr.getLey());
         partida.setHechura(pr.getHechura());
-        partida.setPrecioXGramo(pr.getPrecioXGramo());
+        // Para PLATAS el precio por gramo también lo fija el servidor (mismo espíritu que ignorar
+        // pr.getAvaluoReal()). resolverPrecioGramoLey ya validó la ley al calcular avaluoReal arriba.
+        partida.setPrecioXGramo(esPlata(tipoPrenda)
+                ? resolverPrecioGramoLey(pr.getLey(), parametro)
+                : pr.getPrecioXGramo());
         partida.setAvaluoReal(avaluoReal);   // valor calculado por el servidor, NO pr.getAvaluoReal()
         partida.setAvaluoContrato(avaluoContrato);
         partida.setMontoPrestamo(pr.getMontoPrestamo());
@@ -336,6 +357,81 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
     }
 
     /**
+     * Determina si un tipo de prenda corresponde a PLATA, comparando por texto
+     * en vez del id hardcodeado, igual que esAlhaja().
+     * El valor real sembrado en tipo_prenda es "PLATAS" en PLURAL (id=4, D-04).
+     *
+     * @param tipoPrenda tipo de prenda a evaluar
+     * @return true si tipoPrenda.getTipo() es "PLATAS" (case-insensitive)
+     */
+    private boolean esPlata(TipoPrenda tipoPrenda) {
+        return tipoPrenda != null && "PLATAS".equalsIgnoreCase(tipoPrenda.getTipo());
+    }
+
+    /**
+     * Resuelve el precio por gramo configurado en el plazo para la ley solicitada.
+     * Fuente de verdad server-side para plata: nunca se usa pr.getPrecioXGramo().
+     *
+     * @param ley       ley de la pieza (solo se soportan 925 y 720, D-01/D-03)
+     * @param parametro parámetros del plazo/tipoPrenda/sucursal ya resueltos en buildPartida
+     * @return precio por gramo configurado para esa ley (siempre > 0)
+     * @throws BadRequestException si falta parametro, falta la ley, la ley no es 925/720,
+     *                             o el precio de esa ley no está configurado (null o <= 0)
+     */
+    private BigDecimal resolverPrecioGramoLey(BigDecimal ley, PlazoParametro parametro) {
+        if (parametro == null) {
+            throw new BadRequestException(MSG_PLATA_SIN_CONFIG);
+        }
+        if (ley == null) {
+            throw new BadRequestException("Ley es requerida para partidas de tipo PLATA");
+        }
+        BigDecimal precioGramo;
+        if (ley.compareTo(LEY_925) == 0) {
+            precioGramo = parametro.getLey925();
+        } else if (ley.compareTo(LEY_720) == 0) {
+            // Columna ley_725 (nombre legacy) — guarda el precio por gramo de la ley baja (720)
+            precioGramo = parametro.getLey725();
+        } else {
+            throw new BadRequestException("Ley no soportada: " + ley);
+        }
+        if (precioGramo == null || precioGramo.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BadRequestException("Precio por gramo no configurado para ley " + ley);
+        }
+        return precioGramo;
+    }
+
+    /**
+     * Recalcula el avalúo real de una partida PLATA a partir del precio por gramo
+     * configurado para su ley (925 o 720) en el PlazoParametro ya resuelto para este
+     * plazo/tipoPrenda/sucursal, ignorando el avaluoReal que envía el cliente.
+     * Cierra la brecha de confianza servidor/cliente para plata (PLATA-02), mismo
+     * espíritu que calcularAvaluoRealAlhaja para oro.
+     *
+     * Fórmula (D-01, confirmada con Jorge 2026-08-06):
+     *     avaluo = pesoGramos x precioGramoDeEsaLey
+     * No hay ninguna división por 1000 ni derivación desde precio de onza: ley925/ley725
+     * ya son precios finales por gramo capturados manualmente en Plazos y Periodos.
+     *
+     * @param pr        datos de la partida solicitada (requiere ley y pesoGramos)
+     * @param parametro parámetros del plazo ya resueltos en buildPartida (puede ser null)
+     * @return avalúo real calculado por el servidor, escala 2 (HALF_UP)
+     * @throws BadRequestException si falta parametro, peso <= 0, falta la ley,
+     *                             la ley no es 925/720, o el precio de esa ley no está configurado
+     */
+    private BigDecimal calcularAvaluoRealPlata(PartidaContratoRequest pr, PlazoParametro parametro) {
+        if (parametro == null) {
+            throw new BadRequestException(MSG_PLATA_SIN_CONFIG);
+        }
+        if (pr.getPesoGramos() == null || pr.getPesoGramos().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BadRequestException("Peso en gramos debe ser mayor que cero para partidas PLATA");
+        }
+        BigDecimal precioGramo = resolverPrecioGramoLey(pr.getLey(), parametro);
+        return precioGramo
+                .multiply(pr.getPesoGramos())
+                .setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /**
      * Calcula el préstamo máximo autorizado para una partida según el tipo de prenda:
      *   - El tope base es el avalúo YA recalculado por el servidor (avaluoReal).
      *   - Si el parámetro define un % de préstamo sobre avalúo (porcPrestamoSAvaluo > 0),
@@ -378,19 +474,48 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
                     plazo.getId(), contrato.getPartidas().get(0).getTipoPrenda().getId(),
                     contrato.getSucursalId()).orElse(null);
         }
-        BigDecimal porcInteres = parametro != null && parametro.getPorcInteresTotal() != null
-                ? parametro.getPorcInteresTotal() : BigDecimal.ZERO;
-        BigDecimal interesPeriodo = contrato.getMontoPrestamo()
-                .multiply(porcInteres).divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+        BigDecimal prestamo = contrato.getMontoPrestamo();
+        BigDecimal cien = new BigDecimal("100");
+        BigDecimal porcInteres = parametro != null && parametro.getPorcInteres() != null
+                ? parametro.getPorcInteres() : BigDecimal.ZERO;
+        BigDecimal porcAlmacen = parametro != null && parametro.getPorcAlmacen() != null
+                ? parametro.getPorcAlmacen() : BigDecimal.ZERO;
+        BigDecimal porcGastos = parametro != null && parametro.getPorcGastosAdmin() != null
+                ? parametro.getPorcGastosAdmin() : BigDecimal.ZERO;
+        // Total interés = interés + almacén + gastos admin. COCAE lo muestra sumado; el campo
+        // porc_interes_total es redundante y puede quedar en 0, así que lo DERIVAMOS de los componentes.
+        BigDecimal porcTotal = porcInteres.add(porcAlmacen).add(porcGastos);
+
+        // Montos base por periodo (sin redondear, escala 6)
+        BigDecimal interesPer  = prestamo.multiply(porcInteres).divide(cien, 6, RoundingMode.HALF_UP);
+        BigDecimal almacenPer  = prestamo.multiply(porcAlmacen).divide(cien, 6, RoundingMode.HALF_UP);
+        BigDecimal gastosPer   = prestamo.multiply(porcGastos).divide(cien, 6, RoundingMode.HALF_UP);
+        BigDecimal totalIntPer = prestamo.multiply(porcTotal).divide(cien, 6, RoundingMode.HALF_UP);
 
         List<com.ignis.prestamil.response.VencimientoResponse> filas = new ArrayList<>();
         LocalDate base = contrato.getFechaApertura().toLocalDate();
         for (int n = 1; n <= plazo.getNumeroPeriodos(); n++) {
-            com.ignis.prestamil.response.VencimientoResponse v = new com.ignis.prestamil.response.VencimientoResponse();
+            BigDecimal factor = new BigDecimal(n);
+            BigDecimal interes  = interesPer.multiply(factor).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal almacen  = almacenPer.multiply(factor).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal gastos   = gastosPer.multiply(factor).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal totalInt = totalIntPer.multiply(factor).setScale(2, RoundingMode.HALF_UP);
+            // IVA: COCAE lo TRUNCA a 2 decimales (p.ej. 22.05 x 16% = 3.528 -> 3.52)
+            BigDecimal iva = totalIntPer.multiply(factor).multiply(IVA_PORCENTAJE)
+                    .divide(cien, 2, RoundingMode.DOWN);
+            BigDecimal desempeno = prestamo.add(totalInt).add(iva).setScale(2, RoundingMode.HALF_UP);
+
+            com.ignis.prestamil.response.VencimientoResponse v =
+                    new com.ignis.prestamil.response.VencimientoResponse();
             v.setPeriodo(n);
             v.setFecha(base.plusDays((long) plazo.getDiasPorPeriodo() * n));
-            v.setInteres(interesPeriodo);
-            v.setTotal(contrato.getMontoPrestamo().add(interesPeriodo.multiply(new BigDecimal(n))));
+            v.setInteres(interes);
+            v.setAlmacen(almacen);
+            v.setGastosAdmin(gastos);
+            v.setTotalInteres(totalInt);
+            v.setIva(iva);
+            v.setDesempeno(desempeno);
+            v.setTotal(desempeno);
             filas.add(v);
         }
         return filas;

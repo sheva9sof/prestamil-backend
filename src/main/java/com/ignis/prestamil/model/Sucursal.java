@@ -90,5 +90,8 @@ public class Sucursal {
     @Column(name = "domingo", columnDefinition = "SMALLINT")
     private Boolean domingo;
 
+    @Column(name = "horario_atencion", length = 200)
+    private String horarioAtencion;
+
 }
 

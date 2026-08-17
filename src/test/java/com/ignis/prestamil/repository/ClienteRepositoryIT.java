@@ -48,13 +48,20 @@ class ClienteRepositoryIT {
     // -----------------------------------------------------------------------
 
     private Cliente persistCliente(String nombre, String apPat, String apMat, String tel) {
+        return persistCliente(nombre, apPat, apMat, tel, null, null, true);
+    }
+
+    private Cliente persistCliente(String nombre, String apPat, String apMat, String tel,
+                                    String curp, String rfc, boolean activo) {
         Direccion direccion = persistMinimalDireccion();
         Cliente c = new Cliente();
         c.setNombre(nombre);
         c.setApellidoPaterno(apPat);
         c.setApellidoMaterno(apMat);
         c.setTelefono(tel);
-        c.setActivo(true);
+        c.setCurp(curp);
+        c.setRfc(rfc);
+        c.setActivo(activo);
         c.setDireccion(direccion);
         em.persist(c);
         em.flush();
@@ -103,6 +110,38 @@ class ClienteRepositoryIT {
         // Then
         assertThat(results).hasSize(1);
         assertThat(results.get(0).getTelefono()).startsWith("5512");
+    }
+
+    @Test
+    void search_findsByCurp() {
+        persistCliente("Laura", "Mendez", "Soto", "5512345683",
+                "MESL900101MDFNTR01", "MESL900101AB1", true);
+
+        List<Cliente> results = clienteRepository.searchByNombreCompletoOrTelefono("mdfntr01");
+
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).getCurp()).isEqualTo("MESL900101MDFNTR01");
+    }
+
+    @Test
+    void search_findsByRfc() {
+        persistCliente("Luis", "Torres", "Diaz", "5512345684",
+                "TODL910202HDFRZS02", "TODL910202CD2", true);
+
+        List<Cliente> results = clienteRepository.searchByNombreCompletoOrTelefono("cd2");
+
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).getRfc()).isEqualTo("TODL910202CD2");
+    }
+
+    @Test
+    void search_excludesInactiveClients() {
+        persistCliente("Cliente", "Inactivo", "Prueba", "5512345685",
+                null, null, false);
+
+        List<Cliente> results = clienteRepository.searchByNombreCompletoOrTelefono("inactivo");
+
+        assertThat(results).isEmpty();
     }
 
     @Test
