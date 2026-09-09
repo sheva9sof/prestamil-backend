@@ -6,6 +6,7 @@ import com.ignis.prestamil.model.CatValorPrenda;
 import com.ignis.prestamil.model.TipoPrenda;
 import com.ignis.prestamil.repository.CatSubtipoPrendaRepository;
 import com.ignis.prestamil.repository.CatValorPrendaRepository;
+import com.ignis.prestamil.repository.PartidaContratoRepository;
 import com.ignis.prestamil.request.CatValorPrendaRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,11 +32,14 @@ class CatValorPrendaServiceTest {
     @Mock
     CatSubtipoPrendaRepository subtipoRepository;
 
+    @Mock
+    PartidaContratoRepository partidaContratoRepository;
+
     CatValorPrendaService service;
 
     @BeforeEach
     void setUp() {
-        service = new CatValorPrendaService(repository, subtipoRepository);
+        service = new CatValorPrendaService(repository, subtipoRepository, partidaContratoRepository);
     }
 
     @Test
@@ -104,6 +108,33 @@ class CatValorPrendaServiceTest {
         assertThat(updated.getKilataje()).isEqualTo(14);
         assertThat(updated.getContienePiedad()).isTrue();
         assertThat(updated.getSubtipoPrenda()).isSameAs(subtipo);
+    }
+
+    @Test
+    void deleteValor_borraFisicamenteCuandoNoEstaUsadaEnContratos() {
+        CatValorPrenda valor = new CatValorPrenda();
+        valor.setIdValorAtributo(30);
+
+        when(repository.findById(30)).thenReturn(Optional.of(valor));
+        when(partidaContratoRepository.countByValorPrendaIdValorAtributo(30)).thenReturn(0L);
+
+        service.deleteValor(30);
+
+        verify(repository).delete(valor);
+    }
+
+    @Test
+    void deleteValor_rechazaCuandoLaPrendaYaSeUsoEnUnContrato() {
+        CatValorPrenda valor = new CatValorPrenda();
+        valor.setIdValorAtributo(31);
+
+        when(repository.findById(31)).thenReturn(Optional.of(valor));
+        when(partidaContratoRepository.countByValorPrendaIdValorAtributo(31)).thenReturn(3L);
+
+        BadRequestException ex = assertThrows(BadRequestException.class, () -> service.deleteValor(31));
+
+        assertThat(ex.getMessage()).contains("3 partidas de contrato");
+        verify(repository, never()).delete(any(CatValorPrenda.class));
     }
 
     private CatValorPrendaRequest buildRequest(int tipoId, int atributoId) {

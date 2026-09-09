@@ -114,5 +114,16 @@ public class PrendaController {
         return ResponseEntity.ok(prendaMapper.toCatValorPrendaResponse(updated));
     }
 
+    /**
+     * Elimina físicamente un valor del catálogo de prendas.
+     * Rechaza con 400 si el valor ya fue usado en alguna partida de contrato.
+     * DELETE /api/prendas/valores/{idValorAtributo}
+     */
+    @DeleteMapping("/valores/{idValorAtributo}")
+    public ResponseEntity<Void> deleteValorPrenda(@PathVariable Integer idValorAtributo) {
+        catValorPrendaService.deleteValor(idValorAtributo);
+        return ResponseEntity.noContent().build();
+    }
+
 }
 

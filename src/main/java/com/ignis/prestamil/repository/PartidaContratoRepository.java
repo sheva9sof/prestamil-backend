@@ -9,4 +9,7 @@ import java.util.List;
 public interface PartidaContratoRepository extends BaseRepository<PartidaContrato, Long> {
 
     List<PartidaContrato> findByContratoIdOrderByNumPartidaAsc(Long contratoId);
+
+    /** Cuenta las partidas que referencian un valor del catálogo, para impedir su borrado físico. */
+    long countByValorPrendaIdValorAtributo(Integer idValorAtributo);
 }

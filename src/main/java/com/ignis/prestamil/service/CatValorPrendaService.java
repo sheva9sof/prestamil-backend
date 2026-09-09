@@ -5,6 +5,7 @@ import com.ignis.prestamil.model.CatSubtipoPrenda;
 import com.ignis.prestamil.model.CatValorPrenda;
 import com.ignis.prestamil.repository.CatSubtipoPrendaRepository;
 import com.ignis.prestamil.repository.CatValorPrendaRepository;
+import com.ignis.prestamil.repository.PartidaContratoRepository;
 import com.ignis.prestamil.request.CatValorPrendaRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,11 +17,14 @@ import java.util.List;
 public class CatValorPrendaService extends BaseService<CatValorPrenda, Integer, CatValorPrendaRepository> {
 
     private final CatSubtipoPrendaRepository catSubtipoPrendaRepository;
+    private final PartidaContratoRepository partidaContratoRepository;
 
     public CatValorPrendaService(CatValorPrendaRepository repository,
-                                 CatSubtipoPrendaRepository catSubtipoPrendaRepository) {
+                                 CatSubtipoPrendaRepository catSubtipoPrendaRepository,
+                                 PartidaContratoRepository partidaContratoRepository) {
         super(repository);
         this.catSubtipoPrendaRepository = catSubtipoPrendaRepository;
+        this.partidaContratoRepository = partidaContratoRepository;
     }
 
     /**
@@ -61,6 +65,27 @@ public class CatValorPrendaService extends BaseService<CatValorPrenda, Integer, 
         valor.getSubtipoPrenda().getTipoPrenda().getId();
         applyEditableFields(valor, request);
         return repository.save(valor);
+    }
+
+    /**
+     * Elimina físicamente un valor del catálogo de prendas.
+     *
+     * @param id ID del valor a eliminar
+     * @throws BadRequestException si el valor ya fue usado en alguna partida de contrato,
+     *                             porque la FK de partida_contrato lo referencia y borrarlo
+     *                             dejaría contratos históricos inconsistentes
+     */
+    public void deleteValor(Integer id) {
+        CatValorPrenda valor = findById(id);
+
+        long partidas = partidaContratoRepository.countByValorPrendaIdValorAtributo(id);
+        if (partidas > 0) {
+            throw new BadRequestException(
+                    "No se puede eliminar: la prenda está usada en " + partidas
+                            + (partidas == 1 ? " partida de contrato" : " partidas de contrato"));
+        }
+
+        repository.delete(valor);
     }
 
     private CatSubtipoPrenda findAndValidateSubtipo(CatValorPrendaRequest request) {
