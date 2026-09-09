@@ -7,9 +7,12 @@ import com.ignis.prestamil.model.TipoPrenda;
 import com.ignis.prestamil.response.CatSubtipoPrendaResponse;
 import com.ignis.prestamil.response.CatValorPrendaResponse;
 import com.ignis.prestamil.response.TipoPrendaResponse;
+import com.ignis.prestamil.request.CatValorPrendaRequest;
 import com.ignis.prestamil.service.CatSubtipoPrendaService;
 import com.ignis.prestamil.service.CatValorPrendaService;
 import com.ignis.prestamil.service.TipoPrendaService;
+import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -73,6 +76,42 @@ public class PrendaController {
                 .map(prendaMapper::toCatValorPrendaResponse)
                 .collect(Collectors.toList());
         return ResponseEntity.ok(responses);
+    }
+
+    /**
+     * Obtiene todos los valores del catálogo de prendas.
+     * GET /api/prendas/valores
+     */
+    @GetMapping("/valores")
+    public ResponseEntity<List<CatValorPrendaResponse>> getAllValoresPrenda() {
+        List<CatValorPrendaResponse> responses = catValorPrendaService.findAllOrdered().stream()
+                .map(prendaMapper::toCatValorPrendaResponse)
+                .collect(Collectors.toList());
+        return ResponseEntity.ok(responses);
+    }
+
+    /**
+     * Crea un valor seleccionable dentro del catálogo de prendas.
+     * POST /api/prendas/valores
+     */
+    @PostMapping("/valores")
+    public ResponseEntity<CatValorPrendaResponse> createValorPrenda(
+            @Valid @RequestBody CatValorPrendaRequest request) {
+        CatValorPrenda saved = catValorPrendaService.create(request);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(prendaMapper.toCatValorPrendaResponse(saved));
+    }
+
+    /**
+     * Actualiza los datos editables de un valor del catálogo de prendas.
+     * PUT /api/prendas/valores/{idValorAtributo}
+     */
+    @PutMapping("/valores/{idValorAtributo}")
+    public ResponseEntity<CatValorPrendaResponse> updateValorPrenda(
+            @PathVariable Integer idValorAtributo,
+            @Valid @RequestBody CatValorPrendaRequest request) {
+        CatValorPrenda updated = catValorPrendaService.update(idValorAtributo, request);
+        return ResponseEntity.ok(prendaMapper.toCatValorPrendaResponse(updated));
     }
 
 }

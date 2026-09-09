@@ -20,7 +20,7 @@ public class CatValorPrenda {
     private CatSubtipoPrenda subtipoPrenda;
 
     @Column(name = "clave")
-    private Integer clave;
+    private String clave;
 
     @Column(name = "descripcion", length = 100, nullable = false)
     private String descripcion;
