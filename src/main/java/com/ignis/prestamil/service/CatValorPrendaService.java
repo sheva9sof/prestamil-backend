@@ -76,7 +76,11 @@ public class CatValorPrendaService extends BaseService<CatValorPrenda, Integer, 
     }
 
     private void applyEditableFields(CatValorPrenda valor, CatValorPrendaRequest request) {
-        valor.setDescripcion(request.getDescripcion().trim());
+        // La descripción ya no se captura en el modal del catálogo: si no viene en el
+        // request se conserva la existente (nombres históricos como "AHOGADOR ORO 14K").
+        if (request.getDescripcion() != null) {
+            valor.setDescripcion(request.getDescripcion().trim());
+        }
         valor.setClave(request.getClave() != null ? request.getClave().trim() : null);
         valor.setKilataje(request.getKilataje());
         valor.setContienePiedad(Boolean.TRUE.equals(request.getContienePiedad()));

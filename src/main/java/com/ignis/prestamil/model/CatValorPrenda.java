@@ -22,7 +22,7 @@ public class CatValorPrenda {
     @Column(name = "clave")
     private String clave;
 
-    @Column(name = "descripcion", length = 100, nullable = false)
+    @Column(name = "descripcion", length = 100)
     private String descripcion;
 
     @Column(name = "kilataje")

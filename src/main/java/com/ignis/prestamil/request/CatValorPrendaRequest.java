@@ -1,7 +1,6 @@
 package com.ignis.prestamil.request;
 
 import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.Getter;
@@ -19,7 +18,11 @@ public class CatValorPrendaRequest {
     @Min(1)
     private Integer idAtributo;
 
-    @NotBlank
+    /**
+     * Nombre estándar del catálogo. Opcional: el modal de alta ya no lo captura
+     * (el ítem se identifica por clave). Si llega null, el servicio conserva el
+     * valor existente en lugar de borrarlo.
+     */
     @Size(max = 100)
     private String descripcion;
 
