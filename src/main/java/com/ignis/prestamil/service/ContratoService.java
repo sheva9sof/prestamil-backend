@@ -298,6 +298,13 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
             CatValorPrenda valorPrenda = catValorPrendaRepository.findById(pr.getIdValorPrenda())
                     .orElseThrow(() -> new ResourceNotFoundException(
                             "ValorPrenda no encontrado: " + pr.getIdValorPrenda()));
+            if (valorPrenda.getSubtipoPrenda() == null
+                    || valorPrenda.getSubtipoPrenda().getTipoPrenda() == null
+                    || !tipoPrenda.getId().equals(
+                            valorPrenda.getSubtipoPrenda().getTipoPrenda().getId())) {
+                throw new BadRequestException(
+                        "El valor de catálogo seleccionado no pertenece al tipo de prenda de la partida");
+            }
             partida.setValorPrenda(valorPrenda);
         }
 

@@ -2,6 +2,8 @@ package com.ignis.prestamil.service;
 
 import com.ignis.prestamil.exception.BadRequestException;
 import com.ignis.prestamil.mapper.ContratoMapper;
+import com.ignis.prestamil.model.CatSubtipoPrenda;
+import com.ignis.prestamil.model.CatValorPrenda;
 import com.ignis.prestamil.model.Cliente;
 import com.ignis.prestamil.model.Contrato;
 import com.ignis.prestamil.model.PartidaContrato;
@@ -207,9 +209,108 @@ class ContratoServiceTest {
         return captor.getAllValues().get(0).getPartidas().get(0);
     }
 
+    private CatValorPrenda buildValorCatalogo(int valorId, int atributoId, TipoPrenda tipoPrenda) {
+        CatSubtipoPrenda subtipo = new CatSubtipoPrenda();
+        subtipo.setIdAtributo(atributoId);
+        subtipo.setTipoPrenda(tipoPrenda);
+
+        CatValorPrenda valor = new CatValorPrenda();
+        valor.setIdValorAtributo(valorId);
+        valor.setSubtipoPrenda(subtipo);
+        valor.setDescripcion("Anillo 14K");
+        return valor;
+    }
+
     // -----------------------------------------------------------------------
     // Tests
     // -----------------------------------------------------------------------
+
+    @Test
+    void crearContrato_vinculaValorDeCatalogoDelMismoTipo() {
+        ContratoRequest request = buildRequestBase();
+        PartidaContratoRequest partida = buildPartidaAlhaja(
+                new BigDecimal("100.00"), 14, "N",
+                BigDecimal.ONE, new BigDecimal("50.00"));
+        partida.setIdValorPrenda(25);
+        request.getPartidas().add(partida);
+
+        PlazoHechuraAlhaja tabla = new PlazoHechuraAlhaja();
+        tabla.setPrecioPrestamo(new BigDecimal("100.0000"));
+        when(plazoHechuraAlhajaRepository.findById(new PlazoHechuraAlhajaId(1, 1, 14, "N")))
+                .thenReturn(Optional.of(tabla));
+
+        TipoPrenda alhaja = tipoPrendaRepository.findById(1).orElseThrow();
+        CatValorPrenda valorCatalogo = buildValorCatalogo(25, 4, alhaja);
+        when(catValorPrendaRepository.findById(25)).thenReturn(Optional.of(valorCatalogo));
+        when(contratoMapper.toResponse(any(Contrato.class))).thenReturn(new ContratoResponse());
+        when(repository.save(any(Contrato.class))).thenAnswer(inv -> {
+            Contrato contrato = inv.getArgument(0);
+            if (contrato.getId() == null) contrato.setId(1L);
+            return contrato;
+        });
+
+        contratoService.crearContrato(request, "cajero1");
+
+        assertThat(capturarPartidaGuardada().getValorPrenda()).isSameAs(valorCatalogo);
+    }
+
+    @Test
+    void crearContrato_partidaAlhaja_persisteDescripcionLibreDeLaPartida() {
+        // Given: descripcion libre explicitamente distinta al nombre del catalogo, para probar
+        // que ContratoService.buildPartida ya conecta pr.getDescripcion() -> partida.setDescripcion()
+        // sin depender de ningun valor de catalogo (RESEARCH.md riesgo 1, ya resuelto en codigo).
+        ContratoRequest request = buildRequestBase();
+        PartidaContratoRequest partida = buildPartidaAlhaja(
+                new BigDecimal("100.00"), 14, "N",
+                BigDecimal.ONE, new BigDecimal("50.00"));
+        partida.setDescripcion("Anillo tallado a mano, iniciales J.M.");
+        request.getPartidas().add(partida);
+
+        PlazoHechuraAlhaja tabla = new PlazoHechuraAlhaja();
+        tabla.setPrecioPrestamo(new BigDecimal("100.0000"));
+        when(plazoHechuraAlhajaRepository.findById(new PlazoHechuraAlhajaId(1, 1, 14, "N")))
+                .thenReturn(Optional.of(tabla));
+        // No se usa stubGuardadoExitoso() aqui: esa stubea plazoService.calcularAvaluoContrato,
+        // que solo se invoca cuando parametro != null (partidas Plata). Esta partida es Alhaja
+        // (parametro null), y ese stub quedaria sin uso -> Mockito UnnecessaryStubbingException.
+        when(contratoMapper.toResponse(any(Contrato.class))).thenReturn(new ContratoResponse());
+        when(repository.save(any(Contrato.class))).thenAnswer(inv -> {
+            Contrato contrato = inv.getArgument(0);
+            if (contrato.getId() == null) contrato.setId(1L);
+            return contrato;
+        });
+
+        contratoService.crearContrato(request, "cajero1");
+
+        assertThat(capturarPartidaGuardada().getDescripcion())
+                .isEqualTo("Anillo tallado a mano, iniciales J.M.");
+    }
+
+    @Test
+    void crearContrato_rechazaValorDeCatalogoDeOtroTipo() {
+        ContratoRequest request = buildRequestBase();
+        PartidaContratoRequest partida = buildPartidaAlhaja(
+                new BigDecimal("100.00"), 14, "N",
+                BigDecimal.ONE, new BigDecimal("50.00"));
+        partida.setIdValorPrenda(25);
+        request.getPartidas().add(partida);
+
+        PlazoHechuraAlhaja tabla = new PlazoHechuraAlhaja();
+        tabla.setPrecioPrestamo(new BigDecimal("100.0000"));
+        when(plazoHechuraAlhajaRepository.findById(new PlazoHechuraAlhajaId(1, 1, 14, "N")))
+                .thenReturn(Optional.of(tabla));
+
+        TipoPrenda varios = new TipoPrenda();
+        varios.setId(3);
+        varios.setTipo("VARIOS");
+        when(catValorPrendaRepository.findById(25))
+                .thenReturn(Optional.of(buildValorCatalogo(25, 6, varios)));
+
+        BadRequestException error = assertThrows(BadRequestException.class,
+                () -> contratoService.crearContrato(request, "cajero1"));
+
+        assertThat(error.getMessage()).contains("no pertenece al tipo de prenda");
+    }
 
     @Test
     void crearContrato_partidaAlhaja_ignoraAvaluoRealDelCliente() {
