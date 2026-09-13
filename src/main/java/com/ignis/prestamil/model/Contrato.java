@@ -87,4 +87,30 @@ public class Contrato {
 
     @OneToMany(mappedBy = "contrato", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private List<PartidaContrato> partidas = new ArrayList<>();
+
+    // Snapshot de los 7 parametros de calculo vigentes al crearse el contrato (changeset 026).
+    // Requisito PROFECO: un contrato firmado no debe cambiar de montos al reimprimirse.
+    // Contratos historicos (previos al changeset) quedan con estas columnas en NULL y el motor de calculo
+    // hace fallback a la configuracion vigente. Ver CalculoContratoService para el uso.
+
+    @Column(name = "snap_porc_sancion_semanal", precision = 9, scale = 4)
+    private BigDecimal snapPorcSancionSemanal;
+
+    @Column(name = "snap_dias_gracia_sancion")
+    private Integer snapDiasGraciaSancion;
+
+    @Column(name = "snap_aplicar_sancion_periodo")
+    private Boolean snapAplicarSancionPeriodo;
+
+    @Column(name = "snap_iva_porcentaje", precision = 10, scale = 2)
+    private BigDecimal snapIvaPorcentaje;
+
+    @Column(name = "snap_porc_interes", precision = 9, scale = 4)
+    private BigDecimal snapPorcInteres;
+
+    @Column(name = "snap_porc_almacen", precision = 9, scale = 4)
+    private BigDecimal snapPorcAlmacen;
+
+    @Column(name = "snap_porc_gastos_admin", precision = 9, scale = 4)
+    private BigDecimal snapPorcGastosAdmin;
 }

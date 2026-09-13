@@ -88,6 +88,12 @@ public class PlazoParametro {
     @Column(name = "precio_gramo_plata", nullable = false, precision = 12, scale = 4, columnDefinition = "DECIMAL(12,4) DEFAULT 0.0000")
     private BigDecimal precioGramoPlata = BigDecimal.ZERO;
 
+    // OJO: pese al nombre "sin_interes", este campo gobierna la GRACIA DE SANCION por extemporaneidad,
+    // no la del interes. El interes se cobra completo por periodo sin descuento; este campo se resta al
+    // atraso en dias antes de calcular las semanas vencidas de sancion (CalculoContratoService y
+    // MovimientoContratoService.calcularSemanasVencidas). Confirmado con Jorge 2026-09-08; se conserva
+    // el nombre historico para no romper API/frontend/BD, pero conceptualmente es "dias de tolerancia
+    // antes de aplicar sancion".
     @Column(name = "dias_gracia_sin_interes", nullable = false, columnDefinition = "INT DEFAULT 0")
     private Integer diasGraciaSinInteres = 0;
 

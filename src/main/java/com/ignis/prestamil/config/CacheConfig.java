@@ -19,13 +19,15 @@ public class CacheConfig {
      */
     @Bean
     public CacheManager cacheManager() {
-        CaffeineCacheManager cacheManager = new CaffeineCacheManager("sucursal");
-        
+        // "parametrosSistemaIva" es el cache del IVA vigente (ParametrosSistemaCache); se evicta desde
+        // ParametrosSistemaService.update para que un cambio de IVA aplique al siguiente refrendo/PDF.
+        CaffeineCacheManager cacheManager = new CaffeineCacheManager("sucursal", "parametrosSistemaIva");
+
         cacheManager.setCaffeine(Caffeine.newBuilder()
                 .maximumSize(100)                    // Máximo 100 entradas en cache
                 .expireAfterWrite(30, TimeUnit.MINUTES)  // Expira después de 30 minutos sin escritura
                 .recordStats());                     // Habilitar estadísticas para monitoreo
-        
+
         return cacheManager;
     }
 

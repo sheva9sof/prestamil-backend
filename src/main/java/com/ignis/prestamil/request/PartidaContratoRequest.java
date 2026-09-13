@@ -20,8 +20,25 @@ public class PartidaContratoRequest {
     @NotBlank
     private String descripcion;
 
+    /**
+     * Número de piezas de la partida. Es solo informativo: los pesos se capturan como
+     * total del lote, así que el servidor NUNCA multiplica peso × cantidad.
+     */
     private Integer cantidad = 1;
-    private BigDecimal pesoGramos;
+
+    /**
+     * Peso del metal precioso en gramos (sin piedras ni soldadura), del lote completo.
+     * Obligatorio para ALHAJA y PLATA — es el que alimenta la fórmula de avalúo/préstamo.
+     */
+    private BigDecimal pesoNeto;
+
+    /**
+     * Peso físico total de la pieza en gramos, incluyendo piedras y soldadura. Opcional
+     * e informativo: si viene vacío el servidor lo iguala al peso neto. Debe ser
+     * {@code >= pesoNeto}, en caso contrario se rechaza la partida.
+     */
+    private BigDecimal pesoTotal;
+
     private Integer kilataje;
 
     /** Ley de la plata (p. ej. 925 o 725). Solo aplica a prendas de plata. */

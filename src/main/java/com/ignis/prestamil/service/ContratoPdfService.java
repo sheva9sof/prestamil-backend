@@ -11,6 +11,10 @@ import com.ignis.prestamil.model.Sucursal;
 import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.SucursalRepository;
 import com.ignis.prestamil.response.VencimientoResponse;
+import com.ignis.prestamil.service.calculo.CalculoContratoService;
+import com.ignis.prestamil.service.calculo.DesgloseCobro;
+import com.ignis.prestamil.service.calculo.ParametrosCalculo;
+import com.ignis.prestamil.service.calculo.ParametrosSistemaCache;
 import com.ignis.prestamil.util.PagoExtemporaneoRow;
 import com.ignis.prestamil.util.PagoRow;
 import com.ignis.prestamil.util.PrendaRow;
@@ -46,7 +50,9 @@ import java.util.Map;
 @Service
 public class ContratoPdfService {
 
-    private static final BigDecimal IVA_PORCENTAJE = new BigDecimal("16");
+    // El IVA se obtiene del cache (ParametrosSistemaCache) en cada generacion de PDF. Ya no vive
+    // como constante local: el motor unico (CalculoContratoService) es la fuente de verdad y toma
+    // el valor del snapshot del contrato o del parametros_sistema id=8 con fallback.
     private static final DateTimeFormatter DF = DateTimeFormatter.ofPattern("dd/MM/yyyy");
     private static final String[] MESES_ABR = {"ene", "feb", "mar", "abr", "may", "jun",
             "jul", "ago", "sep", "oct", "nov", "dic"};
@@ -55,15 +61,21 @@ public class ContratoPdfService {
     private final ContratoService contratoService;
     private final PlazoParametroRepository plazoParametroRepository;
     private final SucursalRepository sucursalRepository;
+    private final CalculoContratoService calculoContratoService;
+    private final ParametrosSistemaCache parametrosSistemaCache;
 
     private JasperReport reporte; // cacheado (la plantilla no cambia en runtime)
 
     public ContratoPdfService(ContratoService contratoService,
                               PlazoParametroRepository plazoParametroRepository,
-                              SucursalRepository sucursalRepository) {
+                              SucursalRepository sucursalRepository,
+                              CalculoContratoService calculoContratoService,
+                              ParametrosSistemaCache parametrosSistemaCache) {
         this.contratoService = contratoService;
         this.plazoParametroRepository = plazoParametroRepository;
         this.sucursalRepository = sucursalRepository;
+        this.calculoContratoService = calculoContratoService;
+        this.parametrosSistemaCache = parametrosSistemaCache;
     }
 
     /**
@@ -89,11 +101,18 @@ public class ContratoPdfService {
         Sucursal sucursal = sucursalId != null
                 ? sucursalRepository.findById(sucursalId).orElse(null) : null;
 
-        BigDecimal porcInteres  = valOr(parametro != null ? parametro.getPorcInteres() : null);
-        BigDecimal porcAlmacen  = valOr(parametro != null ? parametro.getPorcAlmacen() : null);
-        BigDecimal porcGastos   = valOr(parametro != null ? parametro.getPorcGastosAdmin() : null);
+        // Parametros efectivos resueltos por el motor: snapshot del contrato (changeset 026) si esta
+        // presente, o config vigente como fallback. Todos los % impresos deben venir de aqui para que
+        // la reimpresion no cambie de montos aunque la config vigente se modifique despues (PROFECO).
+        ParametrosCalculo pc = calculoContratoService.resolverParametros(contrato, parametro);
+        BigDecimal porcInteres  = pc.porcInteres();
+        BigDecimal porcAlmacen  = pc.porcAlmacen();
+        BigDecimal porcGastos   = pc.porcGastosAdmin();
         BigDecimal porcTotal    = porcInteres.add(porcAlmacen).add(porcGastos);
-        BigDecimal porcSancion  = valOr(parametro != null ? parametro.getPorcSancionSemanal() : null);
+        // La sancion solo entra al contrato si el plazo la tiene activada. Con el interruptor en NO
+        // el prestamo sigue generando interes y almacenaje, pero la sancion es 0.
+        BigDecimal porcSancion  = pc.aplicarSancion() ? pc.porcSancionSemanal() : BigDecimal.ZERO;
+        BigDecimal porcIva      = pc.porcIva();
         BigDecimal comisionVenta = valOr(parametro != null ? parametro.getComisionPorVentaPrenda() : null);
 
         // Tasa anual y CAT como los muestra COCAE (interés/CAT anualizados: % x 360/díasPorPeriodo)
@@ -108,8 +127,11 @@ public class ContratoPdfService {
         BigDecimal montoTotalPagar = ultimo.getDesempeno();
         BigDecimal refrendoFinal = valOr(ultimo.getTotalInteres()).add(valOr(ultimo.getIva()));
 
-        BigDecimal pesoTotal = BigDecimal.ZERO;
-        for (PartidaContrato p : partidas) pesoTotal = pesoTotal.add(valOr(p.getPesoGramos()));
+        // P_GMS es el gramaje sobre el que se calculó el avalúo, por eso suma pesos NETOS y no
+        // totales: así avalúo / gramos sigue dando el precio por gramo configurado en el plazo.
+        // El peso físico de cada pieza se informa por partida, en la columna "Características".
+        BigDecimal pesoNetoTotal = BigDecimal.ZERO;
+        for (PartidaContrato p : partidas) pesoNetoTotal = pesoNetoTotal.add(valOr(p.getPesoNeto()));
 
         BigDecimal porcPrestSobreAvaluo = contrato.getMontoAvaluo() != null
                 && contrato.getMontoAvaluo().compareTo(BigDecimal.ZERO) > 0
@@ -139,10 +161,10 @@ public class ContratoPdfService {
         params.put("P_PAGINA_INTERNET", "www.prestamil.com.mx");
         params.put("P_NOMBRE_SUCURSAL", sucursal != null ? nz(sucursal.getNombre()) : "");
         params.put("P_HORARIO_ATENCION", sucursal != null ? nz(sucursal.getHorarioAtencion()) : "");
-        params.put("P_IVA", MONEY.format(IVA_PORCENTAJE) + " %");
+        params.put("P_IVA", MONEY.format(porcIva) + " %");
         params.put("P_CLIENTE_DIRECCION", direccionCliente(contrato.getCliente()));
         params.put("P_CREDENCIAL_LECTOR", nz(contrato.getNumIdentificacion()));
-        params.put("P_GMS", MONEY.format(pesoTotal));
+        params.put("P_GMS", MONEY.format(pesoNetoTotal));
         params.put("P_RMO", ramo(primera));
         params.put("P_REFRENDO", money(refrendoFinal));
         params.put("P_RESUMEN_INTERES", plain(porcInteres));
@@ -154,10 +176,11 @@ public class ContratoPdfService {
                 + "   |   % préstamo sobre avalúo: " + pct(porcPrestSobreAvaluo));
         params.put("P_PRENDAS", new JRBeanCollectionDataSource(buildPrendas(partidas)));
         params.put("P_PAGOS", new JRBeanCollectionDataSource(buildPagos(vencimientos, contrato)));
-        // ⏳ Sanción por extemporaneidad pendiente de verificar vs COCAE (Fase 7): se usa la fórmula
-        // documentada (2% por semana vencida sobre el préstamo, sumada al interés y con IVA).
+        // Pasada 2: filas S5/S6 usan el motor unico. Antes divergian con refrendar (multiplicador era
+        // "periodos extra" en vez de semanas vencidas reales, no descontaba dias de gracia, e IVA solo
+        // aplicaba aqui pero no en el cobro). Ahora ambos son el mismo cobro para el mismo contrato/fecha.
         List<PagoExtemporaneoRow> extemporaneos = buildPagosExtemporaneos(
-                contrato, porcInteres, porcAlmacen, porcGastos, porcSancion, plazo, ultimo.getFecha());
+                contrato, parametro, plazo, ultimo.getFecha());
         params.put("P_MOSTRAR_PAGO_EXTEMPORANEO", !extemporaneos.isEmpty());
         params.put("P_PAGOS_EXTEMPORANEOS", new JRBeanCollectionDataSource(extemporaneos));
 
@@ -176,10 +199,16 @@ public class ContratoPdfService {
     private List<PrendaRow> buildPrendas(List<PartidaContrato> partidas) {
         List<PrendaRow> filas = new ArrayList<>();
         for (PartidaContrato p : partidas) {
+            // El peso total solo se imprime cuando difiere del neto (pieza con piedras o
+            // soldadura). Si la pieza es 100% metal, repetirlo solo ensuciaría el contrato.
+            boolean mostrarPesoTotal = p.getPesoNeto() != null && p.getPesoTotal() != null
+                    && p.getPesoTotal().compareTo(p.getPesoNeto()) > 0;
             String caracteristicas = (p.getKilataje() != null ? p.getKilataje() + "K " : "")
                     + (p.getHechura() != null ? p.getHechura() + " " : "")
                     + (p.getLey() != null ? "Ley " + plain(p.getLey()) + " " : "")
-                    + (p.getPesoGramos() != null ? MONEY.format(p.getPesoGramos()) + " g" : "");
+                    + (p.getPesoNeto() != null
+                        ? MONEY.format(p.getPesoNeto()) + (mostrarPesoTotal ? " g neto" : " g") : "")
+                    + (mostrarPesoTotal ? " / " + MONEY.format(p.getPesoTotal()) + " g total" : "");
             BigDecimal porc = valOr(p.getAvaluoContrato()).compareTo(BigDecimal.ZERO) > 0
                     ? valOr(p.getMontoPrestamo()).multiply(new BigDecimal(100))
                         .divide(p.getAvaluoContrato(), 2, RoundingMode.HALF_UP)
@@ -243,38 +272,43 @@ public class ContratoPdfService {
     }
 
     /**
-     * Filas del bloque "Pago Extemporáneo": los ~2 periodos siguientes al plazo, con la sanción por
-     * extemporaneidad. Fórmula documentada (por Jorge, ⏳ pendiente de verificar vs COCAE — Fase 7):
-     * {@code sancion = prestamo × porcSancionSemanal/100 × semanasVencidas}; la sanción se suma al
-     * interés y sobre el total se aplica el IVA (16%, truncado como COCAE). El préstamo sigue
-     * acumulando interés/almacenaje en cada periodo extra.
+     * Filas del bloque "Pago Extemporaneo": los ~2 periodos siguientes al plazo, con la sancion por
+     * extemporaneidad. Pasada 2: cada fila k=1,2 se calcula como si el cliente pagara en la fecha
+     * simulada {@code baseFecha + dias*k}; el motor computa {@code semanasVencidas = ceil((atraso - gracia)/7)}
+     * igual que el cobro real de refrendar (antes se usaba k directamente, correcto solo con
+     * plazo semanal). El IVA (truncado DOWN a 2 dec) se aplica sobre {@code interes + almacen +
+     * gastosAdmin + sancion}, misma base que en caja.
      */
     private List<PagoExtemporaneoRow> buildPagosExtemporaneos(
-            Contrato contrato, BigDecimal porcInteres, BigDecimal porcAlmacen, BigDecimal porcGastos,
-            BigDecimal porcSancion, Plazo plazo, java.time.LocalDate baseFecha) {
+            Contrato contrato, PlazoParametro parametro, Plazo plazo, java.time.LocalDate baseFecha) {
         List<PagoExtemporaneoRow> filas = new ArrayList<>();
         BigDecimal prestamo = valOr(contrato.getMontoPrestamo());
         if (prestamo.compareTo(BigDecimal.ZERO) <= 0) return filas;
         int n = Math.max(plazo.getNumeroPeriodos(), 0);
         int dias = Math.max(plazo.getDiasPorPeriodo(), 1);
-        BigDecimal cien = new BigDecimal("100");
         String mutuo = money(prestamo);
         final int semanasExtra = 2; // COCAE imprime ~2 periodos extra por espacio de la hoja
         for (int k = 1; k <= semanasExtra; k++) {
             int j = n + k; // periodo acumulado (plazo + k periodos vencidos)
-            BigDecimal periodoAcum = new BigDecimal(j);
-            BigDecimal interes  = prestamo.multiply(porcInteres).multiply(periodoAcum).divide(cien, 2, RoundingMode.HALF_UP);
-            BigDecimal almacen  = prestamo.multiply(porcAlmacen).multiply(periodoAcum).divide(cien, 2, RoundingMode.HALF_UP);
-            BigDecimal gastos   = prestamo.multiply(porcGastos).multiply(periodoAcum).divide(cien, 2, RoundingMode.HALF_UP);
-            BigDecimal sancion  = prestamo.multiply(porcSancion).multiply(new BigDecimal(k)).divide(cien, 2, RoundingMode.HALF_UP);
-            // El interés impreso lleva embebidos gastos admin y sanción (COCAE no les da columna aparte).
+            java.time.LocalDate fechaSimulada = baseFecha != null
+                    ? baseFecha.plusDays((long) dias * k) : java.time.LocalDate.now();
+
+            // Motor unico (Pasada 2): fecha simulada + periodoAcumulado. Antes se usaba k como
+            // multiplicador implicito de semanas (correcto solo con diasPorPeriodo=7). Ahora las
+            // filas coinciden con el cobro real en refrendar para cualquier plazo.
+            DesgloseCobro d = calculoContratoService.calcularCobroPeriodo(
+                    contrato, parametro, fechaSimulada, j);
+            BigDecimal interes  = d.interes();
+            BigDecimal almacen  = d.almacen();
+            BigDecimal gastos   = d.gastosAdmin();
+            BigDecimal sancion  = d.sancion();
+            // El interes impreso lleva embebidos gastos admin y sancion (COCAE no les da columna aparte).
             BigDecimal interesConSancion = interes.add(gastos).add(sancion);
-            BigDecimal totalInteres = interesConSancion.add(almacen);
-            BigDecimal iva = totalInteres.multiply(IVA_PORCENTAJE).divide(cien, 2, RoundingMode.DOWN);
-            BigDecimal refrendo = totalInteres.add(iva);
+            BigDecimal iva = d.iva();
+            BigDecimal refrendo = d.baseIva().add(iva);
             BigDecimal desempeno = prestamo.add(refrendo);
             String cuando = baseFecha != null
-                    ? "S " + j + "-hasta el ->" + fechaAbrev(baseFecha.plusDays((long) dias * k))
+                    ? "S " + j + "-hasta el ->" + fechaAbrev(fechaSimulada)
                     : "";
             filas.add(new PagoExtemporaneoRow(
                     "S " + j,                    // concepto
