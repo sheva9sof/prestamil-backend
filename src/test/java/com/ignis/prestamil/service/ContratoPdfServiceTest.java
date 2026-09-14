@@ -23,6 +23,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -194,6 +195,199 @@ class ContratoPdfServiceTest {
         // No aserto valores dentro del PDF binario (JR opaco); la ausencia de excepcion + el
         // motor unico ya garantizan que se uso el snapshot (el cache habria dado 8, disparando
         // divisiones diferentes; con snapshot el desglose queda con IVA 16).
+    }
+
+    // =========================================================================
+    // Bloque COMISIONES (Montos y Clausulas) PROFECO — clausulas 11a-11f
+    // =========================================================================
+
+    @Test
+    void parametrosComisiones_sinSnapshot_leenVigente() {
+        // Given: contrato SIN snap_* (contrato previo al changeset 026 o campo no poblado).
+        // El motor cae al valor vigente del PlazoParametro para los tres con snapshot.
+        lenient().when(parametrosSistemaCache.getIvaPorcentaje()).thenReturn(new BigDecimal("16.00"));
+        ContratoPdfService svc = construir();
+
+        Contrato c = fixtureContratoSimple();
+        c.setMontoPrestamo(new BigDecimal("1000.00"));
+        c.setFechaVencimiento(LocalDate.now().plusDays(28));
+
+        PlazoParametro pp = new PlazoParametro();
+        pp.setPorcAlmacen(new BigDecimal("1.5000"));
+        pp.setPorcGastosAdmin(new BigDecimal("0.7500"));
+        pp.setPorcSancionSemanal(new BigDecimal("2.5000"));
+        pp.setAplicarSancionPorPeriodo(true);
+        pp.setComisionPorVentaPrenda(new BigDecimal("18.0000"));
+        pp.setReposicionEsPorcentaje(false);
+        pp.setMontoReposicion(new BigDecimal("120.00"));
+        pp.setPorcReposicion(new BigDecimal("3.0000"));
+
+        when(contratoService.findById(1L)).thenReturn(c);
+        when(contratoService.calcularAmortizacion(1L)).thenReturn(amortizacion());
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(6L, 4, 1))
+                .thenReturn(Optional.of(pp));
+
+        Map<String, Object> params = svc.armarParametros(1L);
+
+        // 11a Almacenaje: vigente
+        assertThat((BigDecimal) params.get("P_comisionAlmacenaje"))
+                .isEqualByComparingTo("1.5000");
+        // 11b Avaluo: sin campo en BD, siempre 0
+        assertThat((BigDecimal) params.get("P_comisionAvaluo"))
+                .isEqualByComparingTo(BigDecimal.ZERO);
+        // 11c Comercializacion: vigente (comision_por_venta_prenda)
+        assertThat((BigDecimal) params.get("P_comisionComercializacion"))
+                .isEqualByComparingTo("18.0000");
+        // 11d Reposicion: switch=false -> monto_reposicion
+        assertThat((BigDecimal) params.get("P_comisionReposicion"))
+                .isEqualByComparingTo("120.00");
+        // 11f Gastos admin: vigente
+        assertThat((BigDecimal) params.get("P_gastosAdministracion"))
+                .isEqualByComparingTo("0.7500");
+        // 11e Desempeno extemporaneo: vigente
+        assertThat((BigDecimal) params.get("P_desempenoExtemporaneo"))
+                .isEqualByComparingTo("2.5000");
+    }
+
+    @Test
+    void parametrosComisiones_conSnapshot_ganaSnapshotSobreVigente() {
+        // Given: contrato con snap_* poblados; la config vigente cambio a otros valores.
+        // La reimpresion debe respetar el snapshot para los tres con snapshot; los otros tres
+        // (avaluo, comercializacion, reposicion) NO tienen snapshot y leen el vigente actual.
+        lenient().when(parametrosSistemaCache.getIvaPorcentaje()).thenReturn(new BigDecimal("16.00"));
+        ContratoPdfService svc = construir();
+
+        Contrato c = fixtureContratoSimple();
+        c.setMontoPrestamo(new BigDecimal("1000.00"));
+        c.setFechaVencimiento(LocalDate.now().plusDays(28));
+        // Snapshot congelado al firmar (changeset 026)
+        c.setSnapPorcInteres(new BigDecimal("3.0000"));
+        c.setSnapPorcAlmacen(new BigDecimal("1.2000"));
+        c.setSnapPorcGastosAdmin(new BigDecimal("0.5000"));
+        c.setSnapPorcSancionSemanal(new BigDecimal("2.0000"));
+        c.setSnapDiasGraciaSancion(2);
+        c.setSnapAplicarSancionPeriodo(true);
+        c.setSnapIvaPorcentaje(new BigDecimal("16.00"));
+
+        // Config vigente muy distinta a la del snapshot
+        PlazoParametro ppVigente = new PlazoParametro();
+        ppVigente.setPorcAlmacen(new BigDecimal("999.0000"));
+        ppVigente.setPorcGastosAdmin(new BigDecimal("999.0000"));
+        ppVigente.setPorcSancionSemanal(new BigDecimal("999.0000"));
+        ppVigente.setAplicarSancionPorPeriodo(true);
+        // Estos tres SIN snapshot: se leen del vigente aunque el contrato tenga snapshot
+        ppVigente.setComisionPorVentaPrenda(new BigDecimal("42.0000"));
+        ppVigente.setReposicionEsPorcentaje(true);
+        ppVigente.setPorcReposicion(new BigDecimal("5.0000"));
+        ppVigente.setMontoReposicion(new BigDecimal("999.00"));
+
+        when(contratoService.findById(1L)).thenReturn(c);
+        when(contratoService.calcularAmortizacion(1L)).thenReturn(amortizacion());
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(6L, 4, 1))
+                .thenReturn(Optional.of(ppVigente));
+
+        Map<String, Object> params = svc.armarParametros(1L);
+
+        // Con snapshot: gana snapshot aunque vigente diga 999
+        assertThat((BigDecimal) params.get("P_comisionAlmacenaje"))
+                .isEqualByComparingTo("1.2000");
+        assertThat((BigDecimal) params.get("P_gastosAdministracion"))
+                .isEqualByComparingTo("0.5000");
+        assertThat((BigDecimal) params.get("P_desempenoExtemporaneo"))
+                .isEqualByComparingTo("2.0000");
+
+        // Sin snapshot: lee vigente
+        assertThat((BigDecimal) params.get("P_comisionAvaluo"))
+                .isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat((BigDecimal) params.get("P_comisionComercializacion"))
+                .isEqualByComparingTo("42.0000");
+        // switch=true -> porc_reposicion (no monto)
+        assertThat((BigDecimal) params.get("P_comisionReposicion"))
+                .isEqualByComparingTo("5.0000");
+    }
+
+    @Test
+    void desempenoExtemporaneo_conAplicarSancionFalse_imprimeElPorcentajeIgual() {
+        // Regresion: la clausula 11e es DISCLOSURE contractual. Aunque el toggle
+        // aplicarSancion=false (contratos previos a SANC-04, o config vieja), el %
+        // configurado debe imprimirse tal cual — es informacion legal, no resultado
+        // de calculo. Diferente de P_RESUMEN_MORATORIOS que si respeta el gate.
+        lenient().when(parametrosSistemaCache.getIvaPorcentaje()).thenReturn(new BigDecimal("16.00"));
+        ContratoPdfService svc = construir();
+
+        Contrato c = fixtureContratoSimple();
+        c.setMontoPrestamo(new BigDecimal("1000.00"));
+        c.setFechaVencimiento(LocalDate.now().plusDays(28));
+
+        PlazoParametro pp = new PlazoParametro();
+        pp.setPorcAlmacen(new BigDecimal("1.5000"));
+        pp.setPorcGastosAdmin(new BigDecimal("0.7500"));
+        pp.setPorcSancionSemanal(new BigDecimal("2.5000"));
+        // ← El gate esta apagado. Antes del fix esto aplastaba 11e a 0.
+        pp.setAplicarSancionPorPeriodo(false);
+
+        when(contratoService.findById(1L)).thenReturn(c);
+        when(contratoService.calcularAmortizacion(1L)).thenReturn(amortizacion());
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(6L, 4, 1))
+                .thenReturn(Optional.of(pp));
+
+        Map<String, Object> params = svc.armarParametros(1L);
+
+        // 11e debe mostrar 2.5, no 0.
+        assertThat((BigDecimal) params.get("P_desempenoExtemporaneo"))
+                .isEqualByComparingTo("2.5000");
+    }
+
+    @Test
+    void comisionReposicion_esPorcentaje_usaPorcReposicion() {
+        lenient().when(parametrosSistemaCache.getIvaPorcentaje()).thenReturn(new BigDecimal("16.00"));
+        ContratoPdfService svc = construir();
+
+        Contrato c = fixtureContratoSimple();
+        c.setMontoPrestamo(new BigDecimal("1000.00"));
+        c.setFechaVencimiento(LocalDate.now().plusDays(28));
+
+        PlazoParametro pp = new PlazoParametro();
+        pp.setReposicionEsPorcentaje(true);
+        pp.setPorcReposicion(new BigDecimal("4.5000"));
+        // Monto no debe usarse — se prueba que no se cuela cuando el switch es porcentaje
+        pp.setMontoReposicion(new BigDecimal("999.00"));
+
+        when(contratoService.findById(1L)).thenReturn(c);
+        when(contratoService.calcularAmortizacion(1L)).thenReturn(amortizacion());
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(6L, 4, 1))
+                .thenReturn(Optional.of(pp));
+
+        Map<String, Object> params = svc.armarParametros(1L);
+
+        assertThat((BigDecimal) params.get("P_comisionReposicion"))
+                .isEqualByComparingTo("4.5000");
+    }
+
+    @Test
+    void comisionReposicion_esMonto_usaMontoReposicion() {
+        lenient().when(parametrosSistemaCache.getIvaPorcentaje()).thenReturn(new BigDecimal("16.00"));
+        ContratoPdfService svc = construir();
+
+        Contrato c = fixtureContratoSimple();
+        c.setMontoPrestamo(new BigDecimal("1000.00"));
+        c.setFechaVencimiento(LocalDate.now().plusDays(28));
+
+        PlazoParametro pp = new PlazoParametro();
+        pp.setReposicionEsPorcentaje(false);
+        pp.setMontoReposicion(new BigDecimal("85.50"));
+        // Porcentaje no debe usarse
+        pp.setPorcReposicion(new BigDecimal("999.0000"));
+
+        when(contratoService.findById(1L)).thenReturn(c);
+        when(contratoService.calcularAmortizacion(1L)).thenReturn(amortizacion());
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(6L, 4, 1))
+                .thenReturn(Optional.of(pp));
+
+        Map<String, Object> params = svc.armarParametros(1L);
+
+        assertThat((BigDecimal) params.get("P_comisionReposicion"))
+                .isEqualByComparingTo("85.50");
     }
 
     private Contrato fixtureContratoSimple() {

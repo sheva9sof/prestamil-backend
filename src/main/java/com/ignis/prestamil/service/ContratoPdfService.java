@@ -85,6 +85,22 @@ public class ContratoPdfService {
      */
     @Transactional(readOnly = true)
     public byte[] generarPdf(Long contratoId) {
+        Map<String, Object> params = armarParametros(contratoId);
+        try {
+            JasperPrint print = JasperFillManager.fillReport(getReporte(), params, new JREmptyDataSource());
+            return JasperExportManager.exportReportToPdf(print);
+        } catch (JRException e) {
+            throw new BadRequestException("No se pudo generar el PDF del contrato: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Arma el Map de parametros que se pasa a Jasper. Se extrajo de {@link #generarPdf}
+     * para poder verificar en tests que los valores llegan correctos sin ejecutar el motor
+     * de Jasper (que es opaco y no permite aserciones sobre el contenido del PDF binario).
+     * Package-private a proposito.
+     */
+    Map<String, Object> armarParametros(Long contratoId) {
         Contrato contrato = contratoService.findById(contratoId);
         List<PartidaContrato> partidas = contrato.getPartidas();
         if (partidas == null || partidas.isEmpty()) {
@@ -94,6 +110,8 @@ public class ContratoPdfService {
         Integer sucursalId = contrato.getSucursalId();
         PartidaContrato primera = partidas.get(0);
 
+        // Criterio establecido: se resuelve el PlazoParametro contra el tipo de la PRIMERA partida.
+        // Mismo criterio que usa el snapshot del contrato al firmar (ContratoService.crearContrato).
         PlazoParametro parametro = plazoParametroRepository
                 .findByPlazoIdAndTipoPrendaIdAndSucursalId(
                         plazo.getId(), primera.getTipoPrenda().getId(), sucursalId)
@@ -184,12 +202,43 @@ public class ContratoPdfService {
         params.put("P_MOSTRAR_PAGO_EXTEMPORANEO", !extemporaneos.isEmpty());
         params.put("P_PAGOS_EXTEMPORANEOS", new JRBeanCollectionDataSource(extemporaneos));
 
-        try {
-            JasperPrint print = JasperFillManager.fillReport(getReporte(), params, new JREmptyDataSource());
-            return JasperExportManager.exportReportToPdf(print);
-        } catch (JRException e) {
-            throw new BadRequestException("No se pudo generar el PDF del contrato: " + e.getMessage());
-        }
+        // Bloque COMISIONES (Montos y Clausulas) PROFECO — clausulas 11a-11f.
+        // Tres campos con snapshot > vigente resueltos por pc (11a almacenaje, 11f gastos admin,
+        // 11e desempeno extemporaneo). Tres sin snapshot leidos del PlazoParametro vigente
+        // (11b avaluo — sin campo en BD, siempre 0; 11c comercializacion; 11d reposicion).
+        // TODO(PROFECO): comercializacion y reposicion no tienen snapshot; si cambian en config
+        // despues de firmar, la reimpresion del contrato mostrara el valor nuevo. Snapshot
+        // pendiente si el negocio lo pide.
+        // 11e (desempeno extemporaneo) es DISCLOSURE contractual: se imprime el % configurado
+        // tal cual, SIN aplicar el gate aplicarSancion. Es diferente de P_RESUMEN_MORATORIOS
+        // (resumen operativo "cuanto se cobra"), que si respeta el gate. Contratos previos a
+        // SANC-04 pueden tener snapAplicarSancionPeriodo=false/null y aun asi deben mostrar
+        // el % configurado en el renglon PROFECO — la clausula es informacion legal, no
+        // resultado de calculo.
+        BigDecimal comisionComercializacion =
+                valOr(parametro != null ? parametro.getComisionPorVentaPrenda() : null);
+        BigDecimal comisionReposicion = resolverComisionReposicion(parametro);
+        params.put("P_comisionAlmacenaje",       valOr(porcAlmacen));         // snapshot via pc
+        params.put("P_comisionAvaluo",           BigDecimal.ZERO);            // sin campo en BD
+        params.put("P_comisionComercializacion", comisionComercializacion);   // vigente
+        params.put("P_comisionReposicion",       comisionReposicion);         // vigente
+        params.put("P_gastosAdministracion",     valOr(porcGastos));          // snapshot via pc
+        params.put("P_desempenoExtemporaneo",    valOr(pc.porcSancionSemanal())); // snapshot via pc, SIN gate
+
+        return params;
+    }
+
+    /**
+     * Comision por reposicion: la BD tiene dos campos (porc y monto) y un switch que decide
+     * cual aplica. Se devuelve el valor efectivo, sin marcar cual es (% vs $) porque el
+     * pattern del jrxml es estatico. La imagen de fondo del contrato PROFECO ya indica la
+     * unidad alrededor del campo.
+     */
+    private BigDecimal resolverComisionReposicion(PlazoParametro parametro) {
+        if (parametro == null) return BigDecimal.ZERO;
+        return Boolean.TRUE.equals(parametro.getReposicionEsPorcentaje())
+                ? valOr(parametro.getPorcReposicion())
+                : valOr(parametro.getMontoReposicion());
     }
 
     // ---------------------------------------------------------------------
