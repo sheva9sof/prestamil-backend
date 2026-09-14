@@ -9,6 +9,9 @@ import java.util.List;
 @Repository
 public interface CatValorPrendaRepository extends BaseRepository<CatValorPrenda, Integer> {
 
+    @EntityGraph(attributePaths = {"subtipoPrenda", "subtipoPrenda.tipoPrenda"})
+    List<CatValorPrenda> findAllByOrderByIdValorAtributoAsc();
+
     List<CatValorPrenda> findBySubtipoPrendaIdAtributoOrderByIdValorAtributoAsc(Integer idAtributo);
 
     @EntityGraph(attributePaths = {"subtipoPrenda", "subtipoPrenda.tipoPrenda"})

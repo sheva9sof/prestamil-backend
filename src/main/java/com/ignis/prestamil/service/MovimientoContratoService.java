@@ -10,6 +10,8 @@ import com.ignis.prestamil.repository.TurnoRepository;
 import com.ignis.prestamil.repository.UsuarioRepository;
 import com.ignis.prestamil.request.RefrendoRequest;
 import com.ignis.prestamil.response.MovimientoResponse;
+import com.ignis.prestamil.service.calculo.CalculoContratoService;
+import com.ignis.prestamil.service.calculo.DesgloseCobro;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,7 +20,6 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 /**
@@ -39,17 +40,20 @@ public class MovimientoContratoService {
     private final PlazoParametroRepository plazoParametroRepository;
     private final TurnoRepository turnoRepository;
     private final UsuarioRepository usuarioRepository;
+    private final CalculoContratoService calculoContratoService;
 
     public MovimientoContratoService(MovimientoContratoRepository movimientoRepository,
                                      ContratoRepository contratoRepository,
                                      PlazoParametroRepository plazoParametroRepository,
                                      TurnoRepository turnoRepository,
-                                     UsuarioRepository usuarioRepository) {
+                                     UsuarioRepository usuarioRepository,
+                                     CalculoContratoService calculoContratoService) {
         this.movimientoRepository = movimientoRepository;
         this.contratoRepository = contratoRepository;
         this.plazoParametroRepository = plazoParametroRepository;
         this.turnoRepository = turnoRepository;
         this.usuarioRepository = usuarioRepository;
+        this.calculoContratoService = calculoContratoService;
     }
 
     /**
@@ -74,39 +78,34 @@ public class MovimientoContratoService {
 
         PlazoParametro param = obtenerParametro(contrato);
 
-        BigDecimal montoPrestamo = contrato.getMontoPrestamo();
-        int semanasVencidas = calcularSemanasVencidas(contrato.getFechaVencimiento(), param);
-
-        // Interés del periodo
-        BigDecimal porcInteres = param != null && param.getPorcInteresTotal() != null
-                ? param.getPorcInteresTotal() : BigDecimal.ZERO;
-        BigDecimal interes = montoPrestamo.multiply(porcInteres).divide(CIEN, 2, RoundingMode.HALF_UP);
-
-        // Sanción por extemporaneidad: monto * (porcSancionSemanal/100) * semanasVencidas
-        BigDecimal sancion = BigDecimal.ZERO;
-        boolean aplicaSancion = param != null && Boolean.TRUE.equals(param.getAplicarSancionPorPeriodo());
-        if (aplicaSancion && semanasVencidas > 0) {
-            BigDecimal porcSancion = param.getPorcSancionSemanal() != null
-                    ? param.getPorcSancionSemanal() : BigDecimal.ZERO;
-            sancion = montoPrestamo
-                    .multiply(porcSancion).divide(CIEN, 6, RoundingMode.HALF_UP)
-                    .multiply(new BigDecimal(semanasVencidas))
-                    .setScale(2, RoundingMode.HALF_UP);
-        }
-
-        BigDecimal abono = request.getAbonoCapital() != null ? request.getAbonoCapital() : BigDecimal.ZERO;
-
-        // Validar máximo de refrendos
+        // Validar maximo de refrendos ANTES de calcular (evita side effects si falla)
         if (param != null && param.getNumMaxRefrendos() != null && param.getNumMaxRefrendos() > 0
                 && contrato.getNumRefrendos() >= param.getNumMaxRefrendos()) {
             throw new BadRequestException(
-                    "El contrato alcanzó el máximo de refrendos permitidos (" + param.getNumMaxRefrendos() + ")");
+                    "El contrato alcanzo el maximo de refrendos permitidos (" + param.getNumMaxRefrendos() + ")");
         }
+
+        // Motor unico (Pasada 2): calcula interes+almacen+gastos, sancion y su IVA en una sola pasada,
+        // usando el snapshot del contrato (changeset 026) si esta presente o config vigente como fallback.
+        // CAMBIO DE COBRO vs. version anterior: ahora se cobra IVA sobre (interes + sancion) en vez de
+        // salir del refrendar sin IVA. La sancion sigue siendo prestamo x porcSancionSemanal/100 x semanas,
+        // pero al total agregado se le suma el IVA como en el contrato impreso.
+        DesgloseCobro d = calculoContratoService.calcularCobroPeriodo(
+                contrato, param, LocalDate.now(), 1);
+
+        // "interes" en MovimientoContrato es historicamente el interes total (interes + almacen + gastos):
+        // no hay columnas separadas para almacen/gastos en la tabla. Preservamos esa semantica sumandolos.
+        BigDecimal interesTotal = d.interes().add(d.almacen()).add(d.gastosAdmin());
+        BigDecimal sancion = d.sancion();
+        int semanasVencidas = d.semanasVencidas();
+
+        BigDecimal abono = request.getAbonoCapital() != null ? request.getAbonoCapital() : BigDecimal.ZERO;
 
         TipoMovimiento tipo = semanasVencidas > 0
                 ? TipoMovimiento.REFRENDO_EXTEMPORANEO : TipoMovimiento.REFRENDO;
 
-        BigDecimal total = interes.add(sancion).add(abono);
+        // total = interes+almacen+gastos + sancion + IVA(base) + abono. El abono NO lleva IVA (es capital).
+        BigDecimal total = d.total().add(abono);
 
         MovimientoContrato mov = new MovimientoContrato();
         mov.setContrato(contrato);
@@ -114,7 +113,7 @@ public class MovimientoContratoService {
         mov.setUsuario(usuario);
         mov.setTipo(tipo);
         mov.setMonto(total);
-        mov.setInteres(interes);
+        mov.setInteres(interesTotal);
         mov.setSancion(sancion);
         mov.setAbonoCapital(abono);
         mov.setSemanasVencidas(semanasVencidas);
@@ -129,8 +128,8 @@ public class MovimientoContratoService {
         contrato.setEstatus(EstatusContrato.VIGENTE);
         contratoRepository.save(contrato);
 
-        log.info("Refrendo {} contrato={} interes={} sancion={} semanas={}",
-                tipo, contrato.getFolio(), interes, sancion, semanasVencidas);
+        log.info("Refrendo {} contrato={} interes={} sancion={} semanas={} total={}",
+                tipo, contrato.getFolio(), interesTotal, sancion, semanasVencidas, total);
 
         return toResponse(mov, contrato);
     }
@@ -203,20 +202,6 @@ public class MovimientoContratoService {
     // =========================================================================
     // Helpers privados
     // =========================================================================
-
-    /**
-     * Calcula las semanas de extemporaneidad descontando los días de gracia.
-     * Devuelve 0 si el contrato no está vencido más allá de la gracia.
-     */
-    private int calcularSemanasVencidas(LocalDate fechaVencimiento, PlazoParametro param) {
-        int diasGracia = param != null && param.getDiasGraciaSinInteres() != null
-                ? param.getDiasGraciaSinInteres() : 0;
-        long diasVencido = ChronoUnit.DAYS.between(fechaVencimiento, LocalDate.now()) - diasGracia;
-        if (diasVencido <= 0) {
-            return 0;
-        }
-        return (int) Math.ceil(diasVencido / 7.0);
-    }
 
     /**
      * Obtiene el PlazoParametro representativo del contrato (plazo + tipo de prenda de

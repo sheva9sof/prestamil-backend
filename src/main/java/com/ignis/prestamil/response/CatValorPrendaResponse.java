@@ -11,7 +11,7 @@ public class CatValorPrendaResponse {
     private String nombreAtributo;
     private Integer idTipoPrenda;
     private String tipo;
-    private Integer clave;
+    private String clave;
     private String descripcion;
     private Integer kilataje;
     private Boolean contienePiedad;

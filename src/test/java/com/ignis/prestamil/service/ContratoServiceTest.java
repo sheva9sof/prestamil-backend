@@ -2,6 +2,8 @@ package com.ignis.prestamil.service;
 
 import com.ignis.prestamil.exception.BadRequestException;
 import com.ignis.prestamil.mapper.ContratoMapper;
+import com.ignis.prestamil.model.CatSubtipoPrenda;
+import com.ignis.prestamil.model.CatValorPrenda;
 import com.ignis.prestamil.model.Cliente;
 import com.ignis.prestamil.model.Contrato;
 import com.ignis.prestamil.model.PartidaContrato;
@@ -25,6 +27,8 @@ import com.ignis.prestamil.request.ContratoRequest;
 import com.ignis.prestamil.request.PartidaContratoRequest;
 import com.ignis.prestamil.response.ContratoResponse;
 import com.ignis.prestamil.response.VencimientoResponse;
+import com.ignis.prestamil.service.calculo.CalculoContratoService;
+import com.ignis.prestamil.service.calculo.ParametrosSistemaCache;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -84,10 +88,17 @@ class ContratoServiceTest {
     @Mock
     PlazoHechuraAlhajaRepository plazoHechuraAlhajaRepository;
 
+    @Mock
+    ParametrosSistemaCache parametrosSistemaCache;
+
+    CalculoContratoService calculoContratoService;
     ContratoService contratoService;
 
     @BeforeEach
     void setUp() {
+        // Motor REAL (no mock): calcularAmortizacion ahora delega en el motor. Los tests de
+        // amortizacion existentes esperan resultados numericos concretos que el motor debe replicar.
+        calculoContratoService = new CalculoContratoService(parametrosSistemaCache);
         contratoService = new ContratoService(
                 repository,
                 clienteRepository,
@@ -99,8 +110,14 @@ class ContratoServiceTest {
                 contratoMapper,
                 plazoParametroRepository,
                 plazoService,
-                plazoHechuraAlhajaRepository
+                plazoHechuraAlhajaRepository,
+                parametrosSistemaCache,
+                calculoContratoService
         );
+
+        // El snapshot del changeset 026 siempre pide el IVA vigente al crear un contrato.
+        // Sin este stub los tests que persistan un contrato lanzarian NPE al leer el cache.
+        lenient().when(parametrosSistemaCache.getIvaPorcentaje()).thenReturn(new BigDecimal("16.00"));
 
         // Stubs comunes a todos los tests: turno activo, cajero, cliente, plazo y tipo de prenda ALHAJA
         Turno turno = new Turno();
@@ -148,14 +165,14 @@ class ContratoServiceTest {
     }
 
     private PartidaContratoRequest buildPartidaAlhaja(BigDecimal avaluoRealSpoofed, Integer kilataje,
-                                                       String hechura, BigDecimal pesoGramos,
+                                                       String hechura, BigDecimal pesoNeto,
                                                        BigDecimal montoPrestamo) {
         PartidaContratoRequest pr = new PartidaContratoRequest();
         pr.setIdTipoPrenda(1);
         pr.setDescripcion("Anillo de oro");
         pr.setKilataje(kilataje);
         pr.setHechura(hechura);
-        pr.setPesoGramos(pesoGramos);
+        pr.setPesoNeto(pesoNeto);
         pr.setAvaluoReal(avaluoRealSpoofed);
         pr.setMontoPrestamo(montoPrestamo);
         return pr;
@@ -163,12 +180,12 @@ class ContratoServiceTest {
 
     /** Partida de plata: el avaluoReal enviado es deliberadamente "spoofed" (el servidor debe ignorarlo). */
     private PartidaContratoRequest buildPartidaPlata(BigDecimal avaluoRealSpoofed, BigDecimal ley,
-                                                     BigDecimal pesoGramos, BigDecimal montoPrestamo) {
+                                                     BigDecimal pesoNeto, BigDecimal montoPrestamo) {
         PartidaContratoRequest pr = new PartidaContratoRequest();
         pr.setIdTipoPrenda(4);
         pr.setDescripcion("Pulsera de plata");
         pr.setLey(ley);
-        pr.setPesoGramos(pesoGramos);
+        pr.setPesoNeto(pesoNeto);
         pr.setPrecioXGramo(new BigDecimal("1234.00")); // spoofed: el servidor debe reemplazarlo
         pr.setAvaluoReal(avaluoRealSpoofed);
         pr.setMontoPrestamo(montoPrestamo);
@@ -185,14 +202,22 @@ class ContratoServiceTest {
         return p;
     }
 
-    /** Stubs necesarios para que crearContrato llegue hasta repository.save sin NPE. */
-    private void stubGuardadoExitoso() {
+    /**
+     * Stubs minimos de persistencia. Usar en partidas sin PlazoParametro resuelto (p. ej. alhajas),
+     * donde stubGuardadoExitoso dejaria el stub de calcularAvaluoContrato sin usar.
+     */
+    private void stubPersistencia() {
         when(contratoMapper.toResponse(any(Contrato.class))).thenAnswer(inv -> new ContratoResponse());
         when(repository.save(any(Contrato.class))).thenAnswer(inv -> {
             Contrato c = inv.getArgument(0);
             if (c.getId() == null) { c.setId(1L); }
             return c;
         });
+    }
+
+    /** Stubs necesarios para que crearContrato llegue hasta repository.save sin NPE. */
+    private void stubGuardadoExitoso() {
+        stubPersistencia();
         // buildPartida llama a calcularAvaluoContrato cuando parametro != null; el mock
         // devolveria null y crearContrato hace totalAvaluo.add(null) -> NPE. Devolver el monto tal cual
         // reproduce el comportamiento real con usaAvaluoReal=false / porcPrestamoSAvaluoReal=0 (D-07).
@@ -207,9 +232,108 @@ class ContratoServiceTest {
         return captor.getAllValues().get(0).getPartidas().get(0);
     }
 
+    private CatValorPrenda buildValorCatalogo(int valorId, int atributoId, TipoPrenda tipoPrenda) {
+        CatSubtipoPrenda subtipo = new CatSubtipoPrenda();
+        subtipo.setIdAtributo(atributoId);
+        subtipo.setTipoPrenda(tipoPrenda);
+
+        CatValorPrenda valor = new CatValorPrenda();
+        valor.setIdValorAtributo(valorId);
+        valor.setSubtipoPrenda(subtipo);
+        valor.setDescripcion("Anillo 14K");
+        return valor;
+    }
+
     // -----------------------------------------------------------------------
     // Tests
     // -----------------------------------------------------------------------
+
+    @Test
+    void crearContrato_vinculaValorDeCatalogoDelMismoTipo() {
+        ContratoRequest request = buildRequestBase();
+        PartidaContratoRequest partida = buildPartidaAlhaja(
+                new BigDecimal("100.00"), 14, "N",
+                BigDecimal.ONE, new BigDecimal("50.00"));
+        partida.setIdValorPrenda(25);
+        request.getPartidas().add(partida);
+
+        PlazoHechuraAlhaja tabla = new PlazoHechuraAlhaja();
+        tabla.setPrecioPrestamo(new BigDecimal("100.0000"));
+        when(plazoHechuraAlhajaRepository.findById(new PlazoHechuraAlhajaId(1, 1, 14, "N")))
+                .thenReturn(Optional.of(tabla));
+
+        TipoPrenda alhaja = tipoPrendaRepository.findById(1).orElseThrow();
+        CatValorPrenda valorCatalogo = buildValorCatalogo(25, 4, alhaja);
+        when(catValorPrendaRepository.findById(25)).thenReturn(Optional.of(valorCatalogo));
+        when(contratoMapper.toResponse(any(Contrato.class))).thenReturn(new ContratoResponse());
+        when(repository.save(any(Contrato.class))).thenAnswer(inv -> {
+            Contrato contrato = inv.getArgument(0);
+            if (contrato.getId() == null) contrato.setId(1L);
+            return contrato;
+        });
+
+        contratoService.crearContrato(request, "cajero1");
+
+        assertThat(capturarPartidaGuardada().getValorPrenda()).isSameAs(valorCatalogo);
+    }
+
+    @Test
+    void crearContrato_partidaAlhaja_persisteDescripcionLibreDeLaPartida() {
+        // Given: descripcion libre explicitamente distinta al nombre del catalogo, para probar
+        // que ContratoService.buildPartida ya conecta pr.getDescripcion() -> partida.setDescripcion()
+        // sin depender de ningun valor de catalogo (RESEARCH.md riesgo 1, ya resuelto en codigo).
+        ContratoRequest request = buildRequestBase();
+        PartidaContratoRequest partida = buildPartidaAlhaja(
+                new BigDecimal("100.00"), 14, "N",
+                BigDecimal.ONE, new BigDecimal("50.00"));
+        partida.setDescripcion("Anillo tallado a mano, iniciales J.M.");
+        request.getPartidas().add(partida);
+
+        PlazoHechuraAlhaja tabla = new PlazoHechuraAlhaja();
+        tabla.setPrecioPrestamo(new BigDecimal("100.0000"));
+        when(plazoHechuraAlhajaRepository.findById(new PlazoHechuraAlhajaId(1, 1, 14, "N")))
+                .thenReturn(Optional.of(tabla));
+        // No se usa stubGuardadoExitoso() aqui: esa stubea plazoService.calcularAvaluoContrato,
+        // que solo se invoca cuando parametro != null (partidas Plata). Esta partida es Alhaja
+        // (parametro null), y ese stub quedaria sin uso -> Mockito UnnecessaryStubbingException.
+        when(contratoMapper.toResponse(any(Contrato.class))).thenReturn(new ContratoResponse());
+        when(repository.save(any(Contrato.class))).thenAnswer(inv -> {
+            Contrato contrato = inv.getArgument(0);
+            if (contrato.getId() == null) contrato.setId(1L);
+            return contrato;
+        });
+
+        contratoService.crearContrato(request, "cajero1");
+
+        assertThat(capturarPartidaGuardada().getDescripcion())
+                .isEqualTo("Anillo tallado a mano, iniciales J.M.");
+    }
+
+    @Test
+    void crearContrato_rechazaValorDeCatalogoDeOtroTipo() {
+        ContratoRequest request = buildRequestBase();
+        PartidaContratoRequest partida = buildPartidaAlhaja(
+                new BigDecimal("100.00"), 14, "N",
+                BigDecimal.ONE, new BigDecimal("50.00"));
+        partida.setIdValorPrenda(25);
+        request.getPartidas().add(partida);
+
+        PlazoHechuraAlhaja tabla = new PlazoHechuraAlhaja();
+        tabla.setPrecioPrestamo(new BigDecimal("100.0000"));
+        when(plazoHechuraAlhajaRepository.findById(new PlazoHechuraAlhajaId(1, 1, 14, "N")))
+                .thenReturn(Optional.of(tabla));
+
+        TipoPrenda varios = new TipoPrenda();
+        varios.setId(3);
+        varios.setTipo("VARIOS");
+        when(catValorPrendaRepository.findById(25))
+                .thenReturn(Optional.of(buildValorCatalogo(25, 6, varios)));
+
+        BadRequestException error = assertThrows(BadRequestException.class,
+                () -> contratoService.crearContrato(request, "cajero1"));
+
+        assertThat(error.getMessage()).contains("no pertenece al tipo de prenda");
+    }
 
     @Test
     void crearContrato_partidaAlhaja_ignoraAvaluoRealDelCliente() {
@@ -491,5 +615,204 @@ class ContratoServiceTest {
         PartidaContrato partida = capturarPartidaGuardada();
         assertThat(partida.getMontoPrestamo()).isEqualByComparingTo("130.00");
         assertThat(partida.getAvaluoReal()).isEqualByComparingTo("130.00");
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests PESO NETO vs PESO TOTAL (confirmado con Jorge 2026-09-08)
+    //
+    // Una pieza de oro puede traer piedras o soldadura: el peso neto es solo el metal
+    // (y es el que se cobra), el peso total es lo que pesa fisicamente la pieza completa.
+    // -----------------------------------------------------------------------
+
+    /** Stub de la tabla de precios de oro para 14K hechura "N". */
+    private void stubTablaAlhaja(String precioPrestamo) {
+        PlazoHechuraAlhaja tabla = new PlazoHechuraAlhaja();
+        tabla.setPrecioPrestamo(new BigDecimal(precioPrestamo));
+        when(plazoHechuraAlhajaRepository.findById(new PlazoHechuraAlhajaId(1, 1, 14, "N")))
+                .thenReturn(Optional.of(tabla));
+    }
+
+    @Test
+    void crearContrato_partidaAlhaja_persistePesoNetoYPesoTotalPorSeparado() {
+        // Given: aretes de 2.5 g de los cuales solo 2 g son oro (ejemplo literal de Jorge)
+        ContratoRequest request = buildRequestBase();
+        PartidaContratoRequest partida = buildPartidaAlhaja(
+                new BigDecimal("200.00"), 14, "N",
+                new BigDecimal("2.0000"), new BigDecimal("200.00"));
+        partida.setPesoTotal(new BigDecimal("2.5000"));
+        request.getPartidas().add(partida);
+        stubTablaAlhaja("100.0000");
+        stubPersistencia();
+
+        // When
+        contratoService.crearContrato(request, "cajero1");
+
+        // Then: los dos pesos se guardan, y el avaluo sale del NETO (2 x 100 = 200, no 250)
+        PartidaContrato guardada = capturarPartidaGuardada();
+        assertThat(guardada.getPesoNeto()).isEqualByComparingTo("2.0000");
+        assertThat(guardada.getPesoTotal()).isEqualByComparingTo("2.5000");
+        assertThat(guardada.getAvaluoReal()).isEqualByComparingTo("200.00");
+    }
+
+    @Test
+    void crearContrato_partidaAlhaja_sinPesoTotal_loIgualaAlNeto() {
+        // Given: el usuario deja el peso total vacio -> la pieza se asume 100% metal
+        ContratoRequest request = buildRequestBase();
+        PartidaContratoRequest partida = buildPartidaAlhaja(
+                new BigDecimal("300.00"), 14, "N",
+                new BigDecimal("3.0000"), new BigDecimal("300.00"));
+        partida.setPesoTotal(null);
+        request.getPartidas().add(partida);
+        stubTablaAlhaja("100.0000");
+        stubPersistencia();
+
+        // When
+        contratoService.crearContrato(request, "cajero1");
+
+        // Then
+        assertThat(capturarPartidaGuardada().getPesoTotal()).isEqualByComparingTo("3.0000");
+    }
+
+    @Test
+    void crearContrato_partidaAlhaja_pesoTotalMenorAlNeto_lanzaBadRequest() {
+        // Given: peso total 1.5 g con peso neto 2 g -> fisicamente imposible
+        ContratoRequest request = buildRequestBase();
+        PartidaContratoRequest partida = buildPartidaAlhaja(
+                new BigDecimal("200.00"), 14, "N",
+                new BigDecimal("2.0000"), new BigDecimal("200.00"));
+        partida.setPesoTotal(new BigDecimal("1.5000"));
+        request.getPartidas().add(partida);
+        stubTablaAlhaja("100.0000");
+
+        // When / Then
+        BadRequestException ex = assertThrows(BadRequestException.class,
+                () -> contratoService.crearContrato(request, "cajero1"));
+        assertThat(ex.getMessage()).contains("no puede ser menor que el peso neto");
+    }
+
+    @Test
+    void crearContrato_partidaAlhaja_cantidadNoMultiplicaElPeso() {
+        // Given: 2 aretes con peso neto 2 g DEL LOTE (no 2 g cada uno). El prestamo debe salir
+        // sobre 2 g (200.00) y nunca sobre 4 g (400.00): cantidad es solo informativa.
+        ContratoRequest request = buildRequestBase();
+        PartidaContratoRequest partida = buildPartidaAlhaja(
+                new BigDecimal("200.00"), 14, "N",
+                new BigDecimal("2.0000"), new BigDecimal("200.00"));
+        partida.setCantidad(2);
+        request.getPartidas().add(partida);
+        stubTablaAlhaja("100.0000");
+        stubPersistencia();
+
+        // When
+        contratoService.crearContrato(request, "cajero1");
+
+        // Then
+        PartidaContrato guardada = capturarPartidaGuardada();
+        assertThat(guardada.getCantidad()).isEqualTo(2);
+        assertThat(guardada.getAvaluoReal()).isEqualByComparingTo("200.00");
+        assertThat(guardada.getMontoPrestamo()).isEqualByComparingTo("200.00");
+    }
+
+    @Test
+    void crearContrato_partidaPlata_persistePesoNetoYPesoTotalPorSeparado() {
+        // Given: pulsera de plata con dije de resina: 10 g de plata dentro de 12 g totales
+        ContratoRequest request = buildRequestBase();
+        PartidaContratoRequest partida = buildPartidaPlata(
+                new BigDecimal("999999.00"), new BigDecimal("925"),
+                new BigDecimal("10.0000"), new BigDecimal("65.00"));
+        partida.setPesoTotal(new BigDecimal("12.0000"));
+        request.getPartidas().add(partida);
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(1L, 4, 1))
+                .thenReturn(Optional.of(buildParametroPlata(
+                        new BigDecimal("6.5"), new BigDecimal("5.0"), new BigDecimal("50"))));
+        stubGuardadoExitoso();
+
+        // When
+        contratoService.crearContrato(request, "cajero1");
+
+        // Then: avaluo = 10 x 6.5 = 65.00, calculado sobre el neto y no sobre los 12 g
+        PartidaContrato guardada = capturarPartidaGuardada();
+        assertThat(guardada.getPesoNeto()).isEqualByComparingTo("10.0000");
+        assertThat(guardada.getPesoTotal()).isEqualByComparingTo("12.0000");
+        assertThat(guardada.getAvaluoReal()).isEqualByComparingTo("65.00");
+    }
+
+    // =========================================================================
+    // Snapshot de calculo (changeset 026, Pasada 1) — se persiste al crear el contrato
+    // aunque en Pasada 1 el motor todavia no lo consume. Verificar aqui evita que la
+    // Pasada 2 empiece con contratos sin snapshot y regresiones por fallback a config.
+    // =========================================================================
+
+    @Test
+    void crearContrato_snapshot_persiste_los_7_campos_del_plazoParametro_e_iva_vigente() {
+        // Given: partida de plata con un PlazoParametro completo (los 7 campos)
+        ContratoRequest request = buildRequestBase();
+        PartidaContratoRequest partida = buildPartidaPlata(
+                new BigDecimal("100.00"), new BigDecimal("925"),
+                new BigDecimal("10.0000"), new BigDecimal("50.00"));
+        request.getPartidas().add(partida);
+
+        PlazoParametro param = new PlazoParametro();
+        param.setLey925(new BigDecimal("6.5"));
+        param.setLey725(new BigDecimal("5.0"));
+        param.setPorcPrestamoSAvaluo(new BigDecimal("50"));
+        // Los 6 campos que van al snapshot (ademas del IVA que viene del cache mockeado a 16.00)
+        param.setPorcInteres(new BigDecimal("3.0000"));
+        param.setPorcAlmacen(new BigDecimal("2.0000"));
+        param.setPorcGastosAdmin(new BigDecimal("1.0000"));
+        param.setPorcSancionSemanal(new BigDecimal("2.5000"));
+        param.setDiasGraciaSinInteres(3);
+        param.setAplicarSancionPorPeriodo(true);
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(1L, 4, 1))
+                .thenReturn(Optional.of(param));
+        stubGuardadoExitoso();
+
+        // When
+        contratoService.crearContrato(request, "cajero1");
+
+        // Then: los 7 campos snap_* del contrato quedan poblados con la config vigente
+        ArgumentCaptor<Contrato> captor = ArgumentCaptor.forClass(Contrato.class);
+        org.mockito.Mockito.verify(repository, org.mockito.Mockito.atLeastOnce()).save(captor.capture());
+        Contrato guardado = captor.getAllValues().get(0);
+
+        assertThat(guardado.getSnapPorcSancionSemanal()).isEqualByComparingTo("2.5000");
+        assertThat(guardado.getSnapDiasGraciaSancion()).isEqualTo(3);
+        assertThat(guardado.getSnapAplicarSancionPeriodo()).isTrue();
+        assertThat(guardado.getSnapIvaPorcentaje()).isEqualByComparingTo("16.00");
+        assertThat(guardado.getSnapPorcInteres()).isEqualByComparingTo("3.0000");
+        assertThat(guardado.getSnapPorcAlmacen()).isEqualByComparingTo("2.0000");
+        assertThat(guardado.getSnapPorcGastosAdmin()).isEqualByComparingTo("1.0000");
+    }
+
+    @Test
+    void crearContrato_snapshot_sin_plazoParametro_guarda_solo_iva_y_deja_6_campos_null() {
+        // Given: partida ALHAJA con precio configurado pero SIN PlazoParametro
+        // (setUp devuelve Optional.empty para plazoParametroRepository.find de idPlazo=1/tipo=1).
+        ContratoRequest request = buildRequestBase();
+        request.getPartidas().add(buildPartidaAlhaja(
+                new BigDecimal("1000.00"), 14, "N",
+                new BigDecimal("5.0000"), new BigDecimal("500.00")));
+        PlazoHechuraAlhaja tabla = new PlazoHechuraAlhaja();
+        tabla.setPrecioPrestamo(new BigDecimal("100.0000"));
+        when(plazoHechuraAlhajaRepository.findById(new PlazoHechuraAlhajaId(1, 1, 14, "N")))
+                .thenReturn(Optional.of(tabla));
+        stubPersistencia();
+
+        // When
+        contratoService.crearContrato(request, "cajero1");
+
+        // Then: sin PlazoParametro los 6 campos de plazo quedan null (el motor de Pasada 2
+        // hara fallback a config vigente), pero el snapshot del IVA sí se guarda del cache.
+        ArgumentCaptor<Contrato> captor = ArgumentCaptor.forClass(Contrato.class);
+        org.mockito.Mockito.verify(repository, org.mockito.Mockito.atLeastOnce()).save(captor.capture());
+        Contrato guardado = captor.getAllValues().get(0);
+
+        assertThat(guardado.getSnapPorcSancionSemanal()).isNull();
+        assertThat(guardado.getSnapDiasGraciaSancion()).isNull();
+        assertThat(guardado.getSnapAplicarSancionPeriodo()).isNull();
+        assertThat(guardado.getSnapPorcInteres()).isNull();
+        assertThat(guardado.getSnapPorcAlmacen()).isNull();
+        assertThat(guardado.getSnapPorcGastosAdmin()).isNull();
+        assertThat(guardado.getSnapIvaPorcentaje()).isEqualByComparingTo("16.00");
     }
 }

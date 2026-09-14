@@ -8,6 +8,10 @@ import com.ignis.prestamil.repository.*;
 import com.ignis.prestamil.request.ContratoRequest;
 import com.ignis.prestamil.request.PartidaContratoRequest;
 import com.ignis.prestamil.response.ContratoResponse;
+import com.ignis.prestamil.service.calculo.CalculoContratoService;
+import com.ignis.prestamil.service.calculo.DesgloseCobro;
+import com.ignis.prestamil.service.calculo.ParametrosCalculo;
+import com.ignis.prestamil.service.calculo.ParametrosSistemaCache;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,14 +38,16 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
     private final PlazoParametroRepository plazoParametroRepository;
     private final PlazoService plazoService;
     private final PlazoHechuraAlhajaRepository plazoHechuraAlhajaRepository;
+    private final ParametrosSistemaCache parametrosSistemaCache;
+    private final CalculoContratoService calculoContratoService;
 
     private static final List<Integer> KILATAJES_COCAE = List.of(6, 8, 10, 12, 14, 18, 21, 24);
     private static final BigDecimal LEY_925 = new BigDecimal("925");
     // Ley de plata baja: COCAE la maneja como 720 (fineness estándar 0.720). La columna de precio
     // sigue llamándose ley_725 por compatibilidad; almacena el precio por gramo de esta ley.
     private static final BigDecimal LEY_720 = new BigDecimal("720");
-    // IVA sobre el interés total. COCAE aplica 16% y lo TRUNCA a 2 decimales (verificado con capturas).
-    private static final BigDecimal IVA_PORCENTAJE = new BigDecimal("16");
+    // (IVA_PORCENTAJE eliminado en Pasada 2: el IVA lo lee CalculoContratoService del snapshot del
+    // contrato o del cache de parametros_sistema con fallback 16 + log.warn.)
     private static final String MSG_PLATA_SIN_CONFIG =
             "No hay configuración de plazo para plata (plazo/tipo de prenda/sucursal); "
             + "configure el precio por gramo en Plazos y Periodos";
@@ -56,7 +62,9 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
                            ContratoMapper contratoMapper,
                            PlazoParametroRepository plazoParametroRepository,
                            PlazoService plazoService,
-                           PlazoHechuraAlhajaRepository plazoHechuraAlhajaRepository) {
+                           PlazoHechuraAlhajaRepository plazoHechuraAlhajaRepository,
+                           ParametrosSistemaCache parametrosSistemaCache,
+                           CalculoContratoService calculoContratoService) {
         super(repository);
         this.clienteRepository = clienteRepository;
         this.plazoRepository = plazoRepository;
@@ -68,6 +76,8 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
         this.plazoParametroRepository = plazoParametroRepository;
         this.plazoService = plazoService;
         this.plazoHechuraAlhajaRepository = plazoHechuraAlhajaRepository;
+        this.parametrosSistemaCache = parametrosSistemaCache;
+        this.calculoContratoService = calculoContratoService;
     }
 
     /**
@@ -148,6 +158,14 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
         }
         contrato.setPartidas(partidas);
 
+        // 8.b Snapshot de los 7 parametros de calculo vigentes (changeset 026, requisito PROFECO):
+        // congelan los porcentajes/gracia/IVA al momento de firmar para que la reimpresion futura
+        // del PDF y el cobro en caja se computen con los mismos numeros originales aunque la config
+        // vigente cambie despues. El PlazoParametro representativo es el de la primera partida
+        // (misma convencion que MovimientoContratoService.obtenerParametro); Pasada 1 solo lo persiste,
+        // Pasada 2 lo consumira desde CalculoContratoService.
+        aplicarSnapshotCalculo(contrato, partidas, plazo.getId(), sucursalId);
+
         // 9. Primera persistencia para obtener el ID generado
         Contrato guardado = repository.save(contrato);
 
@@ -219,6 +237,33 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
     // Helpers privados
     // =========================================================================
 
+    /**
+     * Copia al contrato los 7 parametros de calculo vigentes (PlazoParametro de la primera partida +
+     * IVA) para que la reimpresion futura del PDF y el cobro en caja no cambien de monto si la
+     * configuracion vigente se modifica despues (requisito PROFECO, changeset 026). Si la primera
+     * partida no tiene PlazoParametro configurado, se dejan en null los 6 campos de plazo (fallback
+     * a config vigente en el motor) pero SI se persiste el snapshot del IVA vigente.
+     */
+    private void aplicarSnapshotCalculo(Contrato contrato, List<PartidaContrato> partidas,
+                                         Long plazoId, Integer sucursalId) {
+        PlazoParametro representativo = null;
+        if (!partidas.isEmpty() && partidas.get(0).getTipoPrenda() != null) {
+            representativo = plazoParametroRepository
+                    .findByPlazoIdAndTipoPrendaIdAndSucursalId(
+                            plazoId, partidas.get(0).getTipoPrenda().getId(), sucursalId)
+                    .orElse(null);
+        }
+        if (representativo != null) {
+            contrato.setSnapPorcSancionSemanal(representativo.getPorcSancionSemanal());
+            contrato.setSnapDiasGraciaSancion(representativo.getDiasGraciaSinInteres());
+            contrato.setSnapAplicarSancionPeriodo(representativo.getAplicarSancionPorPeriodo());
+            contrato.setSnapPorcInteres(representativo.getPorcInteres());
+            contrato.setSnapPorcAlmacen(representativo.getPorcAlmacen());
+            contrato.setSnapPorcGastosAdmin(representativo.getPorcGastosAdmin());
+        }
+        contrato.setSnapIvaPorcentaje(parametrosSistemaCache.getIvaPorcentaje());
+    }
+
     private PartidaContrato buildPartida(PartidaContratoRequest pr, int numPartida,
                                          Long plazoId, Integer sucursalId) {
         TipoPrenda tipoPrenda = tipoPrendaRepository.findById(pr.getIdTipoPrenda())
@@ -275,8 +320,11 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
         partida.setTipoPrenda(tipoPrenda);
         partida.setDescripcion(pr.getDescripcion());
         partida.setClavePrenda(pr.getClavePrenda());
+        // cantidad es informativa: los pesos ya vienen como total del lote, así que NO se
+        // multiplica peso × cantidad en ningún punto del cálculo.
         partida.setCantidad(pr.getCantidad() != null ? pr.getCantidad() : 1);
-        partida.setPesoGramos(pr.getPesoGramos());
+        partida.setPesoNeto(pr.getPesoNeto());
+        partida.setPesoTotal(resolverPesoTotal(pr));
         partida.setKilataje(pr.getKilataje());
         partida.setLey(pr.getLey());
         partida.setHechura(pr.getHechura());
@@ -298,10 +346,48 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
             CatValorPrenda valorPrenda = catValorPrendaRepository.findById(pr.getIdValorPrenda())
                     .orElseThrow(() -> new ResourceNotFoundException(
                             "ValorPrenda no encontrado: " + pr.getIdValorPrenda()));
+            if (valorPrenda.getSubtipoPrenda() == null
+                    || valorPrenda.getSubtipoPrenda().getTipoPrenda() == null
+                    || !tipoPrenda.getId().equals(
+                            valorPrenda.getSubtipoPrenda().getTipoPrenda().getId())) {
+                throw new BadRequestException(
+                        "El valor de catálogo seleccionado no pertenece al tipo de prenda de la partida");
+            }
             partida.setValorPrenda(valorPrenda);
         }
 
         return partida;
+    }
+
+    /**
+     * Resuelve el peso total (físico) que se persiste en la partida.
+     *
+     * Una pieza de oro o plata puede traer material que no es metal precioso: piedras,
+     * plástico o soldadura. El peso neto es solo el metal (y es el que se cobra); el peso
+     * total es lo que pesa físicamente la pieza completa, y es informativo para el cliente.
+     *
+     * Reglas (confirmadas con Jorge, 2026-09-08):
+     *   - Varios y Autos/Motos no se valúan por gramo: sin peso neto no hay peso total.
+     *   - Si el usuario no captura el total, se asume que la pieza es 100% metal.
+     *   - El total nunca puede ser menor que el neto: sería físicamente imposible.
+     *
+     * @param pr datos de la partida solicitada
+     * @return peso total a persistir, o null si la partida no se valúa por gramo
+     * @throws BadRequestException si el peso total capturado es menor que el peso neto
+     */
+    private BigDecimal resolverPesoTotal(PartidaContratoRequest pr) {
+        if (pr.getPesoNeto() == null) {
+            return null;
+        }
+        if (pr.getPesoTotal() == null) {
+            return pr.getPesoNeto();
+        }
+        if (pr.getPesoTotal().compareTo(pr.getPesoNeto()) < 0) {
+            throw new BadRequestException(String.format(
+                    "El peso total (%s g) no puede ser menor que el peso neto (%s g)",
+                    pr.getPesoTotal(), pr.getPesoNeto()));
+        }
+        return pr.getPesoTotal();
     }
 
     /**
@@ -314,7 +400,7 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
      *                   PlazoHechuraAlhajaId usa Integer, Plazo.id es Long)
      * @param sucursalId identificador de la sucursal
      * @return avalúo real calculado por el servidor, escala 2 (HALF_UP)
-     * @throws BadRequestException si el kilataje es 24K, no soportado, o falta peso/hechura
+     * @throws BadRequestException si el kilataje es 24K, no soportado, o falta peso neto/hechura
      * @throws ResourceNotFoundException si no existe tabla de precios para la celda
      */
     private BigDecimal calcularAvaluoRealAlhaja(PartidaContratoRequest pr, Long plazoId, Integer sucursalId) {
@@ -331,8 +417,8 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
         if (pr.getHechura() == null || pr.getHechura().isBlank()) {
             throw new BadRequestException("Hechura es requerida para partidas de tipo ALHAJA");
         }
-        if (pr.getPesoGramos() == null || pr.getPesoGramos().compareTo(BigDecimal.ZERO) <= 0) {
-            throw new BadRequestException("Peso en gramos debe ser mayor que cero para partidas ALHAJA");
+        if (pr.getPesoNeto() == null || pr.getPesoNeto().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BadRequestException("El peso neto debe ser mayor que cero para partidas ALHAJA");
         }
         String hechura = pr.getHechura();
         PlazoHechuraAlhajaId id = new PlazoHechuraAlhajaId(Math.toIntExact(plazoId), sucursalId, kilataje, hechura);
@@ -341,7 +427,7 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
                         "No hay precio configurado para plazo=" + plazoId + ", kilataje=" + kilataje
                         + ", hechura=" + hechura));
         return tabla.getPrecioPrestamo()
-                .multiply(pr.getPesoGramos())
+                .multiply(pr.getPesoNeto())
                 .setScale(2, RoundingMode.HALF_UP);
     }
 
@@ -408,11 +494,11 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
      * espíritu que calcularAvaluoRealAlhaja para oro.
      *
      * Fórmula (D-01, confirmada con Jorge 2026-08-06):
-     *     avaluo = pesoGramos x precioGramoDeEsaLey
+     *     avaluo = pesoNeto x precioGramoDeEsaLey
      * No hay ninguna división por 1000 ni derivación desde precio de onza: ley925/ley725
      * ya son precios finales por gramo capturados manualmente en Plazos y Periodos.
      *
-     * @param pr        datos de la partida solicitada (requiere ley y pesoGramos)
+     * @param pr        datos de la partida solicitada (requiere ley y pesoNeto)
      * @param parametro parámetros del plazo ya resueltos en buildPartida (puede ser null)
      * @return avalúo real calculado por el servidor, escala 2 (HALF_UP)
      * @throws BadRequestException si falta parametro, peso <= 0, falta la ley,
@@ -422,12 +508,12 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
         if (parametro == null) {
             throw new BadRequestException(MSG_PLATA_SIN_CONFIG);
         }
-        if (pr.getPesoGramos() == null || pr.getPesoGramos().compareTo(BigDecimal.ZERO) <= 0) {
-            throw new BadRequestException("Peso en gramos debe ser mayor que cero para partidas PLATA");
+        if (pr.getPesoNeto() == null || pr.getPesoNeto().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BadRequestException("El peso neto debe ser mayor que cero para partidas PLATA");
         }
         BigDecimal precioGramo = resolverPrecioGramoLey(pr.getLey(), parametro);
         return precioGramo
-                .multiply(pr.getPesoGramos())
+                .multiply(pr.getPesoNeto())
                 .setScale(2, RoundingMode.HALF_UP);
     }
 
@@ -475,45 +561,33 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
                     contrato.getSucursalId()).orElse(null);
         }
         BigDecimal prestamo = contrato.getMontoPrestamo();
-        BigDecimal cien = new BigDecimal("100");
-        BigDecimal porcInteres = parametro != null && parametro.getPorcInteres() != null
-                ? parametro.getPorcInteres() : BigDecimal.ZERO;
-        BigDecimal porcAlmacen = parametro != null && parametro.getPorcAlmacen() != null
-                ? parametro.getPorcAlmacen() : BigDecimal.ZERO;
-        BigDecimal porcGastos = parametro != null && parametro.getPorcGastosAdmin() != null
-                ? parametro.getPorcGastosAdmin() : BigDecimal.ZERO;
-        // Total interés = interés + almacén + gastos admin. COCAE lo muestra sumado; el campo
-        // porc_interes_total es redundante y puede quedar en 0, así que lo DERIVAMOS de los componentes.
-        BigDecimal porcTotal = porcInteres.add(porcAlmacen).add(porcGastos);
 
-        // Montos base por periodo (sin redondear, escala 6)
-        BigDecimal interesPer  = prestamo.multiply(porcInteres).divide(cien, 6, RoundingMode.HALF_UP);
-        BigDecimal almacenPer  = prestamo.multiply(porcAlmacen).divide(cien, 6, RoundingMode.HALF_UP);
-        BigDecimal gastosPer   = prestamo.multiply(porcGastos).divide(cien, 6, RoundingMode.HALF_UP);
-        BigDecimal totalIntPer = prestamo.multiply(porcTotal).divide(cien, 6, RoundingMode.HALF_UP);
+        // Pasada 2: resolver parametros efectivos una vez (snapshot > vigente) y delegar el calculo
+        // por fila al motor unico. Para filas NORMALES pasamos la misma fecha como vencimiento y como
+        // pago -> atraso=0 y sancion=0 en toda la amortizacion (la sancion solo aplica en filas
+        // extemporaneas del PDF y en el cobro real de refrendar). Usamos fechaApertura como fecha segura
+        // (nunca null porque la entidad la exige) en vez de fechaVencimiento que si podria serlo en
+        // fixtures antiguos.
+        ParametrosCalculo pc = calculoContratoService.resolverParametros(contrato, parametro);
+        LocalDate fechaSinAtraso = contrato.getFechaApertura().toLocalDate();
 
         List<com.ignis.prestamil.response.VencimientoResponse> filas = new ArrayList<>();
         LocalDate base = contrato.getFechaApertura().toLocalDate();
         for (int n = 1; n <= plazo.getNumeroPeriodos(); n++) {
-            BigDecimal factor = new BigDecimal(n);
-            BigDecimal interes  = interesPer.multiply(factor).setScale(2, RoundingMode.HALF_UP);
-            BigDecimal almacen  = almacenPer.multiply(factor).setScale(2, RoundingMode.HALF_UP);
-            BigDecimal gastos   = gastosPer.multiply(factor).setScale(2, RoundingMode.HALF_UP);
-            BigDecimal totalInt = totalIntPer.multiply(factor).setScale(2, RoundingMode.HALF_UP);
-            // IVA: COCAE lo TRUNCA a 2 decimales (p.ej. 22.05 x 16% = 3.528 -> 3.52)
-            BigDecimal iva = totalIntPer.multiply(factor).multiply(IVA_PORCENTAJE)
-                    .divide(cien, 2, RoundingMode.DOWN);
-            BigDecimal desempeno = prestamo.add(totalInt).add(iva).setScale(2, RoundingMode.HALF_UP);
+            DesgloseCobro d = calculoContratoService.calcularCobroPeriodo(
+                    prestamo, pc, fechaSinAtraso, fechaSinAtraso, n);
+            BigDecimal totalInt = d.interes().add(d.almacen()).add(d.gastosAdmin());
+            BigDecimal desempeno = prestamo.add(totalInt).add(d.iva()).setScale(2, RoundingMode.HALF_UP);
 
             com.ignis.prestamil.response.VencimientoResponse v =
                     new com.ignis.prestamil.response.VencimientoResponse();
             v.setPeriodo(n);
             v.setFecha(base.plusDays((long) plazo.getDiasPorPeriodo() * n));
-            v.setInteres(interes);
-            v.setAlmacen(almacen);
-            v.setGastosAdmin(gastos);
+            v.setInteres(d.interes());
+            v.setAlmacen(d.almacen());
+            v.setGastosAdmin(d.gastosAdmin());
             v.setTotalInteres(totalInt);
-            v.setIva(iva);
+            v.setIva(d.iva());
             v.setDesempeno(desempeno);
             v.setTotal(desempeno);
             filas.add(v);

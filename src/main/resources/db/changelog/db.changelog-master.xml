@@ -27,5 +27,9 @@
     <include file="db/changelog/changes/020-restaurar-aumento-plazos.sql"/>
     <include file="db/changelog/changes/021-eliminar-menu-parametros-prestamo.sql"/>
     <include file="db/changelog/changes/022-sucursal-horario-atencion.sql"/>
+    <include file="db/changelog/changes/023-cat-valor-prenda-clave-alfanumerica.sql"/>
+    <include file="db/changelog/changes/024-cat-valor-prenda-descripcion-nullable.sql"/>
+    <include file="db/changelog/changes/025-partida-contrato-peso-neto.sql"/>
+    <include file="db/changelog/changes/026-contrato-snapshot-calculo.sql"/>
 
 </databaseChangeLog>

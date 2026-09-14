@@ -67,7 +67,8 @@ public class ContratoMapper {
         r.setClavePrenda(p.getClavePrenda());
         r.setDescripcion(p.getDescripcion());
         r.setCantidad(p.getCantidad());
-        r.setPesoGramos(p.getPesoGramos());
+        r.setPesoNeto(p.getPesoNeto());
+        r.setPesoTotal(p.getPesoTotal());
         r.setKilataje(p.getKilataje());
         r.setLey(p.getLey());
         r.setHechura(p.getHechura());

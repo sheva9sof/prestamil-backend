@@ -41,8 +41,24 @@ public class PartidaContrato {
     @Column(name = "cantidad", nullable = false)
     private Integer cantidad = 1;
 
-    @Column(name = "peso_gramos", precision = 10, scale = 4)
-    private BigDecimal pesoGramos;
+    /**
+     * Peso del metal precioso en gramos (oro o plata puro, sin piedras ni soldadura).
+     * Es el ÚNICO peso que entra en el cálculo de avalúo y préstamo.
+     * Cuando la partida agrupa varias piezas (cantidad > 1) es el peso del LOTE completo,
+     * no el unitario: el sistema nunca multiplica peso × cantidad.
+     * NULL para Varios y Autos/Motos, que no se valúan por gramo.
+     */
+    @Column(name = "peso_neto", precision = 10, scale = 4)
+    private BigDecimal pesoNeto;
+
+    /**
+     * Peso físico de la pieza completa en gramos, incluyendo piedras, plástico y soldadura.
+     * Es informativo (para que el cliente sepa cuánto pesa realmente lo que empeña) y
+     * NUNCA participa en el cálculo. Siempre {@code >= pesoNeto}; si el usuario no lo
+     * captura, el servidor lo iguala al neto. NULL para Varios y Autos/Motos.
+     */
+    @Column(name = "peso_total", precision = 10, scale = 4)
+    private BigDecimal pesoTotal;
 
     @Column(name = "kilataje")
     private Integer kilataje;

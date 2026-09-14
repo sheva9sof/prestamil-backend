@@ -16,7 +16,13 @@ public class PartidaContratoResponse {
     private String clavePrenda;
     private String descripcion;
     private Integer cantidad;
-    private BigDecimal pesoGramos;
+
+    /** Peso del metal precioso (gramos). Es el que se usó para calcular avalúo y préstamo. */
+    private BigDecimal pesoNeto;
+
+    /** Peso físico de la pieza completa (gramos), incluyendo piedras y soldadura. Informativo. */
+    private BigDecimal pesoTotal;
+
     private Integer kilataje;
     private BigDecimal ley;
     private String hechura;
