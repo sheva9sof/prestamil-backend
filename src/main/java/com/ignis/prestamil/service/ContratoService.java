@@ -609,7 +609,7 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
         for (int n = 1; n <= plazo.getNumeroPeriodos(); n++) {
             DesgloseCobro d = calculoContratoService.calcularCobroPeriodo(
                     prestamo, pc, fechaSinAtraso, fechaSinAtraso, n);
-            BigDecimal totalInt = d.interes().add(d.almacen()).add(d.gastosAdmin());
+            BigDecimal totalInt = d.interesTotal();
             BigDecimal desempeno = prestamo.add(totalInt).add(d.iva()).setScale(2, RoundingMode.HALF_UP);
 
             com.ignis.prestamil.response.VencimientoResponse v =
@@ -618,7 +618,6 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
             v.setFecha(base.plusDays((long) plazo.getDiasPorPeriodo() * n));
             v.setInteres(d.interes());
             v.setAlmacen(d.almacen());
-            v.setGastosAdmin(d.gastosAdmin());
             v.setTotalInteres(totalInt);
             v.setIva(d.iva());
             v.setDesempeno(desempeno);

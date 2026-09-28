@@ -8,10 +8,16 @@ import com.ignis.prestamil.repository.MovimientoContratoRepository;
 import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.TurnoRepository;
 import com.ignis.prestamil.repository.UsuarioRepository;
+import com.ignis.prestamil.request.CotizacionRequest;
 import com.ignis.prestamil.request.RefrendoRequest;
+import com.ignis.prestamil.response.CotizacionMovimientoResponse;
 import com.ignis.prestamil.response.MovimientoResponse;
 import com.ignis.prestamil.service.calculo.CalculoContratoService;
+import com.ignis.prestamil.service.calculo.CotizacionMovimiento;
 import com.ignis.prestamil.service.calculo.DesgloseCobro;
+import com.ignis.prestamil.service.calculo.EstatusContratoResolver;
+import com.ignis.prestamil.service.calculo.ParametrosCalculo;
+import com.ignis.prestamil.service.calculo.SituacionPeriodos;
 import com.ignis.prestamil.util.Constantes;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -22,6 +28,7 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Gestiona los movimientos de un contrato: refrendos (normales y extemporáneos),
@@ -94,9 +101,9 @@ public class MovimientoContratoService {
         DesgloseCobro d = calculoContratoService.calcularCobroPeriodo(
                 contrato, param, LocalDate.now(), 1);
 
-        // "interes" en MovimientoContrato es historicamente el interes total (interes + almacen + gastos):
-        // no hay columnas separadas para almacen/gastos en la tabla. Preservamos esa semantica sumandolos.
-        BigDecimal interesTotal = d.interes().add(d.almacen()).add(d.gastosAdmin());
+        // "interes" en MovimientoContrato es el interes total (interes + almacen): no hay columna separada
+        // para el almacenaje. Los gastos admin ya no se cobran por periodo (GAP-09).
+        BigDecimal interesTotal = d.interesTotal();
         BigDecimal sancion = d.sancion();
         int semanasVencidas = d.semanasVencidas();
 
@@ -203,6 +210,38 @@ public class MovimientoContratoService {
     }
 
     /**
+     * Cotiza una operación sobre el contrato en la fecha del servidor, sin persistir nada. Valida que
+     * la operación esté entre las acciones disponibles del estatus actual (RN-16).
+     *
+     * @param request contrato, operación y, según el caso, periodos o abono a capital
+     * @return CotizacionMovimientoResponse con desglose, fechas nuevas y acciones disponibles
+     * @throws BadRequestException si la operación no está disponible o sus datos no son válidos
+     */
+    @Transactional(readOnly = true)
+    public CotizacionMovimientoResponse cotizar(CotizacionRequest request) {
+        Contrato contrato = contratoRepository.findById(request.getContratoId())
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Contrato no encontrado: " + request.getContratoId()));
+        ParametrosCalculo p = calculoContratoService.resolverParametros(contrato, obtenerParametro(contrato));
+        // La fecha de operación es siempre la del servidor
+        LocalDate hoy = LocalDate.now();
+
+        // Validar la operación contra la matriz de estatus antes de calcular
+        EstatusOperativo estatus = EstatusContratoResolver.estatusDerivado(contrato, p.diasGraciaSancion(), hoy);
+        int transcurridos = calculoContratoService.situacion(contrato, p, hoy).periodosTranscurridos();
+        Set<AccionContrato> acciones = EstatusContratoResolver.accionesDisponibles(estatus, transcurridos);
+        AccionContrato accion = EstatusContratoResolver.accionPara(request.getTipoOperacion(), estatus);
+        if (!acciones.contains(accion)) {
+            throw new BadRequestException(
+                    "La operación " + accion + " no está disponible para un contrato " + estatus);
+        }
+
+        CotizacionMovimiento c = calculoContratoService.cotizar(contrato, p, request.getTipoOperacion(),
+                hoy, request.getPeriodos(), request.getAbonoCapital());
+        return toCotizacionResponse(contrato, estatus, acciones, c);
+    }
+
+    /**
      * Lista los movimientos de un contrato en orden cronológico.
      *
      * @param contratoId identificador del contrato
@@ -258,6 +297,57 @@ public class MovimientoContratoService {
         mov.setFechaContratoNueva(contrato.getFechaContrato());
         mov.setFechaVencNueva(contrato.getFechaVencimiento());
         mov.setEstatusNuevo(contrato.getEstatus());
+    }
+
+    private CotizacionMovimientoResponse toCotizacionResponse(Contrato contrato, EstatusOperativo estatus,
+                                                              Set<AccionContrato> acciones,
+                                                              CotizacionMovimiento c) {
+        SituacionPeriodos s = c.situacion();
+        DesgloseCobro d = c.desglose();
+        CotizacionMovimientoResponse r = new CotizacionMovimientoResponse();
+        r.setContratoId(contrato.getId());
+        r.setFolio(contrato.getFolio());
+        r.setTipoOperacion(c.operacion());
+        r.setTipoMovimiento(c.tipoMovimiento());
+
+        r.setEstatusActual(estatus);
+        r.setAccionesDisponibles(acciones);
+        r.setFechaContrato(contrato.getFechaContrato());
+        r.setFechaVencimiento(contrato.getFechaVencimiento());
+        r.setSaldoCapital(contrato.getSaldoCapital());
+
+        r.setDiasAtraso(s.diasAtraso());
+        r.setDiasGraciaUsados(s.diasGraciaUsados());
+        r.setPeriodosTranscurridos(s.periodosTranscurridos());
+        r.setPeriodosNormales(s.periodosNormales());
+        r.setPeriodosExtemporaneos(s.periodosExtemporaneos());
+        r.setPeriodosMaximos(c.periodosMaximos());
+        r.setPeriodosAplicados(c.periodosAplicados());
+        r.setPeriodosNormalesAplicados(c.periodosNormalesAplicados());
+        r.setPeriodosExtemporaneosAplicados(c.periodosExtemporaneosAplicados());
+        r.setSemanasSancion(d.semanasVencidas());
+
+        r.setInteresPorPeriodo(c.interesPorPeriodo());
+        r.setInteres(d.interes());
+        r.setAlmacen(d.almacen());
+        r.setInteresTotal(d.interesTotal());
+        r.setPorcSancionSemanal(c.parametros().porcSancionSemanal());
+        r.setSancion(d.sancion());
+        r.setDescuento(c.descuento());
+        r.setSubtotal(d.baseIva());
+        r.setPorcIva(c.parametros().porcIva());
+        r.setIva(d.iva());
+        r.setAbonoCapital(c.abonoCapital());
+        r.setCapital(c.capital());
+        r.setTotal(c.total());
+
+        r.setSaldoNuevo(c.saldoNuevo());
+        r.setFechaContratoNueva(c.fechaContratoNueva());
+        r.setFechaVencimientoNueva(c.fechaVencimientoNueva());
+        r.setFechaComercializacionNueva(c.fechaComercializacionNueva());
+        r.setEstatusNuevo(c.estatusNuevo());
+        r.setAdvertencias(c.advertencias());
+        return r;
     }
 
     private MovimientoResponse toResponse(MovimientoContrato m, Contrato contrato) {

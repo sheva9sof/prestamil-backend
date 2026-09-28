@@ -10,12 +10,14 @@ import java.math.BigDecimal;
  *
  * @param porcInteres         porcentaje de interes por periodo
  * @param porcAlmacen         porcentaje de almacen por periodo
- * @param porcGastosAdmin     porcentaje de gastos administrativos por periodo
- * @param porcSancionSemanal  porcentaje de sancion por semana vencida (sobre el prestamo)
- * @param diasGraciaSancion   dias de tolerancia antes de que aplique la sancion (equivale al mal-nombrado
- *                            {@code dias_gracia_sin_interes} de PlazoParametro; ver comentario ahi)
+ * @param porcGastosAdmin     porcentaje de gastos administrativos; solo se imprime en el contrato
+ *                            (clausula 11f y CAT), NO se cobra por periodo (GAP-09)
+ * @param porcSancionSemanal  porcentaje de sancion por semana vencida (sobre el saldo capital)
+ * @param diasGraciaSancion   dias de gracia (D.G.S.C. de COCAE, el mal-nombrado {@code dias_gracia_sin_interes}
+ *                            de PlazoParametro): si se paga dentro de ellos no hay sancion (RPG); rebasados,
+ *                            NO se descuentan del atraso (RN-05)
  * @param aplicarSancion      si {@code false}, la sancion siempre es 0 sin importar el atraso
- * @param porcIva             porcentaje de IVA a aplicar sobre (interes + sancion + almacen + gastos)
+ * @param porcIva             porcentaje de IVA a aplicar sobre (interes + almacen + sancion)
  */
 public record ParametrosCalculo(
         BigDecimal porcInteres,

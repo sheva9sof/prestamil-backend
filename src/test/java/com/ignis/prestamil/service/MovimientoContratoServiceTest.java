@@ -1,12 +1,18 @@
 package com.ignis.prestamil.service;
 
+import com.ignis.prestamil.exception.BadRequestException;
+import com.ignis.prestamil.exception.ResourceNotFoundException;
+import com.ignis.prestamil.model.AccionContrato;
 import com.ignis.prestamil.model.Contrato;
 import com.ignis.prestamil.model.EstatusContrato;
+import com.ignis.prestamil.model.EstatusOperativo;
+import com.ignis.prestamil.model.EstatusPartida;
 import com.ignis.prestamil.model.MovimientoContrato;
 import com.ignis.prestamil.model.PartidaContrato;
 import com.ignis.prestamil.model.Plazo;
 import com.ignis.prestamil.model.PlazoParametro;
 import com.ignis.prestamil.model.TipoMovimiento;
+import com.ignis.prestamil.model.TipoOperacion;
 import com.ignis.prestamil.model.TipoPrenda;
 import com.ignis.prestamil.model.Turno;
 import com.ignis.prestamil.model.Usuario;
@@ -15,11 +21,14 @@ import com.ignis.prestamil.repository.MovimientoContratoRepository;
 import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.TurnoRepository;
 import com.ignis.prestamil.repository.UsuarioRepository;
+import com.ignis.prestamil.request.CotizacionRequest;
 import com.ignis.prestamil.request.RefrendoRequest;
+import com.ignis.prestamil.response.CotizacionMovimientoResponse;
 import com.ignis.prestamil.response.MovimientoResponse;
 import com.ignis.prestamil.service.calculo.CalculoContratoService;
 import com.ignis.prestamil.service.calculo.ParametrosSistemaCache;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -40,7 +49,7 @@ import static org.mockito.Mockito.when;
 /**
  * Tests de MovimientoContratoService.refrendar tras la Pasada 2. Cubre:
  *   - Refrendo dentro de gracia: sancion=0, IVA sobre solo interes.
- *   - Refrendo extemporaneo: sancion>0, IVA sobre (interes + almacen + gastos + sancion).
+ *   - Refrendo extemporaneo: sancion>0, IVA sobre (interes + almacen + sancion); sin gastos admin.
  *   - El snapshot del contrato (changeset 026) tiene prioridad sobre la config vigente.
  *   - Consistencia con la fila extemporanea del PDF para plazo QUINCENAL (diasPorPeriodo=15,
  *     el caso donde ambos motores divergian antes).
@@ -168,12 +177,12 @@ class MovimientoContratoServiceTest {
         assertThat(mov.getSancion()).isEqualByComparingTo("0.00");
         assertThat(mov.getSemanasVencidas()).isZero();
 
-        // interes total (interes + almacen + gastos) = 1000 * (3+2+1)/100 = 60.00
-        assertThat(mov.getInteres()).isEqualByComparingTo("60.00");
+        // interes total (interes + almacen) = 1000 * (3+2)/100 = 50.00; gastos admin no se cobra (GAP-09)
+        assertThat(mov.getInteres()).isEqualByComparingTo("50.00");
 
-        // baseIva = 60 (sin sancion); IVA = 60 * 16/100 = 9.60
-        // total = 60 + 9.60 + abono(0) = 69.60
-        assertThat(mov.getMonto()).isEqualByComparingTo("69.60");
+        // baseIva = 50 (sin sancion); IVA = 50 * 16/100 = 8.00
+        // total = 50 + 8.00 + abono(0) = 58.00
+        assertThat(mov.getMonto()).isEqualByComparingTo("58.00");
         assertThat(resp.getSancion()).isEqualByComparingTo("0.00");
     }
 
@@ -183,7 +192,7 @@ class MovimientoContratoServiceTest {
 
     @Test
     void refrendo_extemporaneo10DiasAtraso_ivaAplicaSobreInteresMasSancion() {
-        // Given: 10 dias de atraso, gracia 2 -> diasAtraso=8 -> ceil(8/7)=2 semanas
+        // Given: 10 dias de atraso, gracia 2 rebasada -> ceil(10/7)=2 semanas
         Contrato c = contratoRef(10, 7);
         PlazoParametro pp = paramVigente();
         when(contratoRepository.findById(42L)).thenReturn(Optional.of(c));
@@ -200,14 +209,13 @@ class MovimientoContratoServiceTest {
 
         // sancion = 1000 * 2/100 * 2 = 40.00
         assertThat(mov.getSancion()).isEqualByComparingTo("40.00");
-        // interes total = 60.00
-        assertThat(mov.getInteres()).isEqualByComparingTo("60.00");
+        // interes total = 50.00
+        assertThat(mov.getInteres()).isEqualByComparingTo("50.00");
 
-        // baseIva = 60 + 40 = 100; IVA = 100 * 16/100 = 16.00 (aqui esta el CAMBIO DE COBRO: antes
-        // refrendar cobraba 100 sin IVA; ahora cobra 116.00)
-        // total = 60 + 40 + 16 + abono(0) = 116.00
-        assertThat(mov.getMonto()).isEqualByComparingTo("116.00");
-        assertThat(resp.getMonto()).isEqualByComparingTo("116.00");
+        // baseIva = 50 + 40 = 90; IVA = 90 * 16/100 = 14.40 (la sancion lleva IVA, CALC-03)
+        // total = 50 + 40 + 14.40 + abono(0) = 104.40
+        assertThat(mov.getMonto()).isEqualByComparingTo("104.40");
+        assertThat(resp.getMonto()).isEqualByComparingTo("104.40");
     }
 
     // =========================================================================
@@ -225,9 +233,9 @@ class MovimientoContratoServiceTest {
         // When: abono de 500
         service.refrendar(refrendoRequest(new BigDecimal("500.00")), "cajero1");
 
-        // Then: total = interes(60) + iva(9.60) + abono(500) = 569.60. El abono queda intacto.
+        // Then: total = interes(50) + iva(8.00) + abono(500) = 558.00. El abono queda intacto.
         MovimientoContrato mov = capturarMovimiento();
-        assertThat(mov.getMonto()).isEqualByComparingTo("569.60");
+        assertThat(mov.getMonto()).isEqualByComparingTo("558.00");
         assertThat(mov.getAbonoCapital()).isEqualByComparingTo("500.00");
         assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RC);
     }
@@ -259,8 +267,8 @@ class MovimientoContratoServiceTest {
         assertThat(mov.getEstatusAnterior()).isEqualTo(EstatusContrato.VIGENTE);
         assertThat(mov.getEstatusNuevo()).isEqualTo(EstatusContrato.VIGENTE);
         assertThat(mov.getNumRefrendosAnterior()).isZero();
-        // IVA del desglose (60 * 16%) guardado aparte
-        assertThat(mov.getIva()).isEqualByComparingTo("9.60");
+        // IVA del desglose (50 * 16%) guardado aparte
+        assertThat(mov.getIva()).isEqualByComparingTo("8.00");
 
         assertThat(c.getSaldoCapital()).isEqualByComparingTo("700.00");
         assertThat(c.getFechaContrato()).isEqualTo(fechaContratoAntes.plusDays(7));
@@ -301,10 +309,10 @@ class MovimientoContratoServiceTest {
         // When
         service.refrendar(refrendoRequest(BigDecimal.ZERO), "cajero1");
 
-        // Then: usa snapshot -> mismo resultado que test B (total 116.00) pese a la config disparatada
+        // Then: usa snapshot -> mismo resultado que test B (total 104.40) pese a la config disparatada
         MovimientoContrato mov = capturarMovimiento();
         assertThat(mov.getSancion()).isEqualByComparingTo("40.00");
-        assertThat(mov.getMonto()).isEqualByComparingTo("116.00");
+        assertThat(mov.getMonto()).isEqualByComparingTo("104.40");
     }
 
     // =========================================================================
@@ -330,15 +338,14 @@ class MovimientoContratoServiceTest {
         service.refrendar(refrendoRequest(BigDecimal.ZERO), "cajero1");
 
         MovimientoContrato mov = capturarMovimiento();
-        // 15 dias atraso - 2 gracia = 13 dias -> ceil(13/7) = 2 semanas
-        assertThat(mov.getSemanasVencidas()).isEqualTo(2);
-        assertThat(mov.getSancion()).isEqualByComparingTo("40.00"); // 1000*2/100*2
+        // 15 dias de atraso, gracia rebasada -> ceil(15/7) = 3 semanas
+        assertThat(mov.getSemanasVencidas()).isEqualTo(3);
+        assertThat(mov.getSancion()).isEqualByComparingTo("60.00"); // 1000*2/100*3
 
         // Consistencia: el motor y el refrendar producen el mismo desglose para el mismo insumo.
         // Si divergieran (como antes de Pasada 2 en plazos ≠ 7 dias), este assert fallaria.
         assertThat(mov.getSancion()).isEqualByComparingTo(expected.sancion());
-        assertThat(mov.getInteres()).isEqualByComparingTo(
-                expected.interes().add(expected.almacen()).add(expected.gastosAdmin()));
+        assertThat(mov.getInteres()).isEqualByComparingTo(expected.interesTotal());
         assertThat(mov.getMonto()).isEqualByComparingTo(expected.total());
     }
 
@@ -364,5 +371,91 @@ class MovimientoContratoServiceTest {
         // No debe haberse guardado ningun movimiento
         org.mockito.Mockito.verify(movimientoRepository, org.mockito.Mockito.never())
                 .save(any(MovimientoContrato.class));
+    }
+
+    // =========================================================================
+    // G. Cotizacion (F1): solo lectura, valida la accion contra la matriz RN-16
+    // =========================================================================
+
+    @Nested
+    class Cotizacion {
+
+        /** Contrato semanal de 4 periodos, prestamo = saldo = 1000, tasas 3% + 2% (+1% gastos admin). */
+        private Contrato contratoCotizable(int diasAtraso) {
+            Contrato c = contratoRef(diasAtraso, 7);
+            c.setFolio("CTR-000042");
+            c.getPlazo().setNumeroPeriodos(4);
+            when(contratoRepository.findById(42L)).thenReturn(Optional.of(c));
+            when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(1L, 1, 1))
+                    .thenReturn(Optional.of(paramVigente()));
+            return c;
+        }
+
+        private CotizacionRequest request(TipoOperacion operacion) {
+            CotizacionRequest r = new CotizacionRequest();
+            r.setContratoId(42L);
+            r.setTipoOperacion(operacion);
+            return r;
+        }
+
+        @Test
+        void refrendoVigente_devuelveLaCotizacionYNoPersisteNada() {
+            // Vence en 5 dias: 23 dias transcurridos → 4 periodos
+            contratoCotizable(-5);
+
+            CotizacionMovimientoResponse resp = service.cotizar(request(TipoOperacion.REFRENDO));
+
+            assertThat(resp.getContratoId()).isEqualTo(42L);
+            assertThat(resp.getFolio()).isEqualTo("CTR-000042");
+            assertThat(resp.getTipoMovimiento()).isEqualTo(TipoMovimiento.RF);
+            assertThat(resp.getEstatusActual()).isEqualTo(EstatusOperativo.VIGENTE);
+            assertThat(resp.getAccionesDisponibles()).contains(AccionContrato.REFRENDO, AccionContrato.FINIQUITO);
+            assertThat(resp.getPeriodosTranscurridos()).isEqualTo(4);
+            // 1000 × (3% + 2%) × 4 = 200; IVA 32; sin gastos admin (GAP-09)
+            assertThat(resp.getInteresTotal()).isEqualByComparingTo("200.00");
+            assertThat(resp.getSubtotal()).isEqualByComparingTo("200.00");
+            assertThat(resp.getIva()).isEqualByComparingTo("32.00");
+            assertThat(resp.getTotal()).isEqualByComparingTo("232.00");
+
+            org.mockito.Mockito.verify(movimientoRepository, org.mockito.Mockito.never()).save(any());
+            org.mockito.Mockito.verify(contratoRepository, org.mockito.Mockito.never()).save(any());
+        }
+
+        @Test
+        void finiquitoEnContratoVencido_seCotizaComoFiniquitoExtemporaneo() {
+            contratoCotizable(10);
+
+            CotizacionMovimientoResponse resp = service.cotizar(request(TipoOperacion.FINIQUITO));
+
+            assertThat(resp.getEstatusActual()).isEqualTo(EstatusOperativo.VENCIDO);
+            assertThat(resp.getTipoMovimiento()).isEqualTo(TipoMovimiento.FX);
+            assertThat(resp.getEstatusNuevo()).isEqualTo(EstatusOperativo.FINIQUITADO);
+        }
+
+        @Test
+        void abonoEnContratoVencido_rechaza() {
+            contratoCotizable(10);
+            CotizacionRequest r = request(TipoOperacion.ABONO_CAPITAL);
+            r.setAbonoCapital(new BigDecimal("100.00"));
+
+            org.junit.jupiter.api.Assertions.assertThrows(BadRequestException.class, () -> service.cotizar(r));
+        }
+
+        @Test
+        void refrendoConUnaPartidaApartada_rechaza() {
+            Contrato c = contratoCotizable(10);
+            c.getPartidas().get(0).setEstatus(EstatusPartida.APA);
+
+            org.junit.jupiter.api.Assertions.assertThrows(BadRequestException.class,
+                    () -> service.cotizar(request(TipoOperacion.REFRENDO)));
+        }
+
+        @Test
+        void contratoInexistente_404() {
+            when(contratoRepository.findById(42L)).thenReturn(Optional.empty());
+
+            org.junit.jupiter.api.Assertions.assertThrows(ResourceNotFoundException.class,
+                    () -> service.cotizar(request(TipoOperacion.REFRENDO)));
+        }
     }
 }

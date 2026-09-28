@@ -18,8 +18,8 @@ import static org.mockito.Mockito.when;
 
 /**
  * Tests unitarios del motor de calculo canonico. Cubre las tres unidades:
- *   - calcularSancion: gracia, redondeo ceil, toggle, casos frontera.
- *   - calcularCobroPeriodo: interes/almacen/gastos por periodoAcumulado, IVA truncado DOWN.
+ *   - calcularSancion: gracia (sin descontarla una vez rebasada), redondeo ceil, toggle, casos frontera.
+ *   - calcularCobroPeriodo: interes/almacen por periodoAcumulado (sin gastos admin), IVA truncado DOWN.
  *   - resolverParametros: snapshot > vigente; contrato con snapshot congela numeros.
  *
  * Este servicio NO tiene aun consumidor real (Pasada 1). La suite garantiza que la logica
@@ -70,12 +70,12 @@ class CalculoContratoServiceTest {
 
         @Test
         void atraso2DiasGracia2_sinSancion() {
-            // Frontera exacta: 2 dias de atraso, gracia 2 -> aun tolerancia
+            // Frontera exacta: 2 dias de atraso, gracia 2 -> aun en gracia (RPG)
             LocalDate vencimiento = LocalDate.of(2026, 9, 1);
             LocalDate pago = LocalDate.of(2026, 9, 3);
             DesgloseSancion d = motor.calcularSancion(
                     new BigDecimal("1000.00"), paramsBase(2, true), vencimiento, pago);
-            assertThat(d.diasAtraso()).isZero();
+            assertThat(d.diasAtraso()).isEqualTo(2);
             assertThat(d.semanasVencidas()).isZero();
             assertThat(d.monto()).isEqualByComparingTo("0.00");
         }
@@ -86,32 +86,32 @@ class CalculoContratoServiceTest {
             LocalDate pago = LocalDate.of(2026, 9, 4);
             DesgloseSancion d = motor.calcularSancion(
                     new BigDecimal("1000.00"), paramsBase(2, true), vencimiento, pago);
-            assertThat(d.diasAtraso()).isEqualTo(1);
+            assertThat(d.diasAtraso()).isEqualTo(3);
             assertThat(d.semanasVencidas()).isEqualTo(1);
             // 1000 * 2/100 * 1 = 20.00
             assertThat(d.monto()).isEqualByComparingTo("20.00");
         }
 
         @Test
-        void atraso9DiasGracia2_una_semana_frontera_exacta() {
-            // 9 - 2 = 7 dias -> ceil(7/7) = 1 semana (frontera exacta antes de cruzar a 2)
+        void atraso9DiasGracia2_dosSemanas_laGraciaRebasadaNoSeDescuenta() {
+            // Rebasada la gracia cuenta todo el atraso: ceil(9/7) = 2 semanas (antes ceil((9-2)/7) = 1)
             LocalDate vencimiento = LocalDate.of(2026, 9, 1);
             LocalDate pago = LocalDate.of(2026, 9, 10);
             DesgloseSancion d = motor.calcularSancion(
                     new BigDecimal("1000.00"), paramsBase(2, true), vencimiento, pago);
-            assertThat(d.diasAtraso()).isEqualTo(7);
-            assertThat(d.semanasVencidas()).isEqualTo(1);
-            assertThat(d.monto()).isEqualByComparingTo("20.00");
+            assertThat(d.diasAtraso()).isEqualTo(9);
+            assertThat(d.semanasVencidas()).isEqualTo(2);
+            assertThat(d.monto()).isEqualByComparingTo("40.00");
         }
 
         @Test
         void atraso10DiasGracia2_dos_semanas() {
-            // 10 - 2 = 8 dias -> ceil(8/7) = 2 semanas
+            // ceil(10/7) = 2 semanas
             LocalDate vencimiento = LocalDate.of(2026, 9, 1);
             LocalDate pago = LocalDate.of(2026, 9, 11);
             DesgloseSancion d = motor.calcularSancion(
                     new BigDecimal("1000.00"), paramsBase(2, true), vencimiento, pago);
-            assertThat(d.diasAtraso()).isEqualTo(8);
+            assertThat(d.diasAtraso()).isEqualTo(10);
             assertThat(d.semanasVencidas()).isEqualTo(2);
             assertThat(d.monto()).isEqualByComparingTo("40.00");
         }
@@ -153,38 +153,36 @@ class CalculoContratoServiceTest {
     class CobroPeriodo {
 
         @Test
-        void periodo1_sinAtraso_interesAlmacenGastosMasIvaSobreEllos() {
+        void periodo1_sinAtraso_interesAlmacenMasIvaSobreEllos_sinGastosAdmin() {
             LocalDate vencimiento = LocalDate.of(2026, 9, 30);
             LocalDate pago = LocalDate.of(2026, 9, 25); // antes del vencimiento
             DesgloseCobro d = motor.calcularCobroPeriodo(
                     new BigDecimal("1000.00"), paramsBase(2, true), vencimiento, pago, 1);
             // interes = 1000 * 3 * 1 / 100 = 30.00
             // almacen = 1000 * 2 * 1 / 100 = 20.00
-            // gastos  = 1000 * 1 * 1 / 100 = 10.00
+            // gastos admin (1%) no se cobra por periodo (GAP-09)
             // sancion = 0
             assertThat(d.interes()).isEqualByComparingTo("30.00");
             assertThat(d.almacen()).isEqualByComparingTo("20.00");
-            assertThat(d.gastosAdmin()).isEqualByComparingTo("10.00");
             assertThat(d.sancion()).isEqualByComparingTo("0.00");
-            // baseIva = 30 + 20 + 10 + 0 = 60.00; iva = 60 * 16/100 = 9.60 (exacto)
-            assertThat(d.baseIva()).isEqualByComparingTo("60.00");
-            assertThat(d.iva()).isEqualByComparingTo("9.60");
-            assertThat(d.total()).isEqualByComparingTo("69.60");
+            // baseIva = 30 + 20 + 0 = 50.00; iva = 50 * 16/100 = 8.00 (exacto)
+            assertThat(d.baseIva()).isEqualByComparingTo("50.00");
+            assertThat(d.iva()).isEqualByComparingTo("8.00");
+            assertThat(d.total()).isEqualByComparingTo("58.00");
         }
 
         @Test
         void periodo2_multiplicaPorPeriodoAcumulado() {
-            // Segundo periodo del PDF: interes/almacen/gastos se duplican
+            // Segundo periodo del PDF: interes y almacen se duplican
             LocalDate vencimiento = LocalDate.of(2026, 9, 30);
             LocalDate pago = LocalDate.of(2026, 9, 25);
             DesgloseCobro d = motor.calcularCobroPeriodo(
                     new BigDecimal("1000.00"), paramsBase(2, true), vencimiento, pago, 2);
             assertThat(d.interes()).isEqualByComparingTo("60.00");
             assertThat(d.almacen()).isEqualByComparingTo("40.00");
-            assertThat(d.gastosAdmin()).isEqualByComparingTo("20.00");
-            assertThat(d.baseIva()).isEqualByComparingTo("120.00");
-            assertThat(d.iva()).isEqualByComparingTo("19.20");
-            assertThat(d.total()).isEqualByComparingTo("139.20");
+            assertThat(d.baseIva()).isEqualByComparingTo("100.00");
+            assertThat(d.iva()).isEqualByComparingTo("16.00");
+            assertThat(d.total()).isEqualByComparingTo("116.00");
         }
 
         @Test
@@ -195,9 +193,9 @@ class CalculoContratoServiceTest {
             DesgloseCobro d = motor.calcularCobroPeriodo(
                     new BigDecimal("1000.00"), paramsBase(2, true), vencimiento, pago, 1);
             assertThat(d.sancion()).isEqualByComparingTo("40.00"); // 2 semanas
-            assertThat(d.baseIva()).isEqualByComparingTo("100.00"); // 30 + 20 + 10 + 40
-            assertThat(d.iva()).isEqualByComparingTo("16.00");
-            assertThat(d.total()).isEqualByComparingTo("116.00");
+            assertThat(d.baseIva()).isEqualByComparingTo("90.00"); // 30 + 20 + 40
+            assertThat(d.iva()).isEqualByComparingTo("14.40");
+            assertThat(d.total()).isEqualByComparingTo("104.40");
         }
 
         @Test
@@ -347,6 +345,39 @@ class CalculoContratoServiceTest {
         DesgloseCobro dPdf       = motor.calcularCobroPeriodo(prestamo, p, vencimiento, pago, 1);
 
         assertThat(dRefrendar).isEqualTo(dPdf);
+    }
+
+    // =========================================================================
+    // G. Cambios de cobro de F1 (plan de Finiquitos y Refrendos)
+    // =========================================================================
+
+    @Test
+    void gap04_rebasadaLaGracia_noSeDescuenta_ochoDiasSonDosSemanas() {
+        // Contrato 2609 de COCAE: vencio 03/08 y paga 11/08 (8 dias) → 2 semanas, no ceil((8-2)/7) = 1.
+        // La gracia solo perdona si se paga dentro de ella (RPG); rebasada, cuenta todo el atraso (RN-05).
+        LocalDate vencimiento = LocalDate.of(2026, 8, 3);
+        LocalDate pago = LocalDate.of(2026, 8, 11);
+        DesgloseSancion d = motor.calcularSancion(
+                new BigDecimal("5030.00"), paramsBase(2, true), vencimiento, pago);
+        assertThat(d.diasAtraso()).isEqualTo(8);
+        assertThat(d.semanasVencidas()).isEqualTo(2);
+        assertThat(d.monto()).isEqualByComparingTo("201.20");
+    }
+
+    @Test
+    void gap09_cobroPeriodico_esInteresMasAlmacen_sinGastosAdmin() {
+        // Amortizacion impresa del 1493: S1 = interes 13.50 + almacenaje 7.17 + IVA 3.30 = 23.97.
+        // Aunque el plazo tenga gastos admin, no entran al cobro por periodo ni a la base del IVA.
+        ParametrosCalculo p = new ParametrosCalculo(
+                new BigDecimal("1.13"), new BigDecimal("0.60"), new BigDecimal("1.00"),
+                new BigDecimal("2.00"), 2, true, new BigDecimal("16.00"));
+        LocalDate v = LocalDate.of(2026, 8, 13);
+        DesgloseCobro d = motor.calcularCobroPeriodo(new BigDecimal("1195.00"), p, v, v, 1);
+        assertThat(d.interes()).isEqualByComparingTo("13.50");
+        assertThat(d.almacen()).isEqualByComparingTo("7.17");
+        assertThat(d.baseIva()).isEqualByComparingTo("20.67");
+        assertThat(d.iva()).isEqualByComparingTo("3.30");
+        assertThat(d.total()).isEqualByComparingTo("23.97");
     }
 
     // =========================================================================

@@ -323,10 +323,10 @@ public class ContratoPdfService {
     /**
      * Filas del bloque "Pago Extemporaneo": los ~2 periodos siguientes al plazo, con la sancion por
      * extemporaneidad. Pasada 2: cada fila k=1,2 se calcula como si el cliente pagara en la fecha
-     * simulada {@code baseFecha + dias*k}; el motor computa {@code semanasVencidas = ceil((atraso - gracia)/7)}
-     * igual que el cobro real de refrendar (antes se usaba k directamente, correcto solo con
-     * plazo semanal). El IVA (truncado DOWN a 2 dec) se aplica sobre {@code interes + almacen +
-     * gastosAdmin + sancion}, misma base que en caja.
+     * simulada {@code baseFecha + dias*k}; el motor computa {@code semanasVencidas = ceil(atraso/7)} (la
+     * gracia rebasada no se descuenta) igual que el cobro real de refrendar (antes se usaba k directamente,
+     * correcto solo con plazo semanal). El IVA (truncado DOWN a 2 dec) se aplica sobre
+     * {@code interes + almacen + sancion}, misma base que en caja; los gastos admin no se cobran por periodo.
      */
     private List<PagoExtemporaneoRow> buildPagosExtemporaneos(
             Contrato contrato, PlazoParametro parametro, Plazo plazo, java.time.LocalDate baseFecha) {
@@ -347,12 +347,9 @@ public class ContratoPdfService {
             // filas coinciden con el cobro real en refrendar para cualquier plazo.
             DesgloseCobro d = calculoContratoService.calcularCobroPeriodo(
                     contrato, parametro, fechaSimulada, j);
-            BigDecimal interes  = d.interes();
             BigDecimal almacen  = d.almacen();
-            BigDecimal gastos   = d.gastosAdmin();
-            BigDecimal sancion  = d.sancion();
-            // El interes impreso lleva embebidos gastos admin y sancion (COCAE no les da columna aparte).
-            BigDecimal interesConSancion = interes.add(gastos).add(sancion);
+            // El interes impreso lleva embebida la sancion (COCAE no le da columna aparte).
+            BigDecimal interesConSancion = d.interes().add(d.sancion());
             BigDecimal iva = d.iva();
             BigDecimal refrendo = d.baseIva().add(iva);
             BigDecimal desempeno = prestamo.add(refrendo);

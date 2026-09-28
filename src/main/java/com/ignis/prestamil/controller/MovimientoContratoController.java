@@ -1,6 +1,8 @@
 package com.ignis.prestamil.controller;
 
+import com.ignis.prestamil.request.CotizacionRequest;
 import com.ignis.prestamil.request.RefrendoRequest;
+import com.ignis.prestamil.response.CotizacionMovimientoResponse;
 import com.ignis.prestamil.response.MovimientoResponse;
 import com.ignis.prestamil.service.MovimientoContratoService;
 import jakarta.validation.Valid;
@@ -31,6 +33,15 @@ public class MovimientoContratoController {
             Authentication authentication) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(movimientoService.refrendar(request, authentication.getName()));
+    }
+
+    /**
+     * Cotiza una operación (refrendo, finiquito, abono a capital o refrendo parcial) sin registrarla.
+     * POST /api/movimientos/cotizacion
+     */
+    @PostMapping("/cotizacion")
+    public ResponseEntity<CotizacionMovimientoResponse> cotizar(@Valid @RequestBody CotizacionRequest request) {
+        return ResponseEntity.ok(movimientoService.cotizar(request));
     }
 
     /**

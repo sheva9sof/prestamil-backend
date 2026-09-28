@@ -1,5 +1,7 @@
 package com.ignis.prestamil.util;
 
+import java.math.BigDecimal;
+
 public class Constantes {
 
     // Parámetros generales del sistema
@@ -28,4 +30,7 @@ public class Constantes {
     // Cuadra con plazo_parametro.dias_antes_pase_venta = 14 (último día de pago = venc + 14) en los
     // plazos semanales de dev; el plazo quincenal lo tiene en 0, por eso no se lee de ahí todavía.
     public static final int DIAS_VENCIMIENTO_A_COMERCIALIZACION = 15;
+
+    // Abono a capital mínimo (RN-13, confirmado con Jorge 21-sep-2026)
+    public static final BigDecimal ABONO_CAPITAL_MINIMO = new BigDecimal("20.00");
 }
