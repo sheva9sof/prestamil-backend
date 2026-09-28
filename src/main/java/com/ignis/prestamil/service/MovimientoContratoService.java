@@ -12,6 +12,7 @@ import com.ignis.prestamil.request.RefrendoRequest;
 import com.ignis.prestamil.response.MovimientoResponse;
 import com.ignis.prestamil.service.calculo.CalculoContratoService;
 import com.ignis.prestamil.service.calculo.DesgloseCobro;
+import com.ignis.prestamil.util.Constantes;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -59,7 +60,7 @@ public class MovimientoContratoService {
     /**
      * Registra un refrendo del contrato. Si la fecha actual supera el vencimiento más
      * los días de gracia, calcula la sanción por extemporaneidad y marca el movimiento
-     * como REFRENDO_EXTEMPORANEO; en caso contrario es un REFRENDO normal.
+     * como RX; en caso contrario es RF, o RC si trae abono a capital.
      *
      * @param request  contrato y datos del movimiento (abono opcional)
      * @param username usuario que registra el movimiento
@@ -101,8 +102,14 @@ public class MovimientoContratoService {
 
         BigDecimal abono = request.getAbonoCapital() != null ? request.getAbonoCapital() : BigDecimal.ZERO;
 
-        TipoMovimiento tipo = semanasVencidas > 0
-                ? TipoMovimiento.REFRENDO_EXTEMPORANEO : TipoMovimiento.REFRENDO;
+        TipoMovimiento tipo;
+        if (semanasVencidas > 0) {
+            tipo = TipoMovimiento.RX;
+        } else if (abono.compareTo(BigDecimal.ZERO) > 0) {
+            tipo = TipoMovimiento.RC;
+        } else {
+            tipo = TipoMovimiento.RF;
+        }
 
         // total = interes+almacen+gastos + sancion + IVA(base) + abono. El abono NO lleva IVA (es capital).
         BigDecimal total = d.total().add(abono);
@@ -117,15 +124,24 @@ public class MovimientoContratoService {
         mov.setSancion(sancion);
         mov.setAbonoCapital(abono);
         mov.setSemanasVencidas(semanasVencidas);
+        mov.setIva(d.iva());
         mov.setFecha(LocalDateTime.now());
         mov.setObservaciones(request.getObservaciones());
-        movimientoRepository.save(mov);
+        registrarEstadoAnterior(mov, contrato);
 
-        // Extender el contrato un periodo y marcarlo vigente
+        // Extender el contrato un periodo y marcarlo vigente. Las fechas y el saldo solo se mantienen
+        // sincronizados con las columnas del changeset 027; la regla de fechas RN-06 llega en F3.
         int diasPorPeriodo = contrato.getPlazo().getDiasPorPeriodo();
+        contrato.setFechaContrato(contrato.getFechaContrato().plusDays(diasPorPeriodo));
         contrato.setFechaVencimiento(contrato.getFechaVencimiento().plusDays(diasPorPeriodo));
+        contrato.setFechaComercializacion(contrato.getFechaVencimiento()
+                .plusDays(Constantes.DIAS_VENCIMIENTO_A_COMERCIALIZACION));
+        contrato.setSaldoCapital(contrato.getSaldoCapital().subtract(abono));
         contrato.setNumRefrendos(contrato.getNumRefrendos() + 1);
         contrato.setEstatus(EstatusContrato.VIGENTE);
+
+        registrarEstadoNuevo(mov, contrato);
+        movimientoRepository.save(mov);
         contratoRepository.save(contrato);
 
         log.info("Refrendo {} contrato={} interes={} sancion={} semanas={} total={}",
@@ -169,7 +185,7 @@ public class MovimientoContratoService {
         mov.setContrato(contrato);
         mov.setTurno(turno);
         mov.setUsuario(usuario);
-        mov.setTipo(TipoMovimiento.REPOSICION_CONTRATO);
+        mov.setTipo(TipoMovimiento.RE);
         mov.setMonto(monto);
         mov.setInteres(BigDecimal.ZERO);
         mov.setSancion(BigDecimal.ZERO);
@@ -177,6 +193,9 @@ public class MovimientoContratoService {
         mov.setSemanasVencidas(0);
         mov.setFecha(LocalDateTime.now());
         mov.setObservaciones("Cobro por reposición/reimpresión de contrato");
+        // La reposición no cambia el contrato: estado anterior y nuevo son iguales
+        registrarEstadoAnterior(mov, contrato);
+        registrarEstadoNuevo(mov, contrato);
         movimientoRepository.save(mov);
 
         log.info("Reposición cobrada contrato={} monto={}", contrato.getFolio(), monto);
@@ -221,6 +240,26 @@ public class MovimientoContratoService {
                 .orElse(null);
     }
 
+    /**
+     * Copia al movimiento el estado del contrato ANTES de aplicarlo. Es lo que la cancelación
+     * genérica (F10) restaurará.
+     */
+    private void registrarEstadoAnterior(MovimientoContrato mov, Contrato contrato) {
+        mov.setSaldoAnterior(contrato.getSaldoCapital());
+        mov.setFechaContratoAnterior(contrato.getFechaContrato());
+        mov.setFechaVencAnterior(contrato.getFechaVencimiento());
+        mov.setEstatusAnterior(contrato.getEstatus());
+        mov.setNumRefrendosAnterior(contrato.getNumRefrendos());
+    }
+
+    /** Copia al movimiento el estado del contrato DESPUÉS de aplicarlo. */
+    private void registrarEstadoNuevo(MovimientoContrato mov, Contrato contrato) {
+        mov.setSaldoNuevo(contrato.getSaldoCapital());
+        mov.setFechaContratoNueva(contrato.getFechaContrato());
+        mov.setFechaVencNueva(contrato.getFechaVencimiento());
+        mov.setEstatusNuevo(contrato.getEstatus());
+    }
+
     private MovimientoResponse toResponse(MovimientoContrato m, Contrato contrato) {
         MovimientoResponse r = new MovimientoResponse();
         r.setId(m.getId());
@@ -230,11 +269,50 @@ public class MovimientoContratoService {
         r.setMonto(m.getMonto());
         r.setInteres(m.getInteres());
         r.setSancion(m.getSancion());
+        r.setAbonoCapital(m.getAbonoCapital());
         r.setSemanasVencidas(m.getSemanasVencidas());
+        r.setPeriodosNormales(m.getPeriodosNormales());
+        r.setDiasGraciaUsados(m.getDiasGraciaUsados());
+        r.setInteresPorPeriodo(m.getInteresPorPeriodo());
+        r.setPorcDescuentoInteres(m.getPorcDescuentoInteres());
+        r.setImporteDescuento(m.getImporteDescuento());
+        r.setIva(m.getIva());
         r.setFecha(m.getFecha());
         r.setObservaciones(m.getObservaciones());
+        if (m.getUsuario() != null) {
+            r.setNombreUsuario(m.getUsuario().getNombreUsuario());
+        }
         r.setNumRefrendos(contrato.getNumRefrendos());
-        r.setNuevaFechaVencimiento(contrato.getFechaVencimiento().atStartOfDay());
+        // En el historial cada fila muestra SU vencimiento; los movimientos previos al changeset 027
+        // no lo guardaron y caen al vencimiento vigente del contrato.
+        LocalDate vencimiento = m.getFechaVencNueva() != null ? m.getFechaVencNueva() : contrato.getFechaVencimiento();
+        r.setNuevaFechaVencimiento(vencimiento.atStartOfDay());
+
+        r.setImporteEfectivo(m.getImporteEfectivo());
+        r.setImporteTarjeta(m.getImporteTarjeta());
+        r.setTipoTarjeta(m.getTipoTarjeta());
+        r.setTarjetaUltimos4(m.getTarjetaUltimos4());
+        if (m.getBancoEmisor() != null) {
+            r.setBancoEmisor(m.getBancoEmisor().getNombre());
+        }
+        r.setAutorizacionBanco(m.getAutorizacionBanco());
+        r.setCambioEntregado(m.getCambioEntregado());
+
+        r.setSaldoAnterior(m.getSaldoAnterior());
+        r.setSaldoNuevo(m.getSaldoNuevo());
+        r.setFechaContratoAnterior(m.getFechaContratoAnterior());
+        r.setFechaVencAnterior(m.getFechaVencAnterior());
+        r.setFechaContratoNueva(m.getFechaContratoNueva());
+        r.setFechaVencNueva(m.getFechaVencNueva());
+        r.setEstatusAnterior(m.getEstatusAnterior());
+        r.setEstatusNuevo(m.getEstatusNuevo());
+
+        r.setCancelado(m.getCancelado());
+        r.setFechaCancelacion(m.getFechaCancelacion());
+        if (m.getUsuarioCancela() != null) {
+            r.setUsuarioCancela(m.getUsuarioCancela().getNombreUsuario());
+        }
+        r.setMotivoCancelacion(m.getMotivoCancelacion());
         return r;
     }
 }

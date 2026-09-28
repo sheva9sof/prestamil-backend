@@ -6,17 +6,21 @@ import com.ignis.prestamil.model.CatSubtipoPrenda;
 import com.ignis.prestamil.model.CatValorPrenda;
 import com.ignis.prestamil.model.Cliente;
 import com.ignis.prestamil.model.Contrato;
+import com.ignis.prestamil.model.EstatusContrato;
+import com.ignis.prestamil.model.MovimientoContrato;
 import com.ignis.prestamil.model.PartidaContrato;
 import com.ignis.prestamil.model.Plazo;
 import com.ignis.prestamil.model.PlazoHechuraAlhaja;
 import com.ignis.prestamil.model.PlazoHechuraAlhajaId;
 import com.ignis.prestamil.model.PlazoParametro;
+import com.ignis.prestamil.model.TipoMovimiento;
 import com.ignis.prestamil.model.TipoPrenda;
 import com.ignis.prestamil.model.Turno;
 import com.ignis.prestamil.model.Usuario;
 import com.ignis.prestamil.repository.CatValorPrendaRepository;
 import com.ignis.prestamil.repository.ClienteRepository;
 import com.ignis.prestamil.repository.ContratoRepository;
+import com.ignis.prestamil.repository.MovimientoContratoRepository;
 import com.ignis.prestamil.repository.PlazoHechuraAlhajaRepository;
 import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.PlazoRepository;
@@ -91,6 +95,9 @@ class ContratoServiceTest {
     @Mock
     ParametrosSistemaCache parametrosSistemaCache;
 
+    @Mock
+    MovimientoContratoRepository movimientoContratoRepository;
+
     CalculoContratoService calculoContratoService;
     ContratoService contratoService;
 
@@ -112,7 +119,8 @@ class ContratoServiceTest {
                 plazoService,
                 plazoHechuraAlhajaRepository,
                 parametrosSistemaCache,
-                calculoContratoService
+                calculoContratoService,
+                movimientoContratoRepository
         );
 
         // El snapshot del changeset 026 siempre pide el IVA vigente al crear un contrato.
@@ -814,5 +822,59 @@ class ContratoServiceTest {
         assertThat(guardado.getSnapPorcAlmacen()).isNull();
         assertThat(guardado.getSnapPorcGastosAdmin()).isNull();
         assertThat(guardado.getSnapIvaPorcentaje()).isEqualByComparingTo("16.00");
+    }
+
+    // =========================================================================
+    // Changeset 027 (F0): saldo, fecha de contrato, comercializacion y movimiento EMP
+    // =========================================================================
+
+    @Test
+    void crearContrato_inicializaSaldoYFechas_eInsertaMovimientoEmp() {
+        // Given: alhaja de 5 g a $100/g, prestamo 500; plazo del setUp = 10 periodos de 7 dias
+        ContratoRequest request = buildRequestBase();
+        request.getPartidas().add(buildPartidaAlhaja(
+                new BigDecimal("1000.00"), 14, "N",
+                new BigDecimal("5.0000"), new BigDecimal("500.00")));
+        stubTablaAlhaja("100.0000");
+        stubPersistencia();
+
+        // When
+        contratoService.crearContrato(request, "cajero1");
+
+        // Then: saldo = prestamo; fecha_contrato = dia de apertura; comercializacion = venc + 15
+        ArgumentCaptor<Contrato> captor = ArgumentCaptor.forClass(Contrato.class);
+        org.mockito.Mockito.verify(repository, org.mockito.Mockito.atLeastOnce()).save(captor.capture());
+        Contrato guardado = captor.getAllValues().get(0);
+        assertThat(guardado.getSaldoCapital()).isEqualByComparingTo("500.00");
+        assertThat(guardado.getFechaContrato()).isEqualTo(guardado.getFechaApertura().toLocalDate());
+        assertThat(guardado.getFechaVencimiento()).isEqualTo(guardado.getFechaContrato().plusDays(70));
+        assertThat(guardado.getFechaComercializacion()).isEqualTo(guardado.getFechaVencimiento().plusDays(15));
+
+        // Y se registra exactamente un EMP con el estado inicial del contrato
+        ArgumentCaptor<MovimientoContrato> movCaptor = ArgumentCaptor.forClass(MovimientoContrato.class);
+        org.mockito.Mockito.verify(movimientoContratoRepository).save(movCaptor.capture());
+        MovimientoContrato emp = movCaptor.getValue();
+        assertThat(emp.getTipo()).isEqualTo(TipoMovimiento.EMP);
+        assertThat(emp.getContrato()).isSameAs(guardado);
+        assertThat(emp.getMonto()).isEqualByComparingTo("500.00");
+        assertThat(emp.getSaldoAnterior()).isNull();
+        assertThat(emp.getSaldoNuevo()).isEqualByComparingTo("500.00");
+        assertThat(emp.getFechaContratoNueva()).isEqualTo(guardado.getFechaContrato());
+        assertThat(emp.getFechaVencNueva()).isEqualTo(guardado.getFechaVencimiento());
+        assertThat(emp.getEstatusNuevo()).isEqualTo(EstatusContrato.VIGENTE);
+        assertThat(emp.getFecha()).isEqualTo(guardado.getFechaApertura());
+    }
+
+    @Test
+    void crearContrato_rechazado_noInsertaMovimientoEmp() {
+        ContratoRequest request = buildRequestBase();
+        request.getPartidas().add(buildPartidaAlhaja(
+                new BigDecimal("1000.00"), 24, "N",
+                new BigDecimal("5.0000"), new BigDecimal("500.00")));
+
+        assertThrows(BadRequestException.class, () -> contratoService.crearContrato(request, "cajero1"));
+
+        org.mockito.Mockito.verify(movimientoContratoRepository, org.mockito.Mockito.never())
+                .save(any(MovimientoContrato.class));
     }
 }

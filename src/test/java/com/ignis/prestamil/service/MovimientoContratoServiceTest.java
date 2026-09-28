@@ -98,10 +98,12 @@ class MovimientoContratoServiceTest {
         Contrato c = new Contrato();
         c.setId(42L);
         c.setMontoPrestamo(new BigDecimal("1000.00"));
+        c.setSaldoCapital(new BigDecimal("1000.00"));
         c.setNumRefrendos(0);
         c.setEstatus(EstatusContrato.VIGENTE);
         c.setSucursalId(1);
         c.setFechaVencimiento(LocalDate.now().minusDays(diasAtraso));
+        c.setFechaContrato(c.getFechaVencimiento().minusDays(4L * diasPorPeriodo));
 
         Plazo plazo = new Plazo();
         plazo.setId(1L);
@@ -162,7 +164,7 @@ class MovimientoContratoServiceTest {
 
         // Then
         MovimientoContrato mov = capturarMovimiento();
-        assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.REFRENDO);
+        assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RF);
         assertThat(mov.getSancion()).isEqualByComparingTo("0.00");
         assertThat(mov.getSemanasVencidas()).isZero();
 
@@ -193,7 +195,7 @@ class MovimientoContratoServiceTest {
 
         // Then
         MovimientoContrato mov = capturarMovimiento();
-        assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.REFRENDO_EXTEMPORANEO);
+        assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RX);
         assertThat(mov.getSemanasVencidas()).isEqualTo(2);
 
         // sancion = 1000 * 2/100 * 2 = 40.00
@@ -227,6 +229,43 @@ class MovimientoContratoServiceTest {
         MovimientoContrato mov = capturarMovimiento();
         assertThat(mov.getMonto()).isEqualByComparingTo("569.60");
         assertThat(mov.getAbonoCapital()).isEqualByComparingTo("500.00");
+        assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RC);
+    }
+
+    // =========================================================================
+    // C.2 Changeset 027: el movimiento guarda el estado antes/despues y el contrato
+    //     mantiene saldo, fecha de contrato y comercializacion sincronizados
+    // =========================================================================
+
+    @Test
+    void refrendo_registraEstadoAnteriorYNuevo_yActualizaSaldoYFechas() {
+        Contrato c = contratoRef(0, 7);
+        LocalDate fechaContratoAntes = c.getFechaContrato();
+        LocalDate vencAntes = c.getFechaVencimiento();
+        PlazoParametro pp = paramVigente();
+        when(contratoRepository.findById(42L)).thenReturn(Optional.of(c));
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(1L, 1, 1))
+                .thenReturn(Optional.of(pp));
+
+        service.refrendar(refrendoRequest(new BigDecimal("300.00")), "cajero1");
+
+        MovimientoContrato mov = capturarMovimiento();
+        assertThat(mov.getSaldoAnterior()).isEqualByComparingTo("1000.00");
+        assertThat(mov.getSaldoNuevo()).isEqualByComparingTo("700.00");
+        assertThat(mov.getFechaContratoAnterior()).isEqualTo(fechaContratoAntes);
+        assertThat(mov.getFechaVencAnterior()).isEqualTo(vencAntes);
+        assertThat(mov.getFechaContratoNueva()).isEqualTo(fechaContratoAntes.plusDays(7));
+        assertThat(mov.getFechaVencNueva()).isEqualTo(vencAntes.plusDays(7));
+        assertThat(mov.getEstatusAnterior()).isEqualTo(EstatusContrato.VIGENTE);
+        assertThat(mov.getEstatusNuevo()).isEqualTo(EstatusContrato.VIGENTE);
+        assertThat(mov.getNumRefrendosAnterior()).isZero();
+        // IVA del desglose (60 * 16%) guardado aparte
+        assertThat(mov.getIva()).isEqualByComparingTo("9.60");
+
+        assertThat(c.getSaldoCapital()).isEqualByComparingTo("700.00");
+        assertThat(c.getFechaContrato()).isEqualTo(fechaContratoAntes.plusDays(7));
+        assertThat(c.getFechaComercializacion()).isEqualTo(c.getFechaVencimiento().plusDays(15));
+        assertThat(c.getNumRefrendos()).isEqualTo(1);
     }
 
     // =========================================================================

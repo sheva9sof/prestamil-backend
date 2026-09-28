@@ -95,4 +95,8 @@ public class PartidaContrato {
 
     @Column(name = "estado_fisico", length = 20)
     private String estadoFisico;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "estatus", nullable = false, length = 10)
+    private EstatusPartida estatus = EstatusPartida.OP;
 }

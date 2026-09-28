@@ -22,8 +22,11 @@ public class ContratoResponse {
     private String numIdentificacion;
     private String nombreBeneficiario;
     private LocalDateTime fechaApertura;
+    private LocalDate fechaContrato;
     private LocalDate fechaVencimiento;
+    private LocalDate fechaComercializacion;
     private BigDecimal montoPrestamo;
+    private BigDecimal saldoCapital;
     private BigDecimal montoAvaluo;
     private EstatusContrato estatus;
     private Integer numRefrendos;

@@ -31,5 +31,6 @@
     <include file="db/changelog/changes/024-cat-valor-prenda-descripcion-nullable.sql"/>
     <include file="db/changelog/changes/025-partida-contrato-peso-neto.sql"/>
     <include file="db/changelog/changes/026-contrato-snapshot-calculo.sql"/>
+    <include file="db/changelog/changes/027-movimientos-contrato.sql"/>
 
 </databaseChangeLog>

@@ -12,6 +12,7 @@ import com.ignis.prestamil.service.calculo.CalculoContratoService;
 import com.ignis.prestamil.service.calculo.DesgloseCobro;
 import com.ignis.prestamil.service.calculo.ParametrosCalculo;
 import com.ignis.prestamil.service.calculo.ParametrosSistemaCache;
+import com.ignis.prestamil.util.Constantes;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,6 +41,7 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
     private final PlazoHechuraAlhajaRepository plazoHechuraAlhajaRepository;
     private final ParametrosSistemaCache parametrosSistemaCache;
     private final CalculoContratoService calculoContratoService;
+    private final MovimientoContratoRepository movimientoContratoRepository;
 
     private static final List<Integer> KILATAJES_COCAE = List.of(6, 8, 10, 12, 14, 18, 21, 24);
     private static final BigDecimal LEY_925 = new BigDecimal("925");
@@ -64,7 +66,8 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
                            PlazoService plazoService,
                            PlazoHechuraAlhajaRepository plazoHechuraAlhajaRepository,
                            ParametrosSistemaCache parametrosSistemaCache,
-                           CalculoContratoService calculoContratoService) {
+                           CalculoContratoService calculoContratoService,
+                           MovimientoContratoRepository movimientoContratoRepository) {
         super(repository);
         this.clienteRepository = clienteRepository;
         this.plazoRepository = plazoRepository;
@@ -78,6 +81,7 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
         this.plazoHechuraAlhajaRepository = plazoHechuraAlhajaRepository;
         this.parametrosSistemaCache = parametrosSistemaCache;
         this.calculoContratoService = calculoContratoService;
+        this.movimientoContratoRepository = movimientoContratoRepository;
     }
 
     /**
@@ -136,8 +140,12 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
         contrato.setPlazo(plazo);
         contrato.setUsuario(usuario);
         contrato.setFechaApertura(fechaApertura);
+        contrato.setFechaContrato(fechaApertura.toLocalDate());
         contrato.setFechaVencimiento(fechaVencimiento);
+        contrato.setFechaComercializacion(
+                fechaVencimiento.plusDays(Constantes.DIAS_VENCIMIENTO_A_COMERCIALIZACION));
         contrato.setMontoPrestamo(totalPrestamo);
+        contrato.setSaldoCapital(totalPrestamo);
         contrato.setMontoAvaluo(totalAvaluo);
         contrato.setEstatus(EstatusContrato.VIGENTE);
         contrato.setNumRefrendos(0);
@@ -172,6 +180,9 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
         // 10. Asignar folio basado en el ID y persistir de nuevo
         guardado.setFolio(String.format("CTR-%06d", guardado.getId()));
         guardado = repository.save(guardado);
+
+        // 11. Movimiento EMP (periodo 0): primera fila del historial del contrato
+        registrarMovimientoEmpeno(guardado, turno, usuario);
 
         log.info("Contrato creado: {} | cliente={} | monto={}", guardado.getFolio(),
                 cliente.getId(), totalPrestamo);
@@ -236,6 +247,28 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
     // =========================================================================
     // Helpers privados
     // =========================================================================
+
+    /**
+     * Registra el movimiento EMP (empeño, periodo 0) de un contrato recién creado. El monto es el
+     * préstamo entregado; no hay estado anterior porque el contrato no existía.
+     */
+    private void registrarMovimientoEmpeno(Contrato contrato, Turno turno, Usuario usuario) {
+        MovimientoContrato emp = new MovimientoContrato();
+        emp.setContrato(contrato);
+        emp.setTurno(turno);
+        emp.setUsuario(usuario);
+        emp.setTipo(TipoMovimiento.EMP);
+        emp.setMonto(contrato.getMontoPrestamo());
+        emp.setInteres(BigDecimal.ZERO);
+        emp.setPeriodosNormales(0);
+        emp.setSaldoNuevo(contrato.getSaldoCapital());
+        emp.setFechaContratoNueva(contrato.getFechaContrato());
+        emp.setFechaVencNueva(contrato.getFechaVencimiento());
+        emp.setEstatusNuevo(contrato.getEstatus());
+        emp.setFecha(contrato.getFechaApertura());
+        emp.setObservaciones("Empeño");
+        movimientoContratoRepository.save(emp);
+    }
 
     /**
      * Copia al contrato los 7 parametros de calculo vigentes (PlazoParametro de la primera partida +

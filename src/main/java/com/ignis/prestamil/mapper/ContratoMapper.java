@@ -32,8 +32,11 @@ public class ContratoMapper {
         r.setNumIdentificacion(contrato.getNumIdentificacion());
         r.setNombreBeneficiario(contrato.getNombreBeneficiario());
         r.setFechaApertura(contrato.getFechaApertura());
+        r.setFechaContrato(contrato.getFechaContrato());
         r.setFechaVencimiento(contrato.getFechaVencimiento());
+        r.setFechaComercializacion(contrato.getFechaComercializacion());
         r.setMontoPrestamo(contrato.getMontoPrestamo());
+        r.setSaldoCapital(contrato.getSaldoCapital());
         r.setMontoAvaluo(contrato.getMontoAvaluo());
         r.setEstatus(contrato.getEstatus());
         r.setNumRefrendos(contrato.getNumRefrendos());
@@ -81,6 +84,7 @@ public class ContratoMapper {
         r.setModelo(p.getModelo());
         r.setSerieImei(p.getSerieImei());
         r.setEstadoFisico(p.getEstadoFisico());
+        r.setEstatus(p.getEstatus());
 
         return r;
     }

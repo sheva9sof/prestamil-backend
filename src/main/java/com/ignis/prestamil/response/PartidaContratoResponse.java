@@ -1,5 +1,6 @@
 package com.ignis.prestamil.response;
 
+import com.ignis.prestamil.model.EstatusPartida;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -35,4 +36,5 @@ public class PartidaContratoResponse {
     private String modelo;
     private String serieImei;
     private String estadoFisico;
+    private EstatusPartida estatus;
 }

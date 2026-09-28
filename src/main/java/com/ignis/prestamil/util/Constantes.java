@@ -22,4 +22,10 @@ public class Constantes {
     // Nombres de configuraciones y menús
     public static final String ROLES_PERMITIDOS_APERTURA_TURNOS = "ROLES_PERMITIDOS_APERTURA_TURNOS";
     public static final String NOMBRE_MENU_TURNO = "Turnos";
+
+    // Contratos
+    // Fecha de comercialización = vencimiento + 15 días (RN-08, confirmado con 4 contratos COCAE).
+    // Cuadra con plazo_parametro.dias_antes_pase_venta = 14 (último día de pago = venc + 14) en los
+    // plazos semanales de dev; el plazo quincenal lo tiene en 0, por eso no se lee de ahí todavía.
+    public static final int DIAS_VENCIMIENTO_A_COMERCIALIZACION = 15;
 }
