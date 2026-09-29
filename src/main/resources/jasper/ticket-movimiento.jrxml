@@ -1,0 +1,256 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Nota de movimiento (RN-25): ticket de ~80 mm (227 pt). isIgnorePagination deja una sola página cuya
+     altura crece con el contenido, como el papel de la impresora térmica. Los bloques de varias líneas
+     llegan ya armados desde TicketMovimientoService; los renglones etiqueta/valor van en listas para que
+     una etiqueta larga no desalinee los importes. -->
+<jasperReport xmlns="http://jasperreports.sourceforge.net/jasperreports" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://jasperreports.sourceforge.net/jasperreports http://jasperreports.sourceforge.net/xsd/jasperreport.xsd" name="ticket-movimiento" pageWidth="227" pageHeight="842" whenNoDataType="AllSectionsNoDetail" columnWidth="211" leftMargin="8" rightMargin="8" topMargin="8" bottomMargin="8" isIgnorePagination="true">
+	<property name="net.sf.jasperreports.awt.ignore.missing.font" value="true"/>
+	<style name="Base" isDefault="true" fontName="Arial" fontSize="7"/>
+	<subDataset name="Lineas">
+		<field name="etiqueta" class="java.lang.String"/>
+		<field name="valor" class="java.lang.String"/>
+	</subDataset>
+	<parameter name="P_EMPRESA" class="java.lang.String"/>
+	<parameter name="P_EMPRESA_DATOS" class="java.lang.String"/>
+	<parameter name="P_SUCURSAL" class="java.lang.String"/>
+	<parameter name="P_FOLIO" class="java.lang.String"/>
+	<parameter name="P_FECHA" class="java.lang.String"/>
+	<parameter name="P_TIPO_MOVIMIENTO" class="java.lang.String"/>
+	<parameter name="P_CANCELADO" class="java.lang.Boolean"/>
+	<parameter name="P_CONTRATO" class="java.lang.String"/>
+	<parameter name="P_CLIENTE" class="java.lang.String"/>
+	<parameter name="P_PARAMETROS" class="net.sf.jasperreports.engine.JRDataSource"/>
+	<parameter name="P_MOVIMIENTO" class="net.sf.jasperreports.engine.JRDataSource"/>
+	<parameter name="P_TOTALES" class="net.sf.jasperreports.engine.JRDataSource"/>
+	<parameter name="P_TOTAL" class="java.lang.String"/>
+	<parameter name="P_PAGO" class="net.sf.jasperreports.engine.JRDataSource"/>
+	<parameter name="P_TOTAL_LETRA" class="java.lang.String"/>
+	<parameter name="P_USUARIO" class="java.lang.String"/>
+	<field name="partida" class="java.lang.String"/>
+	<field name="descripcion" class="java.lang.String"/>
+	<field name="detalle" class="java.lang.String"/>
+	<title>
+		<band height="98" splitType="Stretch">
+			<textField textAdjust="StretchHeight">
+				<reportElement x="0" y="0" width="211" height="13"/>
+				<textElement textAlignment="Center"><font size="11" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_EMPRESA}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="0" y="13" width="211" height="9" isRemoveLineWhenBlank="true"/>
+				<textElement textAlignment="Center"><font size="6.5"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_EMPRESA_DATOS}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="0" y="23" width="211" height="9" isRemoveLineWhenBlank="true"/>
+				<textElement textAlignment="Center"><font size="6.5"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_SUCURSAL}]]></textFieldExpression>
+			</textField>
+			<line>
+				<reportElement positionType="Float" x="0" y="34" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<textField>
+				<reportElement positionType="Float" x="0" y="37" width="105" height="10"/>
+				<textElement><font size="8" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_FOLIO}]]></textFieldExpression>
+			</textField>
+			<textField>
+				<reportElement positionType="Float" x="105" y="37" width="106" height="10"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$P{P_FECHA}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight">
+				<reportElement positionType="Float" x="0" y="48" width="211" height="11"/>
+				<textElement textAlignment="Center"><font size="8" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_TIPO_MOVIMIENTO}]]></textFieldExpression>
+			</textField>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="59" width="211" height="11" isRemoveLineWhenBlank="true">
+					<printWhenExpression><![CDATA[Boolean.TRUE.equals($P{P_CANCELADO})]]></printWhenExpression>
+				</reportElement>
+				<textElement textAlignment="Center"><font size="8" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[*** MOVIMIENTO CANCELADO ***]]></text>
+			</staticText>
+			<line>
+				<reportElement positionType="Float" x="0" y="71" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<textField>
+				<reportElement positionType="Float" x="0" y="74" width="211" height="10"/>
+				<textElement><font size="8" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_CONTRATO}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="0" y="84" width="211" height="9" isRemoveLineWhenBlank="true"/>
+				<textFieldExpression><![CDATA[$P{P_CLIENTE}]]></textFieldExpression>
+			</textField>
+			<line>
+				<reportElement positionType="Float" x="0" y="95" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+		</band>
+	</title>
+	<columnHeader>
+		<band height="11" splitType="Stretch">
+			<staticText>
+				<reportElement x="0" y="0" width="211" height="10"/>
+				<textElement><font isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[PARTIDAS]]></text>
+			</staticText>
+		</band>
+	</columnHeader>
+	<detail>
+		<band height="19" splitType="Stretch">
+			<textField>
+				<reportElement x="0" y="0" width="12" height="9"/>
+				<textFieldExpression><![CDATA[$F{partida}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement x="12" y="0" width="199" height="9"/>
+				<textFieldExpression><![CDATA[$F{descripcion}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="12" y="9" width="199" height="9" isRemoveLineWhenBlank="true"/>
+				<textElement><font size="6.5"/></textElement>
+				<textFieldExpression><![CDATA[$F{detalle}]]></textFieldExpression>
+			</textField>
+		</band>
+	</detail>
+	<summary>
+		<band height="152" splitType="Stretch">
+			<line>
+				<reportElement x="0" y="1" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<frame>
+				<reportElement positionType="Float" x="0" y="4" width="211" height="14"/>
+				<box><pen lineWidth="0.5"/></box>
+				<componentElement>
+					<reportElement x="2" y="2" width="207" height="10"/>
+					<jr:list xmlns:jr="http://jasperreports.sourceforge.net/jasperreports/components" xsi:schemaLocation="http://jasperreports.sourceforge.net/jasperreports/components http://jasperreports.sourceforge.net/xsd/components.xsd" printOrder="Vertical">
+						<datasetRun subDataset="Lineas">
+							<dataSourceExpression><![CDATA[$P{P_PARAMETROS}]]></dataSourceExpression>
+						</datasetRun>
+						<jr:listContents height="10" width="207">
+							<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+								<reportElement x="0" y="0" width="115" height="10"/>
+								<textFieldExpression><![CDATA[$F{etiqueta}]]></textFieldExpression>
+							</textField>
+							<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+								<reportElement x="115" y="0" width="92" height="10"/>
+								<textElement textAlignment="Right"/>
+								<textFieldExpression><![CDATA[$F{valor}]]></textFieldExpression>
+							</textField>
+						</jr:listContents>
+					</jr:list>
+				</componentElement>
+			</frame>
+			<componentElement>
+				<reportElement positionType="Float" x="0" y="21" width="211" height="10"/>
+				<jr:list xmlns:jr="http://jasperreports.sourceforge.net/jasperreports/components" xsi:schemaLocation="http://jasperreports.sourceforge.net/jasperreports/components http://jasperreports.sourceforge.net/xsd/components.xsd" printOrder="Vertical">
+					<datasetRun subDataset="Lineas">
+						<dataSourceExpression><![CDATA[$P{P_MOVIMIENTO}]]></dataSourceExpression>
+					</datasetRun>
+					<jr:listContents height="10" width="211">
+						<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+							<reportElement x="0" y="0" width="115" height="10"/>
+							<textFieldExpression><![CDATA[$F{etiqueta}]]></textFieldExpression>
+						</textField>
+						<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+							<reportElement x="115" y="0" width="96" height="10"/>
+							<textElement textAlignment="Right"><font isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+							<textFieldExpression><![CDATA[$F{valor}]]></textFieldExpression>
+						</textField>
+					</jr:listContents>
+				</jr:list>
+			</componentElement>
+			<line>
+				<reportElement positionType="Float" x="0" y="33" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<componentElement>
+				<reportElement positionType="Float" x="0" y="36" width="211" height="10"/>
+				<jr:list xmlns:jr="http://jasperreports.sourceforge.net/jasperreports/components" xsi:schemaLocation="http://jasperreports.sourceforge.net/jasperreports/components http://jasperreports.sourceforge.net/xsd/components.xsd" printOrder="Vertical">
+					<datasetRun subDataset="Lineas">
+						<dataSourceExpression><![CDATA[$P{P_TOTALES}]]></dataSourceExpression>
+					</datasetRun>
+					<jr:listContents height="10" width="211">
+						<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+							<reportElement x="0" y="0" width="115" height="10"/>
+							<textFieldExpression><![CDATA[$F{etiqueta}]]></textFieldExpression>
+						</textField>
+						<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+							<reportElement x="115" y="0" width="96" height="10"/>
+							<textElement textAlignment="Right"/>
+							<textFieldExpression><![CDATA[$F{valor}]]></textFieldExpression>
+						</textField>
+					</jr:listContents>
+				</jr:list>
+			</componentElement>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="47" width="100" height="13"/>
+				<textElement><font size="10" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[TOTAL]]></text>
+			</staticText>
+			<textField>
+				<reportElement positionType="Float" x="100" y="47" width="111" height="13"/>
+				<textElement textAlignment="Right"><font size="10" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_TOTAL}]]></textFieldExpression>
+			</textField>
+			<componentElement>
+				<reportElement positionType="Float" x="0" y="61" width="211" height="10"/>
+				<jr:list xmlns:jr="http://jasperreports.sourceforge.net/jasperreports/components" xsi:schemaLocation="http://jasperreports.sourceforge.net/jasperreports/components http://jasperreports.sourceforge.net/xsd/components.xsd" printOrder="Vertical">
+					<datasetRun subDataset="Lineas">
+						<dataSourceExpression><![CDATA[$P{P_PAGO}]]></dataSourceExpression>
+					</datasetRun>
+					<jr:listContents height="10" width="211">
+						<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+							<reportElement x="0" y="0" width="130" height="10"/>
+							<textFieldExpression><![CDATA[$F{etiqueta}]]></textFieldExpression>
+						</textField>
+						<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+							<reportElement x="130" y="0" width="81" height="10"/>
+							<textElement textAlignment="Right"/>
+							<textFieldExpression><![CDATA[$F{valor}]]></textFieldExpression>
+						</textField>
+					</jr:listContents>
+				</jr:list>
+			</componentElement>
+			<textField textAdjust="StretchHeight">
+				<reportElement positionType="Float" x="0" y="74" width="211" height="10"/>
+				<textElement textAlignment="Center"><font isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_TOTAL_LETRA}]]></textFieldExpression>
+			</textField>
+			<line>
+				<reportElement positionType="Float" x="46" y="100" width="120" height="1"/>
+				<graphicElement><pen lineWidth="0.5"/></graphicElement>
+			</line>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="102" width="211" height="9"/>
+				<textElement textAlignment="Center"/>
+				<text><![CDATA[CAJERA(O)]]></text>
+			</staticText>
+			<textField isBlankWhenNull="true">
+				<reportElement positionType="Float" x="0" y="111" width="211" height="9"/>
+				<textElement textAlignment="Center"><font size="6.5"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_USUARIO}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight">
+				<reportElement positionType="Float" x="0" y="123" width="211" height="9"/>
+				<textElement textAlignment="Center"><font size="6" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA["ESTA NOTA FORMARÁ PARTE DE LA FACTURACIÓN GLOBAL DEL DÍA"]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight">
+				<reportElement positionType="Float" x="0" y="132" width="211" height="9"/>
+				<textElement textAlignment="Center"><font size="6" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA["ESTE NO ES UN COMPROBANTE FISCAL"]]></textFieldExpression>
+			</textField>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="143" width="211" height="9"/>
+				<textElement textAlignment="Center"/>
+				<text><![CDATA[Gracias por su preferencia]]></text>
+			</staticText>
+		</band>
+	</summary>
+</jasperReport>

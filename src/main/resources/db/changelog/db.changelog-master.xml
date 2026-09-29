@@ -33,5 +33,7 @@
     <include file="db/changelog/changes/026-contrato-snapshot-calculo.sql"/>
     <include file="db/changelog/changes/027-movimientos-contrato.sql"/>
     <include file="db/changelog/changes/028-menu-finiquitos-refrendos.sql"/>
+    <include file="db/changelog/changes/029-cobro-movimientos.sql"/>
+    <include file="db/changelog/changes/030-plazo-parametro-descuento-interes.sql"/>
 
 </databaseChangeLog>

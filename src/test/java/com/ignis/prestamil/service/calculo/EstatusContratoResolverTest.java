@@ -6,6 +6,7 @@ import com.ignis.prestamil.model.EstatusContrato;
 import com.ignis.prestamil.model.EstatusOperativo;
 import com.ignis.prestamil.model.EstatusPartida;
 import com.ignis.prestamil.model.PartidaContrato;
+import com.ignis.prestamil.model.PlazoParametro;
 import com.ignis.prestamil.model.TipoOperacion;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -188,6 +189,50 @@ class EstatusContratoResolverTest {
     void refrendoParcial_requiereAlMenosDosPeriodosTranscurridos(EstatusOperativo estatus) {
         assertThat(EstatusContratoResolver.accionesDisponibles(estatus, 1)).doesNotContain(REFRENDO_PARCIAL);
         assertThat(EstatusContratoResolver.accionesDisponibles(estatus, 2)).contains(REFRENDO_PARCIAL);
+    }
+
+    // =========================================================================
+    // Maximo de refrendos (RN-28)
+    // =========================================================================
+
+    @Nested
+    class MaximoDeRefrendos {
+
+        private boolean agotados(int numRefrendos, Integer maximo) {
+            Contrato c = contrato(EstatusContrato.VIGENTE, EstatusPartida.OP);
+            c.setNumRefrendos(numRefrendos);
+            PlazoParametro pp = new PlazoParametro();
+            pp.setNumMaxRefrendos(maximo);
+            return EstatusContratoResolver.refrendosAgotados(c, pp);
+        }
+
+        @Test
+        void ceroEsSinLimite() {
+            assertThat(agotados(500, 0)).isFalse();
+        }
+
+        @Test
+        void seAgotaAlAlcanzarElMaximo() {
+            assertThat(agotados(4, 5)).isFalse();
+            assertThat(agotados(5, 5)).isTrue();
+        }
+
+        @Test
+        void sinParametro_esSinLimite() {
+            Contrato c = contrato(EstatusContrato.VIGENTE, EstatusPartida.OP);
+            c.setNumRefrendos(99);
+            assertThat(EstatusContratoResolver.refrendosAgotados(c, null)).isFalse();
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @EnumSource(value = EstatusOperativo.class, names = {"VIGENTE", "EN_GRACIA", "VENCIDO", "EN_VENTA"})
+        void agotados_soloQuedaFiniquitar(EstatusOperativo estatus) {
+            Set<AccionContrato> acciones = EstatusContratoResolver.accionesDisponibles(estatus, 5, true);
+
+            assertThat(acciones).doesNotContain(REFRENDO, REFRENDO_EXTEMPORANEO, REFRENDO_PARCIAL, ABONO_CAPITAL);
+            assertThat(acciones).containsAnyOf(FINIQUITO, FINIQUITO_EXTEMPORANEO);
+            assertThat(acciones).contains(REPOSICION, CONSULTA, CANCELACION);
+        }
     }
 
     // =========================================================================

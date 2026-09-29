@@ -57,6 +57,8 @@ public class CotizacionMovimientoResponse {
     private BigDecimal abonoCapital;
     private BigDecimal capital;
     private BigDecimal total;
+    /** "NOVENTA Y CINCO PESOS 92/100 M.N.": la ventana de Cobro y el ticket usan el mismo texto. */
+    private String totalConLetra;
 
     // Cómo queda el contrato
     private BigDecimal saldoNuevo;

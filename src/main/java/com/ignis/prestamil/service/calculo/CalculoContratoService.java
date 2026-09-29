@@ -19,7 +19,7 @@ import java.util.List;
 
 /**
  * Motor unico de calculo de contratos. Fuente de verdad para PDF (Jasper), amortizacion, cobro
- * real en caja ({@link com.ignis.prestamil.service.MovimientoContratoService#refrendar}) y la
+ * real en caja ({@link com.ignis.prestamil.service.MovimientoContratoService#registrar}) y la
  * cotizacion de movimientos ({@link #cotizar}), eliminando la divergencia historica entre motores.
  *
  * <p>Reglas confirmadas y replicadas:</p>
@@ -85,9 +85,11 @@ public class CalculoContratoService {
                                                       && Boolean.TRUE.equals(parametroVigente.getAplicarSancionPorPeriodo()));
         BigDecimal porcIva         = coalesce(contrato.getSnapIvaPorcentaje(),
                                               parametrosSistemaCache.getIvaPorcentaje());
+        // RN-27: el descuento NO se snapshotea; siempre se toma el vigente al momento de la operacion.
+        BigDecimal porcDescuento   = getOrZero(parametroVigente, PlazoParametro::getPorcDescuentoInteres);
         return new ParametrosCalculo(
                 porcInteres, porcAlmacen, porcGastosAdmin,
-                porcSancion, diasGracia, aplicaSancion, porcIva);
+                porcSancion, diasGracia, aplicaSancion, porcIva, porcDescuento);
     }
 
     /**
@@ -240,8 +242,7 @@ public class CalculoContratoService {
                 maximos, aplicados, normalesAplicados, extemporaneosAplicados,
                 interesPorPeriodo(saldo, p),
                 desglose,
-                // TODO F4: descuento sobre intereses desde la parametrizacion (RN-27)
-                BigDecimal.ZERO.setScale(2),
+                desglose.descuento(),
                 abono, capital, total, saldoNuevo,
                 fechaContratoNueva, vencimientoNuevo, comercializacionNueva,
                 estatusNuevo,
@@ -278,22 +279,33 @@ public class CalculoContratoService {
 
     /**
      * Desglose comun a todos los cobros. Cada componente se calcula con la tasa sin redondear y se
-     * redondea una sola vez al final (RN-10).
+     * redondea una sola vez al final (RN-10). RN-27: el descuento parametrizado se aplica al interes
+     * total (interes + almacen) antes de calcular el IVA, para que la nota muestre "Int c/Desc." y el
+     * IVA no se cobre sobre el importe descontado.
      */
     private DesgloseCobro desglosar(BigDecimal base, ParametrosCalculo p, int periodos, int semanasSancion) {
         BigDecimal n = new BigDecimal(periodos);
         BigDecimal interes = pctPor(base, p.porcInteres(), n);
         BigDecimal almacen = pctPor(base, p.porcAlmacen(), n);
         BigDecimal sancion = montoSancion(base, p, semanasSancion);
+        BigDecimal descuento = descuentoSobreInteres(interes.add(almacen), p);
 
-        BigDecimal baseIva = interes.add(almacen).add(sancion);
+        BigDecimal baseIva = interes.add(almacen).subtract(descuento).add(sancion);
         // COCAE trunca el IVA a 2 decimales (RoundingMode.DOWN), verificado con capturas.
         BigDecimal iva = baseIva.multiply(p.porcIva()).divide(CIEN, 2, RoundingMode.DOWN);
 
         return new DesgloseCobro(
                 base.setScale(2, RoundingMode.HALF_UP),
-                interes, almacen, sancion, semanasSancion,
+                interes, almacen, descuento, sancion, semanasSancion,
                 baseIva, iva, baseIva.add(iva));
+    }
+
+    /** RN-27: descuento sobre el interes total (interes + almacen). 0 si el porcentaje es null o 0. */
+    private BigDecimal descuentoSobreInteres(BigDecimal interesTotal, ParametrosCalculo p) {
+        if (p.porcDescuentoInteres() == null || p.porcDescuentoInteres().signum() == 0) {
+            return BigDecimal.ZERO.setScale(2);
+        }
+        return interesTotal.multiply(p.porcDescuentoInteres()).divide(CIEN, 2, RoundingMode.HALF_UP);
     }
 
     /** La gracia solo perdona el atraso si se paga dentro de ella; rebasada, cuenta todo el atraso. */

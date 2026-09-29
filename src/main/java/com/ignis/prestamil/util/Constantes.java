@@ -33,4 +33,8 @@ public class Constantes {
 
     // Abono a capital mínimo (RN-13, confirmado con Jorge 21-sep-2026)
     public static final BigDecimal ABONO_CAPITAL_MINIMO = new BigDecimal("20.00");
+
+    // Rol con permisos de configuracion sensible (descuento parametrizado, RN-27).
+    // Ver seed en 002-initial-data.sql: (1, 'Sistemas', 1).
+    public static final Integer ROL_SISTEMAS_ID = 1;
 }

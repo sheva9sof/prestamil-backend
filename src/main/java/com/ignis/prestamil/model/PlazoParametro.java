@@ -79,6 +79,12 @@ public class PlazoParametro {
     @Column(name = "porc_sancion_semanal", nullable = false, precision = 9, scale = 4, columnDefinition = "DECIMAL(9,4) DEFAULT 2.0000")
     private BigDecimal porcSancionSemanal = new BigDecimal("2.0000");
 
+    // Descuento sobre intereses (RN-27, COCAE "Desc. s/interes"). Se aplica al interes de cualquier
+    // movimiento antes del IVA. Solo lo edita el rol Sistemas; el cajero no lo captura y el valor
+    // vigente al momento de la operacion manda (no se snapshotea con el contrato).
+    @Column(name = "porc_descuento_interes", nullable = false, precision = 9, scale = 4, columnDefinition = "DECIMAL(9,4) DEFAULT 0.0000")
+    private BigDecimal porcDescuentoInteres = BigDecimal.ZERO;
+
     @Column(name = "ley_925", nullable = false, precision = 9, scale = 4, columnDefinition = "DECIMAL(9,4) DEFAULT 0.0000")
     private BigDecimal ley925 = BigDecimal.ZERO;
 

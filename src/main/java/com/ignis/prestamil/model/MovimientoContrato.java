@@ -75,6 +75,7 @@ public class MovimientoContrato {
 
     // Forma de pago (ventana "Cobro", RN-24). De la tarjeta solo se guardan los últimos 4 dígitos (PCI DSS).
 
+    /** Efectivo recibido; el que entra a caja es importeEfectivo - cambioEntregado. */
     @Column(name = "importe_efectivo", precision = 18, scale = 2)
     private BigDecimal importeEfectivo;
 
@@ -147,6 +148,10 @@ public class MovimientoContrato {
     /** Idempotencia: un requestId repetido devuelve el movimiento ya creado en vez de cobrar dos veces. */
     @Column(name = "request_id", length = 36, unique = true)
     private String requestId;
+
+    /** Folio consecutivo de la nota por sucursal (RN-25). Null en EMP y en movimientos anteriores a F3. */
+    @Column(name = "folio_nota")
+    private Integer folioNota;
 
     @Column(name = "fecha", nullable = false)
     private LocalDateTime fecha;

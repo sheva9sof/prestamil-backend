@@ -14,6 +14,7 @@ import com.ignis.prestamil.service.PlazoService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -104,8 +105,10 @@ public class PlazoController {
             @PathVariable Long id,
             @PathVariable Integer tipoPrendaId,
             @RequestParam(defaultValue = "1") Integer sucursalId,
-            @Valid @RequestBody PlazoParametroRequest request) {
-        return ResponseEntity.ok(plazoService.guardarParametro(id, tipoPrendaId, sucursalId, request));
+            @Valid @RequestBody PlazoParametroRequest request,
+            Authentication authentication) {
+        return ResponseEntity.ok(plazoService.guardarParametro(id, tipoPrendaId, sucursalId, request,
+                authentication != null ? authentication.getName() : null));
     }
 
     /**

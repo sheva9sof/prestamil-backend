@@ -14,6 +14,8 @@ import java.time.LocalDateTime;
 @Setter
 public class MovimientoResponse {
     private Long id;
+    /** Folio de la nota (ticket); null en EMP y en movimientos anteriores a F3. */
+    private Integer folioNota;
     private Long idContrato;
     private String folioContrato;
     private TipoMovimiento tipo;

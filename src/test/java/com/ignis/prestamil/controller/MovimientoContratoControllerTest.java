@@ -4,12 +4,14 @@ import com.ignis.prestamil.model.TipoMovimiento;
 import com.ignis.prestamil.request.CotizacionRequest;
 import com.ignis.prestamil.response.CotizacionMovimientoResponse;
 import com.ignis.prestamil.service.MovimientoContratoService;
+import com.ignis.prestamil.service.TicketMovimientoService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.MediaType;
+import org.springframework.http.converter.ByteArrayHttpMessageConverter;
 import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -20,7 +22,10 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -30,13 +35,28 @@ class MovimientoContratoControllerTest {
     @Mock
     MovimientoContratoService movimientoService;
 
+    @Mock
+    TicketMovimientoService ticketService;
+
     MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
-        mockMvc = MockMvcBuilders.standaloneSetup(new MovimientoContratoController(movimientoService))
-                .setMessageConverters(new MappingJackson2HttpMessageConverter())
+        mockMvc = MockMvcBuilders.standaloneSetup(new MovimientoContratoController(movimientoService, ticketService))
+                .setMessageConverters(new MappingJackson2HttpMessageConverter(), new ByteArrayHttpMessageConverter())
                 .build();
+    }
+
+    @Test
+    void getTicket_devuelveElPdfInline() throws Exception {
+        byte[] pdf = "%PDF-1.4 ticket".getBytes();
+        when(ticketService.generarPdf(7L)).thenReturn(pdf);
+
+        mockMvc.perform(get("/api/movimientos/7/ticket"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_PDF))
+                .andExpect(header().string("Content-Disposition", "inline; filename=ticket-7.pdf"))
+                .andExpect(content().bytes(pdf));
     }
 
     @Test

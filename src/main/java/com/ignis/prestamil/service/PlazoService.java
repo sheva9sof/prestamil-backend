@@ -18,9 +18,12 @@ import com.ignis.prestamil.repository.ContratoRepository;
 import com.ignis.prestamil.repository.PlazoHechuraAlhajaRepository;
 import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.PlazoRepository;
+import com.ignis.prestamil.repository.UsuarioRepository;
 import com.ignis.prestamil.request.PlazoHechuraAlhajaRequest;
 import com.ignis.prestamil.request.PlazoParametroRequest;
 import com.ignis.prestamil.request.PlazoRequest;
+import com.ignis.prestamil.util.Constantes;
+import com.ignis.prestamil.model.Usuario;
 import com.ignis.prestamil.response.PlazoHechuraAlhajaResponse;
 import com.ignis.prestamil.response.PlazoParametroResponse;
 import com.ignis.prestamil.response.PlazoResponse;
@@ -53,6 +56,7 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
     private final com.ignis.prestamil.repository.PrecioOroRepository precioOroRepository;
     private final OroTablaPrestamoRepository oroTablaPrestamoRepository;
     private final ContratoRepository contratoRepository;
+    private final UsuarioRepository usuarioRepository;
 
     public PlazoService(PlazoRepository repository,
                         PlazoMapper plazoMapper,
@@ -63,7 +67,8 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
                         PlazoHechuraAlhajaMapper plazoHechuraAlhajaMapper,
                         com.ignis.prestamil.repository.PrecioOroRepository precioOroRepository,
                         OroTablaPrestamoRepository oroTablaPrestamoRepository,
-                        ContratoRepository contratoRepository) {
+                        ContratoRepository contratoRepository,
+                        UsuarioRepository usuarioRepository) {
         super(repository);
         this.plazoMapper = plazoMapper;
         this.tipoPrendaService = tipoPrendaService;
@@ -74,6 +79,7 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
         this.precioOroRepository = precioOroRepository;
         this.oroTablaPrestamoRepository = oroTablaPrestamoRepository;
         this.contratoRepository = contratoRepository;
+        this.usuarioRepository = usuarioRepository;
     }
 
     /**
@@ -212,7 +218,8 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
      * @return PlazoParametroResponse con los datos guardados
      */
     public PlazoParametroResponse guardarParametro(Long plazoId, Integer tipoPrendaId,
-                                                    Integer sucursalId, PlazoParametroRequest request) {
+                                                    Integer sucursalId, PlazoParametroRequest request,
+                                                    String username) {
         PlazoParametroId id = new PlazoParametroId(plazoId, tipoPrendaId, sucursalId);
         PlazoParametro entity = plazoParametroRepository.findById(id)
                 .orElseGet(() -> {
@@ -225,8 +232,30 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
                 });
         // Actualizar campos editables desde el request
         plazoParametroMapper.actualizarDesdeRequest(entity, request);
+        // RN-27: el descuento sobre intereses SOLO lo modifica el rol Sistemas. Se maneja aparte
+        // del mapper para no exponer el campo a otros roles: si el request lo trae y el usuario no
+        // es Sistemas se rechaza (evita cambios silenciosos y hace visible el intento en logs);
+        // si no lo trae, se conserva el valor vigente sin importar el rol.
+        if (request != null && request.getPorcDescuentoInteres() != null) {
+            BigDecimal actual = entity.getPorcDescuentoInteres() != null
+                    ? entity.getPorcDescuentoInteres() : BigDecimal.ZERO;
+            if (request.getPorcDescuentoInteres().compareTo(actual) != 0) {
+                if (!esRolSistemas(username)) {
+                    throw new BadRequestException(
+                            "Solo el rol Sistemas puede modificar el descuento sobre intereses (RN-27)");
+                }
+                entity.setPorcDescuentoInteres(request.getPorcDescuentoInteres());
+            }
+        }
         PlazoParametro guardado = plazoParametroRepository.save(entity);
         return plazoParametroMapper.toPlazoParametroResponse(guardado);
+    }
+
+    private boolean esRolSistemas(String username) {
+        if (username == null) return false;
+        Usuario u = usuarioRepository.findByNombreUsuario(username).orElse(null);
+        return u != null && u.getRol() != null
+                && Constantes.ROL_SISTEMAS_ID.equals(u.getRol().getId());
     }
 
     // =========================================================================

@@ -61,7 +61,8 @@ class CalculoContratoCotizacionTest {
                 new BigDecimal("2.00"),     // porcSancionSemanal
                 2,                          // dias de gracia (D.G.S.C.)
                 true,
-                new BigDecimal("16.00"));
+                new BigDecimal("16.00"),
+                BigDecimal.ZERO);           // porcDescuentoInteres (RN-27, F4)
     }
 
     /** Contrato semanal de 4 periodos (plazo "04 SEM") con saldo = préstamo. */
@@ -484,7 +485,8 @@ class CalculoContratoCotizacionTest {
             Contrato c = contrato("1000.00", fechaContrato, vencimiento);
             ParametrosCalculo p = params("1.13");
             ParametrosCalculo sinSancion = new ParametrosCalculo(p.porcInteres(), p.porcAlmacen(),
-                    p.porcGastosAdmin(), p.porcSancionSemanal(), p.diasGraciaSancion(), false, p.porcIva());
+                    p.porcGastosAdmin(), p.porcSancionSemanal(), p.diasGraciaSancion(), false, p.porcIva(),
+                    p.porcDescuentoInteres());
 
             CotizacionMovimiento cot = motor.cotizar(c, sinSancion, TipoOperacion.REFRENDO,
                     vencimiento.plusDays(10), null, null);

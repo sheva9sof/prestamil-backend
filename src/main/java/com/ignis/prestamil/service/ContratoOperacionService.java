@@ -175,12 +175,13 @@ public class ContratoOperacionService {
     }
 
     private Evaluacion evaluar(Contrato contrato, LocalDate hoy, Map<String, Optional<PlazoParametro>> parametros) {
-        ParametrosCalculo p = calculoContratoService.resolverParametros(
-                contrato, parametroVigente(contrato, parametros));
+        PlazoParametro vigente = parametroVigente(contrato, parametros);
+        ParametrosCalculo p = calculoContratoService.resolverParametros(contrato, vigente);
         EstatusOperativo estatus = EstatusContratoResolver.estatusDerivado(contrato, p.diasGraciaSancion(), hoy);
         SituacionPeriodos s = OPERABLES.contains(estatus) ? calculoContratoService.situacion(contrato, p, hoy) : null;
         Set<AccionContrato> acciones = EstatusContratoResolver.accionesDisponibles(
-                estatus, s != null ? s.periodosTranscurridos() : 0);
+                estatus, s != null ? s.periodosTranscurridos() : 0,
+                EstatusContratoResolver.refrendosAgotados(contrato, vigente));
         return new Evaluacion(contrato, p, estatus, s, acciones);
     }
 

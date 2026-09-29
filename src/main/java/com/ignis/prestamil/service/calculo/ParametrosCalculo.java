@@ -12,12 +12,16 @@ import java.math.BigDecimal;
  * @param porcAlmacen         porcentaje de almacen por periodo
  * @param porcGastosAdmin     porcentaje de gastos administrativos; solo se imprime en el contrato
  *                            (clausula 11f y CAT), NO se cobra por periodo (GAP-09)
- * @param porcSancionSemanal  porcentaje de sancion por semana vencida (sobre el saldo capital)
- * @param diasGraciaSancion   dias de gracia (D.G.S.C. de COCAE, el mal-nombrado {@code dias_gracia_sin_interes}
- *                            de PlazoParametro): si se paga dentro de ellos no hay sancion (RPG); rebasados,
- *                            NO se descuentan del atraso (RN-05)
- * @param aplicarSancion      si {@code false}, la sancion siempre es 0 sin importar el atraso
- * @param porcIva             porcentaje de IVA a aplicar sobre (interes + almacen + sancion)
+ * @param porcSancionSemanal    porcentaje de sancion por semana vencida (sobre el saldo capital)
+ * @param diasGraciaSancion     dias de gracia (D.G.S.C. de COCAE, el mal-nombrado {@code dias_gracia_sin_interes}
+ *                              de PlazoParametro): si se paga dentro de ellos no hay sancion (RPG); rebasados,
+ *                              NO se descuentan del atraso (RN-05)
+ * @param aplicarSancion        si {@code false}, la sancion siempre es 0 sin importar el atraso
+ * @param porcIva               porcentaje de IVA a aplicar sobre (interes + almacen − descuento + sancion)
+ * @param porcDescuentoInteres  RN-27: porcentaje parametrizado que se resta del interes (interes + almacen)
+ *                              antes de calcular el IVA. Solo lo edita el rol Sistemas; el cajero no lo captura.
+ *                              A diferencia del resto, este NO se snapshotea con el contrato: manda el valor
+ *                              vigente al momento de la operacion. 0 = sin descuento.
  */
 public record ParametrosCalculo(
         BigDecimal porcInteres,
@@ -26,5 +30,6 @@ public record ParametrosCalculo(
         BigDecimal porcSancionSemanal,
         int diasGraciaSancion,
         boolean aplicarSancion,
-        BigDecimal porcIva
+        BigDecimal porcIva,
+        BigDecimal porcDescuentoInteres
 ) {}

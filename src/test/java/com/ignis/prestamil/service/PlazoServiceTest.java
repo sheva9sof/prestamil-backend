@@ -70,6 +70,9 @@ class PlazoServiceTest {
     @Mock
     ContratoRepository contratoRepository;
 
+    @Mock
+    com.ignis.prestamil.repository.UsuarioRepository usuarioRepository;
+
     PlazoService plazoService;
 
     @BeforeEach
@@ -84,7 +87,8 @@ class PlazoServiceTest {
                 plazoHechuraAlhajaMapper,
                 precioOroRepository,
                 oroTablaPrestamoRepository,
-                contratoRepository
+                contratoRepository,
+                usuarioRepository
         );
     }
 

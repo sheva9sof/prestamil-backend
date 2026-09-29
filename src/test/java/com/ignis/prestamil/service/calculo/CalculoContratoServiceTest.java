@@ -46,7 +46,8 @@ class CalculoContratoServiceTest {
                 new BigDecimal("2.0000"),   // porcSancionSemanal
                 diasGracia,
                 aplicarSancion,
-                new BigDecimal("16.00")     // porcIva
+                new BigDecimal("16.00"),    // porcIva
+                BigDecimal.ZERO             // porcDescuentoInteres (RN-27, F4)
         );
     }
 
@@ -206,7 +207,8 @@ class CalculoContratoServiceTest {
                     new BigDecimal("2.2050"), // interes puro para que 1000*2.205/100 = 22.05
                     BigDecimal.ZERO, BigDecimal.ZERO,
                     BigDecimal.ZERO, 2, false,
-                    new BigDecimal("16.00"));
+                    new BigDecimal("16.00"),
+                    BigDecimal.ZERO);
             LocalDate v = LocalDate.of(2026, 9, 30);
             DesgloseCobro d = motor.calcularCobroPeriodo(
                     new BigDecimal("1000.00"), p, v, v.minusDays(1), 1);
@@ -370,7 +372,8 @@ class CalculoContratoServiceTest {
         // Aunque el plazo tenga gastos admin, no entran al cobro por periodo ni a la base del IVA.
         ParametrosCalculo p = new ParametrosCalculo(
                 new BigDecimal("1.13"), new BigDecimal("0.60"), new BigDecimal("1.00"),
-                new BigDecimal("2.00"), 2, true, new BigDecimal("16.00"));
+                new BigDecimal("2.00"), 2, true, new BigDecimal("16.00"),
+                BigDecimal.ZERO);
         LocalDate v = LocalDate.of(2026, 8, 13);
         DesgloseCobro d = motor.calcularCobroPeriodo(new BigDecimal("1195.00"), p, v, v, 1);
         assertThat(d.interes()).isEqualByComparingTo("13.50");

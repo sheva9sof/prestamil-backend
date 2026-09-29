@@ -31,6 +31,8 @@ public class PlazoParametroResponse {
     private BigDecimal comisionPorVentaPrenda;
     private Boolean aplicarSancionPorPeriodo;
     private BigDecimal porcSancionSemanal;
+    /** RN-27: descuento parametrizado sobre intereses; solo lo edita Sistemas. */
+    private BigDecimal porcDescuentoInteres;
     private BigDecimal ley925;
     private BigDecimal ley725;
     private BigDecimal precioGramoPlata;

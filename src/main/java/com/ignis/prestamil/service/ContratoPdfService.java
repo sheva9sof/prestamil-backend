@@ -3,7 +3,6 @@ package com.ignis.prestamil.service;
 import com.ignis.prestamil.exception.BadRequestException;
 import com.ignis.prestamil.model.Cliente;
 import com.ignis.prestamil.model.Contrato;
-import com.ignis.prestamil.model.Direccion;
 import com.ignis.prestamil.model.PartidaContrato;
 import com.ignis.prestamil.model.Plazo;
 import com.ignis.prestamil.model.PlazoParametro;
@@ -15,6 +14,7 @@ import com.ignis.prestamil.service.calculo.CalculoContratoService;
 import com.ignis.prestamil.service.calculo.DesgloseCobro;
 import com.ignis.prestamil.service.calculo.ParametrosCalculo;
 import com.ignis.prestamil.service.calculo.ParametrosSistemaCache;
+import com.ignis.prestamil.util.FormatoDocumento;
 import com.ignis.prestamil.util.PagoExtemporaneoRow;
 import com.ignis.prestamil.util.PagoRow;
 import com.ignis.prestamil.util.PrendaRow;
@@ -382,23 +382,15 @@ public class ContratoPdfService {
     }
 
     private String nombreCliente(Cliente c) {
-        if (c == null) return "";
-        return (nz(c.getNombre()) + " " + nz(c.getApellidoPaterno()) + " " + nz(c.getApellidoMaterno())).trim();
+        return FormatoDocumento.nombreCompleto(c);
     }
 
     private String direccionCliente(Cliente c) {
-        if (c == null || c.getDireccion() == null) return "";
-        Direccion d = c.getDireccion();
-        return (nz(d.getCalle()) + " " + nz(d.getNumeroExterior()) + ", " + nz(d.getColonia())
-                + ", " + nz(d.getCiudad()) + ", " + nz(d.getEstado()) + " C.P. " + nz(d.getCodigoPostal()))
-                .replaceAll("\\s+,", ",").trim();
+        return c != null ? FormatoDocumento.domicilio(c.getDireccion()) : "";
     }
 
     private String domicilioSucursal(Sucursal s) {
-        if (s == null) return "";
-        return (nz(s.getCalle()) + " " + nz(s.getNoExterior()) + ", " + nz(s.getColonia())
-                + ", " + nz(s.getMunicipio()) + ", " + nz(s.getEstado()) + " C.P. " + nz(s.getCp()))
-                .replaceAll("\\s+,", ",").trim();
+        return FormatoDocumento.domicilio(s);
     }
 
     private String ramo(PartidaContrato p) {

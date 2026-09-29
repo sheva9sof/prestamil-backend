@@ -5,6 +5,7 @@ import com.ignis.prestamil.model.Contrato;
 import com.ignis.prestamil.model.EstatusContrato;
 import com.ignis.prestamil.model.EstatusOperativo;
 import com.ignis.prestamil.model.EstatusPartida;
+import com.ignis.prestamil.model.PlazoParametro;
 import com.ignis.prestamil.model.TipoOperacion;
 import com.ignis.prestamil.util.Constantes;
 
@@ -84,6 +85,42 @@ public final class EstatusContratoResolver {
      * @return las acciones habilitadas
      */
     public static Set<AccionContrato> accionesDisponibles(EstatusOperativo estatus, int periodosTranscurridos) {
+        return accionesDisponibles(estatus, periodosTranscurridos, false);
+    }
+
+    /**
+     * Acciones disponibles según la matriz RN-16, quitando las que refrendan si el contrato ya alcanzó
+     * el máximo de refrendos de su plazo (RN-28): solo queda finiquitar.
+     *
+     * @param estatus                estatus operativo del contrato
+     * @param periodosTranscurridos  periodos que cobraría un refrendo completo hoy
+     * @param refrendosAgotados      resultado de {@link #refrendosAgotados}
+     * @return las acciones habilitadas
+     */
+    public static Set<AccionContrato> accionesDisponibles(EstatusOperativo estatus, int periodosTranscurridos,
+                                                          boolean refrendosAgotados) {
+        Set<AccionContrato> acciones = accionesPorEstatus(estatus, periodosTranscurridos);
+        if (refrendosAgotados) {
+            acciones.removeAll(EnumSet.of(AccionContrato.REFRENDO, AccionContrato.REFRENDO_EXTEMPORANEO,
+                    AccionContrato.REFRENDO_PARCIAL, AccionContrato.ABONO_CAPITAL));
+        }
+        return acciones;
+    }
+
+    /**
+     * Si el contrato ya no admite más refrendos (RN-28). {@code num_max_refrendos = 0} es sin límite
+     * (alhajas); un valor mayor limita según el tipo de prenda y la sucursal (electrónicos).
+     *
+     * @param contrato  contrato con su número de refrendos
+     * @param parametro parámetro vigente del plazo/tipo de prenda/sucursal; null = sin límite
+     * @return true si el contrato alcanzó el máximo
+     */
+    public static boolean refrendosAgotados(Contrato contrato, PlazoParametro parametro) {
+        Integer maximo = parametro != null ? parametro.getNumMaxRefrendos() : null;
+        return maximo != null && maximo > 0 && contrato.getNumRefrendos() >= maximo;
+    }
+
+    private static Set<AccionContrato> accionesPorEstatus(EstatusOperativo estatus, int periodosTranscurridos) {
         Set<AccionContrato> acciones = EnumSet.of(AccionContrato.CONSULTA, AccionContrato.CANCELACION);
         boolean operable = true;
         switch (estatus) {

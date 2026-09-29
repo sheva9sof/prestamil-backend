@@ -4,11 +4,14 @@ import com.ignis.prestamil.exception.BadRequestException;
 import com.ignis.prestamil.exception.ResourceNotFoundException;
 import com.ignis.prestamil.model.*;
 import com.ignis.prestamil.repository.ContratoRepository;
+import com.ignis.prestamil.repository.FolioNotaRepository;
 import com.ignis.prestamil.repository.MovimientoContratoRepository;
 import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.TurnoRepository;
 import com.ignis.prestamil.repository.UsuarioRepository;
 import com.ignis.prestamil.request.CotizacionRequest;
+import com.ignis.prestamil.request.MovimientoRequest;
+import com.ignis.prestamil.request.PagoRequest;
 import com.ignis.prestamil.request.RefrendoRequest;
 import com.ignis.prestamil.response.CotizacionMovimientoResponse;
 import com.ignis.prestamil.response.MovimientoResponse;
@@ -18,23 +21,26 @@ import com.ignis.prestamil.service.calculo.DesgloseCobro;
 import com.ignis.prestamil.service.calculo.EstatusContratoResolver;
 import com.ignis.prestamil.service.calculo.ParametrosCalculo;
 import com.ignis.prestamil.service.calculo.SituacionPeriodos;
-import com.ignis.prestamil.util.Constantes;
+import com.ignis.prestamil.util.NumeroALetras;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 /**
- * Gestiona los movimientos de un contrato: refrendos (normales y extemporáneos),
- * abonos, finiquitos y reposición de contrato. Calcula intereses y la sanción por
- * extemporaneidad (porcentaje semanal configurable, 2% por defecto) y registra cada
- * movimiento contra el turno activo para que aparezca en el corte de caja.
+ * Gestiona los movimientos de un contrato: refrendos (normales, en gracia y extemporáneos), abonos a
+ * capital, refrendos parciales, finiquitos y reposición de contrato. Todo cobro pasa por
+ * {@link #registrar}, que recalcula con el motor único ({@link CalculoContratoService#cotizar}) y
+ * registra el movimiento contra el turno activo para que aparezca en el corte de caja.
  */
 @Service
 @Transactional
@@ -48,113 +54,124 @@ public class MovimientoContratoService {
     private final PlazoParametroRepository plazoParametroRepository;
     private final TurnoRepository turnoRepository;
     private final UsuarioRepository usuarioRepository;
+    private final FolioNotaRepository folioNotaRepository;
     private final CalculoContratoService calculoContratoService;
+    private final CobroService cobroService;
+    private final Clock clock;
 
     public MovimientoContratoService(MovimientoContratoRepository movimientoRepository,
                                      ContratoRepository contratoRepository,
                                      PlazoParametroRepository plazoParametroRepository,
                                      TurnoRepository turnoRepository,
                                      UsuarioRepository usuarioRepository,
-                                     CalculoContratoService calculoContratoService) {
+                                     FolioNotaRepository folioNotaRepository,
+                                     CalculoContratoService calculoContratoService,
+                                     CobroService cobroService,
+                                     Clock clock) {
         this.movimientoRepository = movimientoRepository;
         this.contratoRepository = contratoRepository;
         this.plazoParametroRepository = plazoParametroRepository;
         this.turnoRepository = turnoRepository;
         this.usuarioRepository = usuarioRepository;
+        this.folioNotaRepository = folioNotaRepository;
         this.calculoContratoService = calculoContratoService;
+        this.cobroService = cobroService;
+        this.clock = clock;
     }
 
     /**
-     * Registra un refrendo del contrato. Si la fecha actual supera el vencimiento más
-     * los días de gracia, calcula la sanción por extemporaneidad y marca el movimiento
-     * como RX; en caso contrario es RF, o RC si trae abono a capital.
+     * Registra un movimiento con cobro. Es el único camino de escritura de refrendos, abonos a capital,
+     * refrendos parciales y finiquitos: recalcula todo con la fecha del servidor (RN-19), valida la
+     * operación contra la matriz RN-16 y el máximo de refrendos (RN-28), exige turno activo (RN-21),
+     * valida el pago (RN-24) y actualiza el contrato en la misma transacción. El tipo resultante (RF,
+     * RPG, RX…) lo decide la fecha, no el cliente.
      *
-     * @param request  contrato y datos del movimiento (abono opcional)
-     * @param username usuario que registra el movimiento
-     * @return MovimientoResponse con interés, sanción, semanas vencidas y nueva fecha de vencimiento
-     * @throws BadRequestException si no hay turno activo o se supera el máximo de refrendos
+     * @param request  operación, forma de pago e identificador de idempotencia
+     * @param username usuario que cobra
+     * @return el movimiento registrado; si el requestId ya se usó, el movimiento de esa primera petición
+     * @throws BadRequestException       si no hay turno activo, la operación no está disponible, el importe
+     *                                   cambió desde la cotización o el pago no es válido
+     * @throws ResourceNotFoundException si el contrato o el usuario no existen
      */
-    public MovimientoResponse refrendar(RefrendoRequest request, String username) {
-        Contrato contrato = contratoRepository.findById(request.getIdContrato())
+    public MovimientoResponse registrar(MovimientoRequest request, String username) {
+        // El bloqueo va primero: serializa cobros simultáneos del mismo contrato y hace que una petición
+        // repetida vea el movimiento que registró la anterior
+        Contrato contrato = contratoRepository.findWithLockById(request.getContratoId())
                 .orElseThrow(() -> new ResourceNotFoundException(
-                        "Contrato no encontrado: " + request.getIdContrato()));
-        Turno turno = turnoRepository.findByActivo(true)
-                .orElseThrow(() -> new BadRequestException(
-                        "No hay un turno activo. Abra un turno antes de registrar movimientos."));
+                        "Contrato no encontrado: " + request.getContratoId()));
+
+        // Idempotencia: el mismo requestId devuelve lo ya registrado y no cobra dos veces
+        Optional<MovimientoContrato> registrado = movimientoRepository.findByRequestId(request.getRequestId());
+        if (registrado.isPresent()) {
+            MovimientoContrato previo = registrado.get();
+            if (!previo.getContrato().getId().equals(contrato.getId())) {
+                throw new BadRequestException("El identificador de la operación ya se usó en otro contrato");
+            }
+            log.info("Cobro repetido requestId={} contrato={}: se devuelve el movimiento {}",
+                    request.getRequestId(), contrato.getFolio(), previo.getId());
+            return toResponse(previo, contrato);
+        }
+
+        Turno turno = turnoActivo();
         Usuario usuario = usuarioRepository.findByNombreUsuario(username)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado: " + username));
 
+        // Mismo cálculo y mismas validaciones que la cotización, con la fecha del servidor
+        LocalDate hoy = LocalDate.now(clock);
         PlazoParametro param = obtenerParametro(contrato);
+        ParametrosCalculo p = calculoContratoService.resolverParametros(contrato, param);
+        validarOperacion(contrato, param, p, request.getTipoOperacion(), hoy);
+        CotizacionMovimiento c = calculoContratoService.cotizar(contrato, p, request.getTipoOperacion(),
+                hoy, request.getPeriodos(), request.getAbonoCapital());
 
-        // Validar maximo de refrendos ANTES de calcular (evita side effects si falla)
-        if (param != null && param.getNumMaxRefrendos() != null && param.getNumMaxRefrendos() > 0
-                && contrato.getNumRefrendos() >= param.getNumMaxRefrendos()) {
-            throw new BadRequestException(
-                    "El contrato alcanzo el maximo de refrendos permitidos (" + param.getNumMaxRefrendos() + ")");
+        // El cajero cobra lo que vio: si el importe cambió (cambio de día, gracia rebasada) se vuelve a cotizar
+        if (request.getTotalCotizado() != null && request.getTotalCotizado().compareTo(c.total()) != 0) {
+            throw new BadRequestException("El importe cambió desde la cotización ($" + request.getTotalCotizado()
+                    + " → $" + c.total() + "). Vuelva a cotizar la operación.");
         }
 
-        // Motor unico (Pasada 2): calcula interes+almacen+gastos, sancion y su IVA en una sola pasada,
-        // usando el snapshot del contrato (changeset 026) si esta presente o config vigente como fallback.
-        // CAMBIO DE COBRO vs. version anterior: ahora se cobra IVA sobre (interes + sancion) en vez de
-        // salir del refrendar sin IVA. La sancion sigue siendo prestamo x porcSancionSemanal/100 x semanas,
-        // pero al total agregado se le suma el IVA como en el contrato impreso.
-        DesgloseCobro d = calculoContratoService.calcularCobroPeriodo(
-                contrato, param, LocalDate.now(), 1);
-
-        // "interes" en MovimientoContrato es el interes total (interes + almacen): no hay columna separada
-        // para el almacenaje. Los gastos admin ya no se cobran por periodo (GAP-09).
-        BigDecimal interesTotal = d.interesTotal();
-        BigDecimal sancion = d.sancion();
-        int semanasVencidas = d.semanasVencidas();
-
-        BigDecimal abono = request.getAbonoCapital() != null ? request.getAbonoCapital() : BigDecimal.ZERO;
-
-        TipoMovimiento tipo;
-        if (semanasVencidas > 0) {
-            tipo = TipoMovimiento.RX;
-        } else if (abono.compareTo(BigDecimal.ZERO) > 0) {
-            tipo = TipoMovimiento.RC;
-        } else {
-            tipo = TipoMovimiento.RF;
-        }
-
-        // total = interes+almacen+gastos + sancion + IVA(base) + abono. El abono NO lleva IVA (es capital).
-        BigDecimal total = d.total().add(abono);
-
-        MovimientoContrato mov = new MovimientoContrato();
-        mov.setContrato(contrato);
-        mov.setTurno(turno);
-        mov.setUsuario(usuario);
-        mov.setTipo(tipo);
-        mov.setMonto(total);
-        mov.setInteres(interesTotal);
-        mov.setSancion(sancion);
-        mov.setAbonoCapital(abono);
-        mov.setSemanasVencidas(semanasVencidas);
-        mov.setIva(d.iva());
-        mov.setFecha(LocalDateTime.now());
+        MovimientoContrato mov = nuevoMovimiento(contrato, turno, usuario, c);
+        mov.setRequestId(request.getRequestId());
         mov.setObservaciones(request.getObservaciones());
+        // Solo el endpoint deprecado /refrendo llega sin pago: no tiene ventana de Cobro
+        PagoRequest pago = request.getPago() != null ? request.getPago() : pagoExactoEnEfectivo(c.total());
+        cobroService.aplicarPago(mov, pago, c.total());
+
         registrarEstadoAnterior(mov, contrato);
-
-        // Extender el contrato un periodo y marcarlo vigente. Las fechas y el saldo solo se mantienen
-        // sincronizados con las columnas del changeset 027; la regla de fechas RN-06 llega en F3.
-        int diasPorPeriodo = contrato.getPlazo().getDiasPorPeriodo();
-        contrato.setFechaContrato(contrato.getFechaContrato().plusDays(diasPorPeriodo));
-        contrato.setFechaVencimiento(contrato.getFechaVencimiento().plusDays(diasPorPeriodo));
-        contrato.setFechaComercializacion(contrato.getFechaVencimiento()
-                .plusDays(Constantes.DIAS_VENCIMIENTO_A_COMERCIALIZACION));
-        contrato.setSaldoCapital(contrato.getSaldoCapital().subtract(abono));
-        contrato.setNumRefrendos(contrato.getNumRefrendos() + 1);
-        contrato.setEstatus(EstatusContrato.VIGENTE);
-
+        aplicarAlContrato(contrato, c);
         registrarEstadoNuevo(mov, contrato);
+        mov.setFolioNota(siguienteFolioNota(contrato.getSucursalId()));
+
         movimientoRepository.save(mov);
         contratoRepository.save(contrato);
 
-        log.info("Refrendo {} contrato={} interes={} sancion={} semanas={} total={}",
-                tipo, contrato.getFolio(), interesTotal, sancion, semanasVencidas, total);
-
+        log.info("Movimiento {} contrato={} folioNota={} periodos={}+{} interes={} sancion={} iva={} total={}",
+                mov.getTipo(), contrato.getFolio(), mov.getFolioNota(), c.periodosNormalesAplicados(),
+                c.periodosExtemporaneosAplicados(), mov.getInteres(), mov.getSancion(), mov.getIva(), mov.getMonto());
         return toResponse(mov, contrato);
+    }
+
+    /**
+     * Registra un refrendo por el endpoint anterior a F3: con abono es ABONO_CAPITAL y sin abono REFRENDO.
+     * Sin ventana de Cobro, se registra como pago exacto en efectivo y sin idempotencia.
+     *
+     * @param request  contrato, abono opcional y observaciones
+     * @param username usuario que registra el movimiento
+     * @return el movimiento registrado
+     * @deprecated usar {@link #registrar}; se conserva mientras algún cliente use POST /api/movimientos/refrendo
+     */
+    @Deprecated
+    public MovimientoResponse refrendar(RefrendoRequest request, String username) {
+        BigDecimal abono = request.getAbonoCapital();
+        boolean conAbono = abono != null && abono.signum() > 0;
+
+        MovimientoRequest r = new MovimientoRequest();
+        r.setContratoId(request.getIdContrato());
+        r.setTipoOperacion(conAbono ? TipoOperacion.ABONO_CAPITAL : TipoOperacion.REFRENDO);
+        r.setAbonoCapital(conAbono ? abono : null);
+        r.setObservaciones(request.getObservaciones());
+        r.setRequestId(UUID.randomUUID().toString());
+        return registrar(r, username);
     }
 
     /**
@@ -169,9 +186,7 @@ public class MovimientoContratoService {
     public MovimientoResponse cobrarReposicion(Long contratoId, String username) {
         Contrato contrato = contratoRepository.findById(contratoId)
                 .orElseThrow(() -> new ResourceNotFoundException("Contrato no encontrado: " + contratoId));
-        Turno turno = turnoRepository.findByActivo(true)
-                .orElseThrow(() -> new BadRequestException(
-                        "No hay un turno activo. Abra un turno antes de registrar movimientos."));
+        Turno turno = turnoActivo();
         Usuario usuario = usuarioRepository.findByNombreUsuario(username)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado: " + username));
 
@@ -198,7 +213,7 @@ public class MovimientoContratoService {
         mov.setSancion(BigDecimal.ZERO);
         mov.setAbonoCapital(BigDecimal.ZERO);
         mov.setSemanasVencidas(0);
-        mov.setFecha(LocalDateTime.now());
+        mov.setFecha(LocalDateTime.now(clock));
         mov.setObservaciones("Cobro por reposición/reimpresión de contrato");
         // La reposición no cambia el contrato: estado anterior y nuevo son iguales
         registrarEstadoAnterior(mov, contrato);
@@ -211,7 +226,7 @@ public class MovimientoContratoService {
 
     /**
      * Cotiza una operación sobre el contrato en la fecha del servidor, sin persistir nada. Valida que
-     * la operación esté entre las acciones disponibles del estatus actual (RN-16).
+     * la operación esté entre las acciones disponibles del estatus actual (RN-16, RN-28).
      *
      * @param request contrato, operación y, según el caso, periodos o abono a capital
      * @return CotizacionMovimientoResponse con desglose, fechas nuevas y acciones disponibles
@@ -222,23 +237,15 @@ public class MovimientoContratoService {
         Contrato contrato = contratoRepository.findById(request.getContratoId())
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Contrato no encontrado: " + request.getContratoId()));
-        ParametrosCalculo p = calculoContratoService.resolverParametros(contrato, obtenerParametro(contrato));
+        PlazoParametro param = obtenerParametro(contrato);
+        ParametrosCalculo p = calculoContratoService.resolverParametros(contrato, param);
         // La fecha de operación es siempre la del servidor
-        LocalDate hoy = LocalDate.now();
+        LocalDate hoy = LocalDate.now(clock);
 
-        // Validar la operación contra la matriz de estatus antes de calcular
-        EstatusOperativo estatus = EstatusContratoResolver.estatusDerivado(contrato, p.diasGraciaSancion(), hoy);
-        int transcurridos = calculoContratoService.situacion(contrato, p, hoy).periodosTranscurridos();
-        Set<AccionContrato> acciones = EstatusContratoResolver.accionesDisponibles(estatus, transcurridos);
-        AccionContrato accion = EstatusContratoResolver.accionPara(request.getTipoOperacion(), estatus);
-        if (!acciones.contains(accion)) {
-            throw new BadRequestException(
-                    "La operación " + accion + " no está disponible para un contrato " + estatus);
-        }
-
+        Disponibilidad disponibilidad = validarOperacion(contrato, param, p, request.getTipoOperacion(), hoy);
         CotizacionMovimiento c = calculoContratoService.cotizar(contrato, p, request.getTipoOperacion(),
                 hoy, request.getPeriodos(), request.getAbonoCapital());
-        return toCotizacionResponse(contrato, estatus, acciones, c);
+        return toCotizacionResponse(contrato, disponibilidad.estatus(), disponibilidad.acciones(), c);
     }
 
     /**
@@ -260,6 +267,116 @@ public class MovimientoContratoService {
     // =========================================================================
     // Helpers privados
     // =========================================================================
+
+    /** Estatus operativo y acciones habilitadas del contrato en la fecha de operación. */
+    private record Disponibilidad(EstatusOperativo estatus, Set<AccionContrato> acciones) {
+    }
+
+    /**
+     * Valida la operación contra la matriz RN-16 y el máximo de refrendos (RN-28). La cotización y el
+     * registro usan esta misma validación, así que lo que se cotiza es lo que se puede cobrar.
+     */
+    private Disponibilidad validarOperacion(Contrato contrato, PlazoParametro param, ParametrosCalculo p,
+                                            TipoOperacion operacion, LocalDate hoy) {
+        EstatusOperativo estatus = EstatusContratoResolver.estatusDerivado(contrato, p.diasGraciaSancion(), hoy);
+        int transcurridos = calculoContratoService.situacion(contrato, p, hoy).periodosTranscurridos();
+        boolean agotados = EstatusContratoResolver.refrendosAgotados(contrato, param);
+        Set<AccionContrato> acciones = EstatusContratoResolver.accionesDisponibles(estatus, transcurridos, agotados);
+
+        AccionContrato accion = EstatusContratoResolver.accionPara(operacion, estatus);
+        if (!acciones.contains(accion)) {
+            if (agotados && operacion != TipoOperacion.FINIQUITO) {
+                throw new BadRequestException("El contrato alcanzó el máximo de refrendos permitidos ("
+                        + param.getNumMaxRefrendos() + "); solo se puede finiquitar");
+            }
+            throw new BadRequestException(
+                    "La operación " + accion + " no está disponible para un contrato " + estatus);
+        }
+        return new Disponibilidad(estatus, acciones);
+    }
+
+    private Turno turnoActivo() {
+        return turnoRepository.findByActivo(true)
+                .orElseThrow(() -> new BadRequestException(
+                        "No hay un turno activo. Abra un turno antes de registrar movimientos."));
+    }
+
+    /** Movimiento con los montos de la cotización; la forma de pago y el estado se agregan después. */
+    private MovimientoContrato nuevoMovimiento(Contrato contrato, Turno turno, Usuario usuario,
+                                               CotizacionMovimiento c) {
+        DesgloseCobro d = c.desglose();
+        MovimientoContrato mov = new MovimientoContrato();
+        mov.setContrato(contrato);
+        mov.setTurno(turno);
+        mov.setUsuario(usuario);
+        mov.setTipo(c.tipoMovimiento());
+        mov.setMonto(c.total());
+        // "interes" es interés + almacenaje: no hay columna separada para el almacenaje
+        mov.setInteres(d.interesTotal());
+        mov.setSancion(d.sancion());
+        mov.setIva(d.iva());
+        mov.setAbonoCapital(c.abonoCapital());
+        mov.setSemanasVencidas(c.periodosExtemporaneosAplicados());
+        mov.setPeriodosNormales(c.periodosNormalesAplicados());
+        mov.setDiasGraciaUsados(c.situacion().diasGraciaUsados());
+        mov.setInteresPorPeriodo(c.interesPorPeriodo());
+        // RN-27: se guarda tanto el porcentaje vigente aplicado como el importe descontado para
+        // reconstruir la nota de COCAE (columnas "% Desc." e "Int. c/Desc.").
+        mov.setPorcDescuentoInteres(c.parametros().porcDescuentoInteres() != null
+                ? c.parametros().porcDescuentoInteres() : BigDecimal.ZERO);
+        mov.setImporteDescuento(c.descuento());
+        mov.setFecha(LocalDateTime.now(clock));
+        return mov;
+    }
+
+    /**
+     * Deja el contrato como indica la cotización: fechas por RN-06 y saldo nuevo; el finiquito lo cierra
+     * y libera las partidas.
+     */
+    private void aplicarAlContrato(Contrato contrato, CotizacionMovimiento c) {
+        contrato.setSaldoCapital(c.saldoNuevo());
+        if (c.operacion() == TipoOperacion.FINIQUITO) {
+            // Las fechas del último periodo se conservan; las prendas se entregan al cliente
+            contrato.setEstatus(EstatusContrato.FINIQUITADO);
+            contrato.getPartidas().forEach(partida -> partida.setEstatus(EstatusPartida.FIN));
+            return;
+        }
+        contrato.setFechaContrato(c.fechaContratoNueva());
+        contrato.setFechaVencimiento(c.fechaVencimientoNueva());
+        contrato.setFechaComercializacion(c.fechaComercializacionNueva());
+        contrato.setNumRefrendos(contrato.getNumRefrendos() + 1);
+        contrato.setEstatus(estatusPersistido(c.estatusNuevo()));
+    }
+
+    /** EN_GRACIA no se persiste: el contrato sigue VIGENTE hasta que el pase diario lo venza. */
+    private static EstatusContrato estatusPersistido(EstatusOperativo estatus) {
+        return switch (estatus) {
+            case VIGENTE, EN_GRACIA -> EstatusContrato.VIGENTE;
+            case VENCIDO -> EstatusContrato.VENCIDO;
+            case EN_VENTA -> EstatusContrato.EN_VENTA;
+            case FINIQUITADO -> EstatusContrato.FINIQUITADO;
+            default -> throw new IllegalStateException("Estatus inesperado tras un movimiento: " + estatus);
+        };
+    }
+
+    /** Siguiente folio de nota de la sucursal; el contador queda bloqueado hasta el fin de la transacción. */
+    private Integer siguienteFolioNota(Integer sucursalId) {
+        FolioNota folio = folioNotaRepository.findBySucursalId(sucursalId).orElseGet(() -> {
+            FolioNota nuevo = new FolioNota();
+            nuevo.setSucursalId(sucursalId);
+            return nuevo;
+        });
+        folio.setUltimoFolio(folio.getUltimoFolio() + 1);
+        folioNotaRepository.save(folio);
+        return folio.getUltimoFolio();
+    }
+
+    private static PagoRequest pagoExactoEnEfectivo(BigDecimal total) {
+        PagoRequest pago = new PagoRequest();
+        pago.setEfectivo(total);
+        pago.setTarjeta(BigDecimal.ZERO);
+        return pago;
+    }
 
     /**
      * Obtiene el PlazoParametro representativo del contrato (plazo + tipo de prenda de
@@ -340,6 +457,7 @@ public class MovimientoContratoService {
         r.setAbonoCapital(c.abonoCapital());
         r.setCapital(c.capital());
         r.setTotal(c.total());
+        r.setTotalConLetra(NumeroALetras.importe(c.total()));
 
         r.setSaldoNuevo(c.saldoNuevo());
         r.setFechaContratoNueva(c.fechaContratoNueva());
@@ -353,6 +471,7 @@ public class MovimientoContratoService {
     private MovimientoResponse toResponse(MovimientoContrato m, Contrato contrato) {
         MovimientoResponse r = new MovimientoResponse();
         r.setId(m.getId());
+        r.setFolioNota(m.getFolioNota());
         r.setIdContrato(contrato.getId());
         r.setFolioContrato(contrato.getFolio());
         r.setTipo(m.getTipo());

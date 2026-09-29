@@ -32,4 +32,12 @@ public interface MovimientoContratoRepository extends BaseRepository<MovimientoC
      * @return lista de movimientos del turno
      */
     List<MovimientoContrato> findByTurnoId(Integer turnoId);
+
+    /**
+     * Movimiento registrado con un identificador de operación (idempotencia del cobro).
+     *
+     * @param requestId identificador generado por el frontend al abrir la ventana de Cobro
+     * @return el movimiento, o vacío si ese identificador no se ha usado
+     */
+    Optional<MovimientoContrato> findByRequestId(String requestId);
 }
