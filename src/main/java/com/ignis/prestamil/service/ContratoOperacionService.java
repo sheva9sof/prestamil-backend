@@ -31,6 +31,8 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -162,7 +164,33 @@ public class ContratoOperacionService {
         movimientoRepository.findFirstByContratoIdAndCanceladoFalseOrderByFechaDescIdDesc(id)
                 .map(this::toUltimoMovimiento)
                 .ifPresent(r::setUltimoMovimiento);
+        llenarReposicion(r, contrato, parametroVigente(contrato, new HashMap<>()));
         return r;
+    }
+
+    /**
+     * Configuración e importe de reposición (F9). Deja los campos en null si el plazo no la habilita para
+     * que el frontend pueda ocultar/deshabilitar el modal sin adivinar.
+     */
+    private void llenarReposicion(ContratoOperacionDetalleResponse r, Contrato contrato, PlazoParametro param) {
+        if (param == null || !Boolean.TRUE.equals(param.getCobrarReposicionContrato())) {
+            r.setCobrarReposicionContrato(false);
+            return;
+        }
+        r.setCobrarReposicionContrato(true);
+        r.setReposicionEsPorcentaje(param.getReposicionEsPorcentaje());
+        r.setPorcReposicion(param.getPorcReposicion());
+        r.setMontoReposicion(param.getMontoReposicion());
+        BigDecimal importe;
+        if (Boolean.TRUE.equals(param.getReposicionEsPorcentaje())) {
+            BigDecimal porc = param.getPorcReposicion() != null ? param.getPorcReposicion() : BigDecimal.ZERO;
+            importe = contrato.getMontoPrestamo().multiply(porc)
+                    .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+        } else {
+            BigDecimal monto = param.getMontoReposicion() != null ? param.getMontoReposicion() : BigDecimal.ZERO;
+            importe = monto.setScale(2, RoundingMode.HALF_UP);
+        }
+        r.setImporteReposicion(importe);
     }
 
     // =========================================================================

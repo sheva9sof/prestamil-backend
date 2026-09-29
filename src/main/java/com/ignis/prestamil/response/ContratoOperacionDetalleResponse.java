@@ -30,6 +30,14 @@ public class ContratoOperacionDetalleResponse extends ContratoOperacionResponse 
     private List<PartidaContratoResponse> partidas;
     private UltimoMovimiento ultimoMovimiento;
 
+    // Reposición/reimpresión de contrato (F9): configuración del plazo + importe ya calculado, para que
+    // el modal muestre "% reposición" e "Importe" sin llamadas extra. Null si el plazo no la habilita.
+    private Boolean cobrarReposicionContrato;
+    private Boolean reposicionEsPorcentaje;
+    private BigDecimal porcReposicion;
+    private BigDecimal montoReposicion;
+    private BigDecimal importeReposicion;
+
     /** Último movimiento no cancelado (RN-22). */
     @Getter
     @Setter

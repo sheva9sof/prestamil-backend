@@ -35,5 +35,7 @@
     <include file="db/changelog/changes/028-menu-finiquitos-refrendos.sql"/>
     <include file="db/changelog/changes/029-cobro-movimientos.sql"/>
     <include file="db/changelog/changes/030-plazo-parametro-descuento-interes.sql"/>
+    <include file="db/changelog/changes/031-roles-permitidos-exentar-reposicion.sql"/>
+    <include file="db/changelog/changes/032-roles-permitidos-cancelar-movimiento.sql"/>
 
 </databaseChangeLog>

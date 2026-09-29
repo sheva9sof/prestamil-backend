@@ -1,18 +1,24 @@
 package com.ignis.prestamil.service;
 
 import com.ignis.prestamil.exception.BadRequestException;
+import com.ignis.prestamil.exception.ForbiddenException;
 import com.ignis.prestamil.exception.ResourceNotFoundException;
 import com.ignis.prestamil.model.*;
+import com.ignis.prestamil.repository.BitacoraRepository;
+import com.ignis.prestamil.repository.ConfiguracionRepository;
 import com.ignis.prestamil.repository.ContratoRepository;
 import com.ignis.prestamil.repository.FolioNotaRepository;
 import com.ignis.prestamil.repository.MovimientoContratoRepository;
 import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.TurnoRepository;
 import com.ignis.prestamil.repository.UsuarioRepository;
+import com.ignis.prestamil.request.CancelarMovimientoRequest;
 import com.ignis.prestamil.request.CotizacionRequest;
 import com.ignis.prestamil.request.MovimientoRequest;
 import com.ignis.prestamil.request.PagoRequest;
 import com.ignis.prestamil.request.RefrendoRequest;
+import com.ignis.prestamil.request.ReposicionRequest;
+import com.ignis.prestamil.util.Constantes;
 import com.ignis.prestamil.response.CotizacionMovimientoResponse;
 import com.ignis.prestamil.response.MovimientoResponse;
 import com.ignis.prestamil.service.calculo.CalculoContratoService;
@@ -31,10 +37,12 @@ import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Gestiona los movimientos de un contrato: refrendos (normales, en gracia y extemporáneos), abonos a
@@ -55,6 +63,8 @@ public class MovimientoContratoService {
     private final TurnoRepository turnoRepository;
     private final UsuarioRepository usuarioRepository;
     private final FolioNotaRepository folioNotaRepository;
+    private final ConfiguracionRepository configuracionRepository;
+    private final BitacoraRepository bitacoraRepository;
     private final CalculoContratoService calculoContratoService;
     private final CobroService cobroService;
     private final Clock clock;
@@ -65,6 +75,8 @@ public class MovimientoContratoService {
                                      TurnoRepository turnoRepository,
                                      UsuarioRepository usuarioRepository,
                                      FolioNotaRepository folioNotaRepository,
+                                     ConfiguracionRepository configuracionRepository,
+                                     BitacoraRepository bitacoraRepository,
                                      CalculoContratoService calculoContratoService,
                                      CobroService cobroService,
                                      Clock clock) {
@@ -74,6 +86,8 @@ public class MovimientoContratoService {
         this.turnoRepository = turnoRepository;
         this.usuarioRepository = usuarioRepository;
         this.folioNotaRepository = folioNotaRepository;
+        this.configuracionRepository = configuracionRepository;
+        this.bitacoraRepository = bitacoraRepository;
         this.calculoContratoService = calculoContratoService;
         this.cobroService = cobroService;
         this.clock = clock;
@@ -175,53 +189,136 @@ public class MovimientoContratoService {
     }
 
     /**
-     * Cobra la reposición/reimpresión del contrato según la configuración del plazo
-     * y registra el movimiento contra el turno activo (caja).
+     * Registra la reposición/reimpresión de un contrato (F9). El importe sale del plazo
+     * ({@code porc_reposicion} sobre el préstamo o {@code monto_reposicion} fijo según
+     * {@code reposicion_es_porcentaje}); si {@code noCobrar = true} el importe es 0, pero siempre queda
+     * un movimiento RE con folio, usuario que exentó y comentario para auditoría. La casilla
+     * "No cobrar" solo la aceptan los roles configurados en {@link Constantes#ROLES_PERMITIDOS_EXENTAR_REPOSICION}
+     * (por defecto Gerente y Sistemas); cualquier otro rol responde 403. La reposición no cambia el contrato.
      *
      * @param contratoId identificador del contrato
-     * @param username   usuario que cobra
-     * @return MovimientoResponse del cobro de reposición
-     * @throws BadRequestException si el plazo no tiene habilitado el cobro de reposición o no hay turno activo
+     * @param request    exención, comentario, forma de pago e identificador de idempotencia
+     * @param username   usuario que registra el movimiento
+     * @return el movimiento registrado; si el requestId ya se usó, el movimiento de esa primera petición
+     * @throws BadRequestException       si el plazo no tiene habilitado el cobro, no hay turno activo o
+     *                                   el pago no cubre el importe
+     * @throws ForbiddenException        si un rol no autorizado intenta exentar el cobro
+     * @throws ResourceNotFoundException si el contrato o el usuario no existen
      */
-    public MovimientoResponse cobrarReposicion(Long contratoId, String username) {
-        Contrato contrato = contratoRepository.findById(contratoId)
+    public MovimientoResponse cobrarReposicion(Long contratoId, ReposicionRequest request, String username) {
+        // Bloqueo primero: serializa reposiciones simultáneas y hace que un reintento vea la primera
+        Contrato contrato = contratoRepository.findWithLockById(contratoId)
                 .orElseThrow(() -> new ResourceNotFoundException("Contrato no encontrado: " + contratoId));
-        Turno turno = turnoActivo();
+
+        Optional<MovimientoContrato> registrado = movimientoRepository.findByRequestId(request.getRequestId());
+        if (registrado.isPresent()) {
+            MovimientoContrato previo = registrado.get();
+            if (!previo.getContrato().getId().equals(contrato.getId())) {
+                throw new BadRequestException("El identificador de la operación ya se usó en otro contrato");
+            }
+            log.info("Reposición repetida requestId={} contrato={}: se devuelve el movimiento {}",
+                    request.getRequestId(), contrato.getFolio(), previo.getId());
+            return toResponse(previo, contrato);
+        }
+
         Usuario usuario = usuarioRepository.findByNombreUsuario(username)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado: " + username));
+
+        // La exención se valida antes de tocar caja o folios: si no puede, nada cambia
+        if (request.isNoCobrar()) {
+            validarRolPuedeExentar(usuario);
+        }
 
         PlazoParametro param = obtenerParametro(contrato);
         if (param == null || !Boolean.TRUE.equals(param.getCobrarReposicionContrato())) {
             throw new BadRequestException("El plazo no tiene habilitado el cobro de reposición de contrato");
         }
 
-        BigDecimal monto;
-        if (Boolean.TRUE.equals(param.getReposicionEsPorcentaje())) {
-            BigDecimal porc = param.getPorcReposicion() != null ? param.getPorcReposicion() : BigDecimal.ZERO;
-            monto = contrato.getMontoPrestamo().multiply(porc).divide(CIEN, 2, RoundingMode.HALF_UP);
-        } else {
-            monto = param.getMontoReposicion() != null ? param.getMontoReposicion() : BigDecimal.ZERO;
-        }
+        BigDecimal importe = request.isNoCobrar()
+                ? BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP)
+                : calcularImporteReposicion(contrato, param);
+
+        Turno turno = turnoActivo();
 
         MovimientoContrato mov = new MovimientoContrato();
         mov.setContrato(contrato);
         mov.setTurno(turno);
         mov.setUsuario(usuario);
         mov.setTipo(TipoMovimiento.RE);
-        mov.setMonto(monto);
+        mov.setMonto(importe);
         mov.setInteres(BigDecimal.ZERO);
         mov.setSancion(BigDecimal.ZERO);
+        mov.setIva(BigDecimal.ZERO);
         mov.setAbonoCapital(BigDecimal.ZERO);
         mov.setSemanasVencidas(0);
+        mov.setDiasGraciaUsados(0);
+        mov.setPorcDescuentoInteres(BigDecimal.ZERO);
+        mov.setImporteDescuento(BigDecimal.ZERO);
         mov.setFecha(LocalDateTime.now(clock));
-        mov.setObservaciones("Cobro por reposición/reimpresión de contrato");
+        mov.setRequestId(request.getRequestId());
+        mov.setObservaciones(observacionesReposicion(request));
+
+        // Un importe 0 no exige ventana de Cobro; con importe > 0 se valida el pago (RN-24)
+        PagoRequest pago = request.getPago() != null ? request.getPago() : pagoExactoEnEfectivo(importe);
+        cobroService.aplicarPago(mov, pago, importe);
+
         // La reposición no cambia el contrato: estado anterior y nuevo son iguales
         registrarEstadoAnterior(mov, contrato);
         registrarEstadoNuevo(mov, contrato);
+        // Aun exenta, el ticket lleva folio (RN-25)
+        mov.setFolioNota(siguienteFolioNota(contrato.getSucursalId()));
         movimientoRepository.save(mov);
 
-        log.info("Reposición cobrada contrato={} monto={}", contrato.getFolio(), monto);
+        log.info("Reposición contrato={} folioNota={} importe={} exenta={} usuario={}",
+                contrato.getFolio(), mov.getFolioNota(), importe, request.isNoCobrar(), username);
         return toResponse(mov, contrato);
+    }
+
+    /** Importe de reposición según la configuración del plazo. */
+    private BigDecimal calcularImporteReposicion(Contrato contrato, PlazoParametro param) {
+        if (Boolean.TRUE.equals(param.getReposicionEsPorcentaje())) {
+            BigDecimal porc = param.getPorcReposicion() != null ? param.getPorcReposicion() : BigDecimal.ZERO;
+            return contrato.getMontoPrestamo().multiply(porc).divide(CIEN, 2, RoundingMode.HALF_UP);
+        }
+        BigDecimal monto = param.getMontoReposicion() != null ? param.getMontoReposicion() : BigDecimal.ZERO;
+        return monto.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /** Verifica que el rol del usuario esté en {@code ROLES_PERMITIDOS_EXENTAR_REPOSICION}. */
+    private void validarRolPuedeExentar(Usuario usuario) {
+        Set<Integer> permitidos = rolesPermitidosExentar();
+        Integer rolId = usuario.getRol() != null ? usuario.getRol().getId() : null;
+        if (rolId == null || !permitidos.contains(rolId)) {
+            throw new ForbiddenException(
+                    "El usuario no tiene permiso para exentar el cobro de reposición de contrato");
+        }
+    }
+
+    /** CSV de ids de rol de la configuración; conjunto vacío = nadie puede exentar. */
+    private Set<Integer> rolesPermitidosExentar() {
+        return configuracionRepository.findByConfiguracion(Constantes.ROLES_PERMITIDOS_EXENTAR_REPOSICION)
+                .map(Configuracion::getValorCadena)
+                .filter(csv -> csv != null && !csv.isBlank())
+                .map(csv -> Arrays.stream(csv.split(","))
+                        .map(String::trim)
+                        .filter(s -> !s.isEmpty())
+                        .map(Integer::parseInt)
+                        .collect(Collectors.toSet()))
+                .orElseGet(java.util.Collections::emptySet);
+    }
+
+    private static String observacionesReposicion(ReposicionRequest request) {
+        String base = request.isNoCobrar()
+                ? "Reposición de contrato exenta"
+                : "Cobro por reposición/reimpresión de contrato";
+        String comentario = request.getComentario();
+        if (comentario == null || comentario.isBlank()) {
+            return base;
+        }
+        String limpio = comentario.trim();
+        String texto = base + ". " + limpio;
+        // observaciones admite máximo 300 caracteres (columna VARCHAR(300))
+        return texto.length() > 300 ? texto.substring(0, 300) : texto;
     }
 
     /**
@@ -262,6 +359,164 @@ public class MovimientoContratoService {
                 .stream()
                 .map(m -> toResponse(m, contrato))
                 .toList();
+    }
+
+    /**
+     * Cancela un movimiento restaurando el estado previo del contrato (F10, RN-26). El movimiento
+     * nunca se borra: queda marcado con {@code cancelado = true}, usuario, fecha y motivo. Cada
+     * movimiento guarda su {@code *Anterior} al registrarse (F0), así que la reversión es la misma
+     * para todos los tipos: solo el finiquito requiere volver a poner las partidas en operación.
+     *
+     * <p>Reglas:</p>
+     * <ul>
+     *   <li>Solo el último movimiento no cancelado del contrato.</li>
+     *   <li>Movimiento del día actual (RN-26): días anteriores modificarían cortes y bóveda.</li>
+     *   <li>El turno donde se registró debe seguir activo — un turno por sucursal, así que
+     *       cierre de turno = cierre de día.</li>
+     *   <li>Rol del usuario en {@code ROLES_PERMITIDOS_CANCELAR_MOVIMIENTO} (por defecto Gerente).</li>
+     *   <li>Motivo obligatorio, texto libre, mínimo 10 caracteres útiles.</li>
+     * </ul>
+     *
+     * @param movimientoId identificador del movimiento a cancelar
+     * @param request      motivo de la cancelación
+     * @param username     usuario que cancela (debe tener rol permitido)
+     * @return el movimiento marcado como cancelado
+     * @throws BadRequestException       si no es el último, ya está cancelado, es de otro día, el turno
+     *                                   ya cerró o el motivo no es válido
+     * @throws ForbiddenException        si el rol del usuario no puede cancelar
+     * @throws ResourceNotFoundException si el movimiento o el usuario no existen
+     */
+    public MovimientoResponse cancelar(Long movimientoId, CancelarMovimientoRequest request, String username) {
+        MovimientoContrato mov = movimientoRepository.findById(movimientoId)
+                .orElseThrow(() -> new ResourceNotFoundException("Movimiento no encontrado: " + movimientoId));
+
+        Usuario usuario = usuarioRepository.findByNombreUsuario(username)
+                .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado: " + username));
+
+        validarRolPuedeCancelar(usuario);
+        validarMotivo(request.getMotivo());
+
+        if (Boolean.TRUE.equals(mov.getCancelado())) {
+            throw new BadRequestException("El movimiento ya está cancelado");
+        }
+
+        // RN-26: solo el último no cancelado del contrato
+        Contrato contrato = mov.getContrato();
+        MovimientoContrato ultimo = movimientoRepository
+                .findFirstByContratoIdAndCanceladoFalseOrderByFechaDescIdDesc(contrato.getId())
+                .orElseThrow(() -> new BadRequestException("El contrato no tiene un movimiento vigente que cancelar"));
+        if (!ultimo.getId().equals(mov.getId())) {
+            throw new BadRequestException(
+                    "Solo se puede cancelar el último movimiento no cancelado del contrato");
+        }
+
+        LocalDate hoy = LocalDate.now(clock);
+        if (mov.getFecha() == null || !mov.getFecha().toLocalDate().equals(hoy)) {
+            throw new BadRequestException(
+                    "Solo se pueden cancelar movimientos del día en curso; para días anteriores contacte a Sistemas");
+        }
+
+        // Un solo turno por sucursal: si el turno donde se cobró ya cerró, el día ya cerró
+        Turno turnoMov = mov.getTurno();
+        if (turnoMov == null || !Boolean.TRUE.equals(turnoMov.getActivo())) {
+            throw new BadRequestException(
+                    "El turno del movimiento ya cerró; no se puede cancelar tras el cierre de día");
+        }
+
+        // Snapshot del contrato ANTES de revertir (para bitácora)
+        String valorViejo = snapshotContrato(contrato);
+
+        revertirContrato(contrato, mov);
+
+        // Cancelar sin borrar
+        mov.setCancelado(true);
+        mov.setUsuarioCancela(usuario);
+        mov.setFechaCancelacion(LocalDateTime.now(clock));
+        mov.setMotivoCancelacion(request.getMotivo().trim());
+
+        movimientoRepository.save(mov);
+        contratoRepository.save(contrato);
+
+        registrarBitacora(username, valorViejo, snapshotContrato(contrato), mov);
+
+        log.info("Cancelación mov={} contrato={} tipo={} usuario={} motivo={}",
+                mov.getId(), contrato.getFolio(), mov.getTipo(), username, request.getMotivo());
+        return toResponse(mov, contrato);
+    }
+
+    /** Restaura en el contrato lo que este movimiento cambió. */
+    private void revertirContrato(Contrato contrato, MovimientoContrato mov) {
+        if (mov.getSaldoAnterior() != null) {
+            contrato.setSaldoCapital(mov.getSaldoAnterior());
+        }
+        if (mov.getFechaContratoAnterior() != null) {
+            contrato.setFechaContrato(mov.getFechaContratoAnterior());
+        }
+        if (mov.getFechaVencAnterior() != null) {
+            contrato.setFechaVencimiento(mov.getFechaVencAnterior());
+            contrato.setFechaComercializacion(
+                    mov.getFechaVencAnterior().plusDays(Constantes.DIAS_VENCIMIENTO_A_COMERCIALIZACION));
+        }
+        if (mov.getEstatusAnterior() != null) {
+            contrato.setEstatus(mov.getEstatusAnterior());
+        }
+        if (mov.getNumRefrendosAnterior() != null) {
+            contrato.setNumRefrendos(mov.getNumRefrendosAnterior());
+        }
+        // Un finiquito cerró el contrato y marcó las partidas como FIN: al revertir vuelven a OP
+        if (mov.getTipo() == TipoMovimiento.FI || mov.getTipo() == TipoMovimiento.FX) {
+            if (contrato.getPartidas() != null) {
+                contrato.getPartidas().forEach(p -> {
+                    if (p.getEstatus() == EstatusPartida.FIN) {
+                        p.setEstatus(EstatusPartida.OP);
+                    }
+                });
+            }
+        }
+    }
+
+    private void validarMotivo(String motivo) {
+        if (motivo == null || motivo.trim().length() < 10) {
+            throw new BadRequestException(
+                    "El motivo de la cancelación es obligatorio y debe tener al menos 10 caracteres");
+        }
+    }
+
+    private void validarRolPuedeCancelar(Usuario usuario) {
+        Set<Integer> permitidos = rolesPermitidosCancelar();
+        Integer rolId = usuario.getRol() != null ? usuario.getRol().getId() : null;
+        if (rolId == null || !permitidos.contains(rolId)) {
+            throw new ForbiddenException("El usuario no tiene permiso para cancelar movimientos");
+        }
+    }
+
+    private Set<Integer> rolesPermitidosCancelar() {
+        return configuracionRepository.findByConfiguracion(Constantes.ROLES_PERMITIDOS_CANCELAR_MOVIMIENTO)
+                .map(Configuracion::getValorCadena)
+                .filter(csv -> csv != null && !csv.isBlank())
+                .map(csv -> Arrays.stream(csv.split(","))
+                        .map(String::trim)
+                        .filter(s -> !s.isEmpty())
+                        .map(Integer::parseInt)
+                        .collect(Collectors.toSet()))
+                .orElseGet(java.util.Collections::emptySet);
+    }
+
+    private static String snapshotContrato(Contrato c) {
+        return String.format(
+                "contrato=%s saldo=%s fechaContrato=%s vencimiento=%s comercializacion=%s estatus=%s numRefrendos=%s",
+                c.getFolio(), c.getSaldoCapital(), c.getFechaContrato(), c.getFechaVencimiento(),
+                c.getFechaComercializacion(), c.getEstatus(), c.getNumRefrendos());
+    }
+
+    private void registrarBitacora(String username, String valorViejo, String valorNuevo, MovimientoContrato mov) {
+        Bitacora b = new Bitacora();
+        b.setNombreUsuario(username);
+        b.setFecha(LocalDateTime.now(clock));
+        b.setTipoMov("CANCELACION_MOVIMIENTO");
+        b.setValorViejo(valorViejo + " movimiento=" + mov.getId() + " tipo=" + mov.getTipo());
+        b.setValorNuevo(valorNuevo + " motivo=" + mov.getMotivoCancelacion());
+        bitacoraRepository.save(b);
     }
 
     // =========================================================================

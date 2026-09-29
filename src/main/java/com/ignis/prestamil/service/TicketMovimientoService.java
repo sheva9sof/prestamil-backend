@@ -175,7 +175,11 @@ public class TicketMovimientoService {
 
         // Datos del movimiento que COCAE no imprime
         List<LineaTicketRow> movimiento = new ArrayList<>();
-        if (mov.getPeriodosNormales() != null) {
+        // La reposición es un ticket corto (RN-25): "REPOSICIÓN CONTRATO: n", sin periodos ni vencimiento
+        if (mov.getTipo() == TipoMovimiento.RE) {
+            movimiento.add(linea("REPOSICIÓN CONTRATO", nz(contrato.getFolio())));
+        }
+        if (mov.getPeriodosNormales() != null && mov.getTipo() != TipoMovimiento.RE) {
             movimiento.add(linea("Periodos pagados", mov.getPeriodosNormales() + " normales / "
                     + mov.getSemanasVencidas() + " extemp."));
         }
@@ -189,26 +193,32 @@ public class TicketMovimientoService {
         }
         params.put("P_MOVIMIENTO", new JRBeanCollectionDataSource(movimiento));
 
-        // Totales: subtotal = base del IVA; el abono y el capital van por fuera del IVA (RN-12)
-        BigDecimal interes = cero(mov.getInteres());
-        BigDecimal sancion = cero(mov.getSancion());
-        BigDecimal subtotal = interes.add(sancion).subtract(descuento);
-        BigDecimal iva = cero(mov.getIva());
-        BigDecimal abono = cero(mov.getAbonoCapital());
-        BigDecimal capital = cero(mov.getMonto()).subtract(subtotal).subtract(iva).subtract(abono);
+        // Totales: subtotal = base del IVA; el abono y el capital van por fuera del IVA (RN-12).
+        // Reposición: no lleva intereses, sanción ni IVA; el importe es el subtotal.
         List<LineaTicketRow> totales = new ArrayList<>();
-        totales.add(linea("Intereses", FormatoDocumento.money(interes)));
-        totales.add(linea("Sanción", FormatoDocumento.money(sancion)));
-        if (descuento.signum() > 0) {
-            totales.add(linea("Descuento", "-" + FormatoDocumento.money(descuento)));
-        }
-        totales.add(linea("Subtotal", FormatoDocumento.money(subtotal)));
-        totales.add(linea("IVA", FormatoDocumento.money(iva)));
-        if (abono.signum() > 0) {
-            totales.add(linea("Abono a capital", FormatoDocumento.money(abono)));
-        }
-        if (capital.signum() > 0) {
-            totales.add(linea("Capital", FormatoDocumento.money(capital)));
+        BigDecimal iva = cero(mov.getIva());
+        if (mov.getTipo() == TipoMovimiento.RE) {
+            totales.add(linea("Subtotal", FormatoDocumento.money(mov.getMonto())));
+            totales.add(linea("IVA", FormatoDocumento.money(iva)));
+        } else {
+            BigDecimal interes = cero(mov.getInteres());
+            BigDecimal sancion = cero(mov.getSancion());
+            BigDecimal subtotal = interes.add(sancion).subtract(descuento);
+            BigDecimal abono = cero(mov.getAbonoCapital());
+            BigDecimal capital = cero(mov.getMonto()).subtract(subtotal).subtract(iva).subtract(abono);
+            totales.add(linea("Intereses", FormatoDocumento.money(interes)));
+            totales.add(linea("Sanción", FormatoDocumento.money(sancion)));
+            if (descuento.signum() > 0) {
+                totales.add(linea("Descuento", "-" + FormatoDocumento.money(descuento)));
+            }
+            totales.add(linea("Subtotal", FormatoDocumento.money(subtotal)));
+            totales.add(linea("IVA", FormatoDocumento.money(iva)));
+            if (abono.signum() > 0) {
+                totales.add(linea("Abono a capital", FormatoDocumento.money(abono)));
+            }
+            if (capital.signum() > 0) {
+                totales.add(linea("Capital", FormatoDocumento.money(capital)));
+            }
         }
         params.put("P_TOTALES", new JRBeanCollectionDataSource(totales));
         params.put("P_TOTAL", FormatoDocumento.money(mov.getMonto()));

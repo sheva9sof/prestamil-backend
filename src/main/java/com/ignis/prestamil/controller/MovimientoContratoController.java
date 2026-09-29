@@ -1,8 +1,10 @@
 package com.ignis.prestamil.controller;
 
+import com.ignis.prestamil.request.CancelarMovimientoRequest;
 import com.ignis.prestamil.request.CotizacionRequest;
 import com.ignis.prestamil.request.MovimientoRequest;
 import com.ignis.prestamil.request.RefrendoRequest;
+import com.ignis.prestamil.request.ReposicionRequest;
 import com.ignis.prestamil.response.CotizacionMovimientoResponse;
 import com.ignis.prestamil.response.MovimientoResponse;
 import com.ignis.prestamil.service.MovimientoContratoService;
@@ -68,15 +70,17 @@ public class MovimientoContratoController {
     }
 
     /**
-     * Cobra la reposición/reimpresión de un contrato y la registra en caja.
+     * Registra la reposición/reimpresión de un contrato (F9). Puede exentarse ({@code noCobrar = true})
+     * si el usuario tiene un rol autorizado; el resto de usuarios debe pagar y el backend responde 403.
      * POST /api/movimientos/reposicion/{contratoId}
      */
     @PostMapping("/reposicion/{contratoId}")
     public ResponseEntity<MovimientoResponse> cobrarReposicion(
             @PathVariable Long contratoId,
+            @Valid @RequestBody ReposicionRequest request,
             Authentication authentication) {
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(movimientoService.cobrarReposicion(contratoId, authentication.getName()));
+                .body(movimientoService.cobrarReposicion(contratoId, request, authentication.getName()));
     }
 
     /**
@@ -111,5 +115,19 @@ public class MovimientoContratoController {
         headers.add(HttpHeaders.CONTENT_DISPOSITION,
                 "inline; filename=ticket-vigente-" + contratoId + ".pdf");
         return new ResponseEntity<>(ticketService.generarPdfVigente(contratoId), headers, HttpStatus.OK);
+    }
+
+    /**
+     * Cancela un movimiento (F10, RN-26): revierte el contrato al estado anterior y deja el
+     * movimiento marcado con motivo y usuario. Solo el último movimiento del día, con turno activo,
+     * por un rol permitido (Gerente por defecto).
+     * POST /api/movimientos/{id}/cancelar
+     */
+    @PostMapping("/{id}/cancelar")
+    public ResponseEntity<MovimientoResponse> cancelar(
+            @PathVariable Long id,
+            @Valid @RequestBody CancelarMovimientoRequest request,
+            Authentication authentication) {
+        return ResponseEntity.ok(movimientoService.cancelar(id, request, authentication.getName()));
     }
 }

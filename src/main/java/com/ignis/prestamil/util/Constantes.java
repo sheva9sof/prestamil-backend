@@ -23,6 +23,12 @@ public class Constantes {
 
     // Nombres de configuraciones y menús
     public static final String ROLES_PERMITIDOS_APERTURA_TURNOS = "ROLES_PERMITIDOS_APERTURA_TURNOS";
+    // Roles que pueden marcar "No cobrar la reposición de contrato" (F9, Jorge WhatsApp 2026-09-26).
+    // CSV de ids de rol; por defecto Gerente (5) y Sistemas (1). Cualquier otro rol → 403.
+    public static final String ROLES_PERMITIDOS_EXENTAR_REPOSICION = "ROLES_PERMITIDOS_EXENTAR_REPOSICION";
+    // Roles que pueden cancelar un movimiento (F10, RN-26, Jorge WhatsApp 2026-09-25).
+    // CSV de ids de rol; por defecto Gerente (5). Cualquier otro rol → 403.
+    public static final String ROLES_PERMITIDOS_CANCELAR_MOVIMIENTO = "ROLES_PERMITIDOS_CANCELAR_MOVIMIENTO";
     public static final String NOMBRE_MENU_TURNO = "Turnos";
 
     // Contratos
