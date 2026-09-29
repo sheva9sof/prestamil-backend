@@ -1,5 +1,7 @@
 package com.ignis.prestamil.request;
 
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.DecimalMin;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -24,6 +26,8 @@ public class PlazoParametroRequest {
     private Boolean reposicionEsPorcentaje;
     private BigDecimal porcReposicion;
     private BigDecimal montoReposicion;
+    @DecimalMin(value = "0.0000", message = "Los gastos operativos por venta no pueden ser negativos")
+    @DecimalMax(value = "100.0000", message = "Los gastos operativos por venta no pueden exceder 100%")
     private BigDecimal comisionPorVentaPrenda;
     private Boolean aplicarSancionPorPeriodo;
     private BigDecimal porcSancionSemanal;
