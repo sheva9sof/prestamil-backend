@@ -60,6 +60,18 @@ class MovimientoContratoControllerTest {
     }
 
     @Test
+    void getTicketVigente_devuelveElPdfDelUltimoNoCancelado() throws Exception {
+        byte[] pdf = "%PDF-1.4 vigente".getBytes();
+        when(ticketService.generarPdfVigente(42L)).thenReturn(pdf);
+
+        mockMvc.perform(get("/api/movimientos/contrato/42/ticket-vigente"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_PDF))
+                .andExpect(header().string("Content-Disposition", "inline; filename=ticket-vigente-42.pdf"))
+                .andExpect(content().bytes(pdf));
+    }
+
+    @Test
     void postCotizacion_devuelve200ConLaCotizacion() throws Exception {
         CotizacionMovimientoResponse resp = new CotizacionMovimientoResponse();
         resp.setContratoId(42L);

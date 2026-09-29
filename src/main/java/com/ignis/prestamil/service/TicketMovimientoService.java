@@ -99,6 +99,26 @@ public class TicketMovimientoService {
     }
 
     /**
+     * Genera el ticket del último movimiento vigente (no cancelado) de un contrato (RN-22). El empeño no
+     * cuenta: su documento es el contrato, no una nota. Reimprimir siempre trae el mismo ticket, sin
+     * importar qué fila esté seleccionada en el historial.
+     *
+     * @param contratoId identificador del contrato
+     * @return bytes del PDF de la nota vigente
+     * @throws ResourceNotFoundException si el contrato no tiene un movimiento cobrado (todos cancelados,
+     *                                   sin movimientos, o solo el empeño)
+     */
+    @Transactional(readOnly = true)
+    public byte[] generarPdfVigente(Long contratoId) {
+        MovimientoContrato mov = movimientoRepository
+                .findFirstByContratoIdAndCanceladoFalseOrderByFechaDescIdDesc(contratoId)
+                .filter(m -> m.getTipo() != TipoMovimiento.EMP)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "No hay movimiento cobrado en el contrato " + contratoId));
+        return generarPdf(mov.getId());
+    }
+
+    /**
      * Parámetros de la plantilla. Package-private para verificar el contenido en tests sin leer el PDF.
      */
     Map<String, Object> armarParametros(MovimientoContrato mov) {

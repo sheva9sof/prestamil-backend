@@ -92,11 +92,24 @@ public class MovimientoContratoController {
     }
 
     /**
-     * Lista los movimientos de un contrato en orden cronológico.
+     * Lista los movimientos de un contrato en orden cronológico, incluyendo los cancelados.
      * GET /api/movimientos/contrato/{contratoId}
      */
     @GetMapping("/contrato/{contratoId}")
     public ResponseEntity<List<MovimientoResponse>> getMovimientos(@PathVariable Long contratoId) {
         return ResponseEntity.ok(movimientoService.getMovimientos(contratoId));
+    }
+
+    /**
+     * Ticket del último movimiento vigente del contrato (RN-22). 404 si no hay movimiento cobrado.
+     * GET /api/movimientos/contrato/{contratoId}/ticket-vigente
+     */
+    @GetMapping("/contrato/{contratoId}/ticket-vigente")
+    public ResponseEntity<byte[]> ticketVigente(@PathVariable Long contratoId) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_PDF);
+        headers.add(HttpHeaders.CONTENT_DISPOSITION,
+                "inline; filename=ticket-vigente-" + contratoId + ".pdf");
+        return new ResponseEntity<>(ticketService.generarPdfVigente(contratoId), headers, HttpStatus.OK);
     }
 }

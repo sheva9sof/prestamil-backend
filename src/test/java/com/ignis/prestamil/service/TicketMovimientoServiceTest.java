@@ -285,4 +285,44 @@ class TicketMovimientoServiceTest {
 
         assertThat(service.generarPdf(7L)).isNotEmpty();
     }
+
+    // =========================================================================
+    // Ticket vigente (F8, RN-22)
+    // =========================================================================
+
+    @Test
+    void generarPdfVigente_devuelveElUltimoNoCancelado() {
+        MovimientoContrato rf = refrendoC2();
+        rf.setId(7L);
+        when(movimientoRepository.findFirstByContratoIdAndCanceladoFalseOrderByFechaDescIdDesc(42L))
+                .thenReturn(Optional.of(rf));
+        when(movimientoRepository.findById(7L)).thenReturn(Optional.of(rf));
+
+        byte[] pdf = service.generarPdfVigente(42L);
+
+        assertThat(pdf).isNotEmpty();
+        assertThat(new String(pdf, 0, 4)).isEqualTo("%PDF");
+    }
+
+    @Test
+    void generarPdfVigente_sinMovimientos_404() {
+        when(movimientoRepository.findFirstByContratoIdAndCanceladoFalseOrderByFechaDescIdDesc(42L))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.generarPdfVigente(42L))
+                .isInstanceOf(com.ignis.prestamil.exception.ResourceNotFoundException.class)
+                .hasMessageContaining("No hay movimiento cobrado");
+    }
+
+    @Test
+    void generarPdfVigente_soloEmp_404() {
+        MovimientoContrato emp = refrendoC2();
+        emp.setTipo(TipoMovimiento.EMP);
+        when(movimientoRepository.findFirstByContratoIdAndCanceladoFalseOrderByFechaDescIdDesc(42L))
+                .thenReturn(Optional.of(emp));
+
+        assertThatThrownBy(() -> service.generarPdfVigente(42L))
+                .isInstanceOf(com.ignis.prestamil.exception.ResourceNotFoundException.class)
+                .hasMessageContaining("No hay movimiento cobrado");
+    }
 }

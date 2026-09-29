@@ -1140,4 +1140,69 @@ class MovimientoContratoServiceTest {
                     .isInstanceOf(ResourceNotFoundException.class);
         }
     }
+
+    // =========================================================================
+    // F8: Consulta de partidas y movimientos (getMovimientos)
+    // =========================================================================
+
+    /** El historial es la vista de auditoría del contrato: cronológico, incluyendo cancelados. */
+    @Nested
+    class Historial {
+
+        private MovimientoContrato mov(Long id, TipoMovimiento tipo, LocalDateTime cuando, boolean cancelado) {
+            Usuario u = new Usuario();
+            u.setNombreUsuario("cajero1");
+            MovimientoContrato m = new MovimientoContrato();
+            m.setId(id);
+            m.setTipo(tipo);
+            m.setFecha(cuando);
+            m.setMonto(BigDecimal.ZERO);
+            m.setInteres(BigDecimal.ZERO);
+            m.setSancion(BigDecimal.ZERO);
+            m.setAbonoCapital(BigDecimal.ZERO);
+            m.setIva(BigDecimal.ZERO);
+            m.setSemanasVencidas(0);
+            m.setUsuario(u);
+            m.setCancelado(cancelado);
+            return m;
+        }
+
+        @Test
+        void devuelveMovimientosEnOrdenCronologicoIncluyendoCancelados() {
+            Contrato c = contratoC2();
+            MovimientoContrato emp = mov(1L, TipoMovimiento.EMP, LocalDateTime.of(2026, 7, 16, 10, 0), false);
+            MovimientoContrato rfCancelado = mov(2L, TipoMovimiento.RF, LocalDateTime.of(2026, 8, 11, 12, 30), true);
+            rfCancelado.setMotivoCancelacion("Se capturó el plazo equivocado");
+            MovimientoContrato rf = mov(3L, TipoMovimiento.RF, LocalDateTime.of(2026, 8, 11, 12, 45), false);
+            when(movimientoRepository.findByContratoIdOrderByFechaAsc(42L))
+                    .thenReturn(List.of(emp, rfCancelado, rf));
+
+            List<MovimientoResponse> resp = service.getMovimientos(42L);
+
+            assertThat(resp).extracting(MovimientoResponse::getId).containsExactly(1L, 2L, 3L);
+            assertThat(resp).extracting(MovimientoResponse::getTipo)
+                    .containsExactly(TipoMovimiento.EMP, TipoMovimiento.RF, TipoMovimiento.RF);
+            assertThat(resp.get(1).getCancelado()).isTrue();
+            assertThat(resp.get(1).getMotivoCancelacion()).isEqualTo("Se capturó el plazo equivocado");
+            assertThat(resp.get(2).getCancelado()).isFalse();
+            // El folio del contrato viaja en cada fila (para armar el título del modal sin otra llamada)
+            assertThat(resp).allMatch(r -> "1493".equals(r.getFolioContrato()));
+        }
+
+        @Test
+        void contratoSinMovimientosDevuelveListaVacia() {
+            contratoC2();
+            when(movimientoRepository.findByContratoIdOrderByFechaAsc(42L)).thenReturn(List.of());
+
+            assertThat(service.getMovimientos(42L)).isEmpty();
+        }
+
+        @Test
+        void contratoInexistente_404() {
+            when(contratoRepository.findById(42L)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.getMovimientos(42L))
+                    .isInstanceOf(ResourceNotFoundException.class);
+        }
+    }
 }
