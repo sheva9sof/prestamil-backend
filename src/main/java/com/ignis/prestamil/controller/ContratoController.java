@@ -1,8 +1,14 @@
 package com.ignis.prestamil.controller;
 
+import com.ignis.prestamil.model.BuscarContratoPor;
+import com.ignis.prestamil.model.FiltroEstatusOperacion;
+import com.ignis.prestamil.response.ContratoOperacionDetalleResponse;
+import com.ignis.prestamil.response.ContratoOperacionResponse;
 import com.ignis.prestamil.response.ContratoResponse;
+import com.ignis.prestamil.response.PageResponse;
 import com.ignis.prestamil.response.VencimientoResponse;
 import com.ignis.prestamil.request.ContratoRequest;
+import com.ignis.prestamil.service.ContratoOperacionService;
 import com.ignis.prestamil.service.ContratoService;
 import com.ignis.prestamil.service.ContratoPdfService;
 import jakarta.validation.Valid;
@@ -21,10 +27,13 @@ public class ContratoController {
 
     private final ContratoService contratoService;
     private final ContratoPdfService contratoPdfService;
+    private final ContratoOperacionService contratoOperacionService;
 
-    public ContratoController(ContratoService contratoService, ContratoPdfService contratoPdfService) {
+    public ContratoController(ContratoService contratoService, ContratoPdfService contratoPdfService,
+                              ContratoOperacionService contratoOperacionService) {
         this.contratoService = contratoService;
         this.contratoPdfService = contratoPdfService;
+        this.contratoOperacionService = contratoOperacionService;
     }
 
     /**
@@ -73,6 +82,30 @@ public class ContratoController {
     @GetMapping("/vencidos")
     public ResponseEntity<List<ContratoResponse>> findVencidos() {
         return ResponseEntity.ok(contratoService.getContratosVencidos());
+    }
+
+    /**
+     * Listado de la pantalla de Finiquitos y Refrendos con búsqueda y filtros, paginado desde 0.
+     * GET /api/contratos/operacion?q=&buscarPor=&ramo=&estatus=&page=&size=
+     */
+    @GetMapping("/operacion")
+    public ResponseEntity<PageResponse<ContratoOperacionResponse>> buscarOperacion(
+            @RequestParam(required = false) String q,
+            @RequestParam(defaultValue = "CONTRATO") BuscarContratoPor buscarPor,
+            @RequestParam(required = false) Integer ramo,
+            @RequestParam(defaultValue = "TODOS") FiltroEstatusOperacion estatus,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return ResponseEntity.ok(contratoOperacionService.buscar(q, buscarPor, ramo, estatus, page, size));
+    }
+
+    /**
+     * Detalle de un contrato con las acciones disponibles hoy (matriz RN-16).
+     * GET /api/contratos/{id}/operacion
+     */
+    @GetMapping("/{id}/operacion")
+    public ResponseEntity<ContratoOperacionDetalleResponse> detalleOperacion(@PathVariable Long id) {
+        return ResponseEntity.ok(contratoOperacionService.detalle(id));
     }
 
     /**

@@ -4,6 +4,7 @@ import com.ignis.prestamil.model.MovimientoContrato;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface MovimientoContratoRepository extends BaseRepository<MovimientoContrato, Long> {
@@ -15,6 +16,14 @@ public interface MovimientoContratoRepository extends BaseRepository<MovimientoC
      * @return lista de movimientos del más antiguo al más reciente
      */
     List<MovimientoContrato> findByContratoIdOrderByFechaAsc(Long contratoId);
+
+    /**
+     * Último movimiento vigente (no cancelado) de un contrato.
+     *
+     * @param contratoId identificador del contrato
+     * @return el movimiento más reciente, o vacío si no tiene
+     */
+    Optional<MovimientoContrato> findFirstByContratoIdAndCanceladoFalseOrderByFechaDescIdDesc(Long contratoId);
 
     /**
      * Lista los movimientos registrados en un turno (para corte de caja).

@@ -233,15 +233,12 @@ public class CalculoContratoService {
                     vencimientoNuevo, comercializacionNueva, p.diasGraciaSancion(), fechaOperacion);
         }
 
-        BigDecimal interesPorPeriodo = saldo.multiply(p.porcInteres().add(p.porcAlmacen()))
-                .divide(CIEN, 4, RoundingMode.HALF_UP);
-
         return new CotizacionMovimiento(
                 operacion,
                 tipoMovimiento(operacion, s, extemporaneosAplicados),
                 p, s,
                 maximos, aplicados, normalesAplicados, extemporaneosAplicados,
-                interesPorPeriodo,
+                interesPorPeriodo(saldo, p),
                 desglose,
                 // TODO F4: descuento sobre intereses desde la parametrizacion (RN-27)
                 BigDecimal.ZERO.setScale(2),
@@ -249,6 +246,19 @@ public class CalculoContratoService {
                 fechaContratoNueva, vencimientoNuevo, comercializacionNueva,
                 estatusNuevo,
                 List.copyOf(advertencias));
+    }
+
+    /**
+     * Interes + almacenaje de un periodo ("Int x Per." de COCAE, GAP-09), sin redondear a centavos
+     * (RN-10). No incluye gastos de administracion ni IVA.
+     *
+     * @param saldo saldo capital vigente (RN-09)
+     * @param p     parametros efectivos ya resueltos
+     * @return el cobro de un periodo con 4 decimales
+     */
+    public BigDecimal interesPorPeriodo(BigDecimal saldo, ParametrosCalculo p) {
+        return saldo.multiply(p.porcInteres().add(p.porcAlmacen()))
+                .divide(CIEN, 4, RoundingMode.HALF_UP);
     }
 
     // =========================================================================
