@@ -50,6 +50,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -98,6 +99,9 @@ class ContratoServiceTest {
     @Mock
     MovimientoContratoRepository movimientoContratoRepository;
 
+    @Mock
+    MovimientoCajaService movimientoCajaService;
+
     CalculoContratoService calculoContratoService;
     ContratoService contratoService;
 
@@ -120,7 +124,8 @@ class ContratoServiceTest {
                 plazoHechuraAlhajaRepository,
                 parametrosSistemaCache,
                 calculoContratoService,
-                movimientoContratoRepository
+                movimientoContratoRepository,
+                movimientoCajaService
         );
 
         // El snapshot del changeset 026 siempre pide el IVA vigente al crear un contrato.
@@ -255,6 +260,37 @@ class ContratoServiceTest {
     // -----------------------------------------------------------------------
     // Tests
     // -----------------------------------------------------------------------
+
+    /**
+     * C-07: la creación de un contrato entrega efectivo al cliente, así que registra una SALIDA de
+     * caja por el préstamo total. Es la contraparte del ENTRADA que se registra al cancelar el EMP.
+     */
+    @Test
+    void crearContrato_registraSalidaDeCajaPorElPrestamoEntregado() {
+        ContratoRequest request = buildRequestBase();
+        PartidaContratoRequest partida = buildPartidaAlhaja(
+                new BigDecimal("100.00"), 14, "N",
+                BigDecimal.ONE, new BigDecimal("50.00"));
+        request.getPartidas().add(partida);
+
+        PlazoHechuraAlhaja tabla = new PlazoHechuraAlhaja();
+        tabla.setPrecioPrestamo(new BigDecimal("100.0000"));
+        when(plazoHechuraAlhajaRepository.findById(new PlazoHechuraAlhajaId(1, 1, 14, "N")))
+                .thenReturn(Optional.of(tabla));
+        stubPersistencia();
+
+        contratoService.crearContrato(request, "cajero1");
+
+        org.mockito.ArgumentCaptor<BigDecimal> monto = org.mockito.ArgumentCaptor.forClass(BigDecimal.class);
+        org.mockito.ArgumentCaptor<String> concepto = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(movimientoCajaService).registrar(any(Turno.class),
+                org.mockito.ArgumentMatchers.eq(1),
+                org.mockito.ArgumentMatchers.eq(com.ignis.prestamil.model.TipoMovimientoCaja.SALIDA),
+                concepto.capture(), monto.capture(),
+                any(Usuario.class), any(MovimientoContrato.class));
+        assertThat(monto.getValue()).isEqualByComparingTo("50.00");
+        assertThat(concepto.getValue()).contains("PRÉSTAMO CONTRATO CTR-");
+    }
 
     @Test
     void crearContrato_vinculaValorDeCatalogoDelMismoTipo() {
@@ -863,6 +899,158 @@ class ContratoServiceTest {
         assertThat(emp.getFechaVencNueva()).isEqualTo(guardado.getFechaVencimiento());
         assertThat(emp.getEstatusNuevo()).isEqualTo(EstatusContrato.VIGENTE);
         assertThat(emp.getFecha()).isEqualTo(guardado.getFechaApertura());
+    }
+
+    // =========================================================================
+    // C-08 / RN-30 — redondeo del total de alhajas al múltiplo de $5 más cercano
+    // =========================================================================
+
+    @Test
+    void crearContrato_alhaja_totalRedondeadoAMultiploDe5_acepta() {
+        // Given: una sola partida con préstamo exacto a múltiplo de $5 (7,800)
+        ContratoRequest request = buildRequestBase();
+        request.getPartidas().add(buildPartidaAlhaja(
+                new BigDecimal("8000.00"), 14, "N",
+                new BigDecimal("10.0000"), new BigDecimal("7800.00")));
+        stubTablaAlhaja("800.0000");
+        stubPersistencia();
+
+        contratoService.crearContrato(request, "cajero1");
+
+        assertThat(capturarPartidaGuardada().getMontoPrestamo()).isEqualByComparingTo("7800.00");
+    }
+
+    @Test
+    void crearContrato_alhaja_unaPartidaConCentavos_rechaza() {
+        // 7,802.30 no es múltiplo de $5 (floor $5 = 7,800). El frontend debió ajustarlo
+        // antes de enviar; aquí se rechaza como salvaguarda (C-08).
+        ContratoRequest request = buildRequestBase();
+        request.getPartidas().add(buildPartidaAlhaja(
+                new BigDecimal("8000.00"), 14, "N",
+                new BigDecimal("10.0000"), new BigDecimal("7802.30")));
+        stubTablaAlhaja("800.0000");
+
+        BadRequestException ex = assertThrows(BadRequestException.class,
+                () -> contratoService.crearContrato(request, "cajero1"));
+        assertThat(ex.getMessage()).contains("múltiplo de $5");
+        assertThat(ex.getMessage()).contains("7800.00");
+    }
+
+    @Test
+    void crearContrato_alhajaMultiPartida_ultimaDescontada_acepta() {
+        // Escenario COCAE del plan: 7,847 (collar) + 698 (anillo ajustado) = 8,545, múltiplo de $5.
+        ContratoRequest request = buildRequestBase();
+        PartidaContratoRequest collar = buildPartidaAlhaja(
+                new BigDecimal("8000.00"), 14, "N",
+                new BigDecimal("11.2100"), new BigDecimal("7847.00"));
+        PartidaContratoRequest anillo = buildPartidaAlhaja(
+                new BigDecimal("800.00"), 14, "N",
+                new BigDecimal("1.0100"), new BigDecimal("698.00"));
+        request.getPartidas().add(collar);
+        request.getPartidas().add(anillo);
+        stubTablaAlhaja("700.0000");
+        stubPersistencia();
+
+        contratoService.crearContrato(request, "cajero1");
+
+        ArgumentCaptor<Contrato> captor = ArgumentCaptor.forClass(Contrato.class);
+        verify(repository, org.mockito.Mockito.atLeastOnce()).save(captor.capture());
+        Contrato guardado = captor.getAllValues().get(0);
+        assertThat(guardado.getMontoPrestamo()).isEqualByComparingTo("8545.00");
+    }
+
+    @Test
+    void crearContrato_alhajaMultiPartida_sinDescuentoEnUltima_rechaza() {
+        // Mismas partidas pero sin aplicar el ajuste (7,847 + 701 = 8,548, no múltiplo de $5).
+        ContratoRequest request = buildRequestBase();
+        request.getPartidas().add(buildPartidaAlhaja(
+                new BigDecimal("8000.00"), 14, "N",
+                new BigDecimal("11.2100"), new BigDecimal("7847.00")));
+        request.getPartidas().add(buildPartidaAlhaja(
+                new BigDecimal("800.00"), 14, "N",
+                new BigDecimal("1.0100"), new BigDecimal("701.00")));
+        stubTablaAlhaja("700.0000");
+
+        BadRequestException ex = assertThrows(BadRequestException.class,
+                () -> contratoService.crearContrato(request, "cajero1"));
+        assertThat(ex.getMessage()).contains("múltiplo de $5");
+        assertThat(ex.getMessage()).contains("8545.00");
+    }
+
+    @Test
+    void crearContrato_alhaja_prestamoYaMultiploDe5_sinAjuste_acepta() {
+        // 7,850 ya es múltiplo de $5: no requiere ajuste, se acepta tal cual.
+        ContratoRequest request = buildRequestBase();
+        request.getPartidas().add(buildPartidaAlhaja(
+                new BigDecimal("8000.00"), 14, "N",
+                new BigDecimal("10.0000"), new BigDecimal("7850.00")));
+        stubTablaAlhaja("785.0000");
+        stubPersistencia();
+
+        contratoService.crearContrato(request, "cajero1");
+
+        assertThat(capturarPartidaGuardada().getMontoPrestamo()).isEqualByComparingTo("7850.00");
+    }
+
+    @Test
+    void crearContrato_varios_prestamoConCentavos_noAplicaRedondeo_acepta() {
+        // Electrónicos / Varios: la regla C-08 NO aplica (TODO G-04). Un préstamo de $503.75
+        // se acepta aunque no sea múltiplo de $5.
+        TipoPrenda varios = new TipoPrenda();
+        varios.setId(3);
+        varios.setTipo("VARIOS");
+        when(tipoPrendaRepository.findById(3)).thenReturn(Optional.of(varios));
+
+        ContratoRequest request = buildRequestBase();
+        PartidaContratoRequest pr = new PartidaContratoRequest();
+        pr.setIdTipoPrenda(3);
+        pr.setDescripcion("Laptop");
+        pr.setAvaluoReal(new BigDecimal("1000.00"));
+        pr.setMontoPrestamo(new BigDecimal("503.75"));
+        request.getPartidas().add(pr);
+        stubPersistencia();
+
+        contratoService.crearContrato(request, "cajero1");
+
+        assertThat(capturarPartidaGuardada().getMontoPrestamo()).isEqualByComparingTo("503.75");
+    }
+
+    @Test
+    void calcularAmortizacion_usaElPrestamoRedondeadoDelContrato() {
+        // La tabla de amortización se calcula sobre contrato.montoPrestamo. Al persistirse éste
+        // ya redondeado (C-08), toda la tabla usa el total ajustado; aquí lo verificamos.
+        TipoPrenda alhaja = tipoPrendaRepository.findById(1).orElseThrow();
+        PartidaContrato partida = new PartidaContrato();
+        partida.setTipoPrenda(alhaja);
+
+        Plazo plazoSemanal = new Plazo();
+        plazoSemanal.setId(6L);
+        plazoSemanal.setDiasPorPeriodo(7);
+        plazoSemanal.setNumeroPeriodos(4);
+
+        Contrato contrato = new Contrato();
+        contrato.setId(2L);
+        contrato.setMontoPrestamo(new BigDecimal("8545.00"));   // redondeado a $5
+        contrato.setFechaApertura(LocalDateTime.of(2026, 10, 1, 0, 0));
+        contrato.setSucursalId(1);
+        contrato.setPlazo(plazoSemanal);
+        List<PartidaContrato> partidas = new ArrayList<>();
+        partidas.add(partida);
+        contrato.setPartidas(partidas);
+        when(repository.findById(2L)).thenReturn(Optional.of(contrato));
+
+        PlazoParametro parametro = new PlazoParametro();
+        parametro.setPorcInteres(new BigDecimal("1.0"));
+        parametro.setPorcAlmacen(new BigDecimal("0"));
+        parametro.setPorcGastosAdmin(new BigDecimal("0"));
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(6L, 1, 1))
+                .thenReturn(Optional.of(parametro));
+
+        List<VencimientoResponse> filas = contratoService.calcularAmortizacion(2L);
+
+        // Interés del primer periodo = 8545 × 1% = 85.45, derivado del total YA redondeado.
+        assertThat(filas).hasSize(4);
+        assertThat(filas.get(0).getInteres()).isEqualByComparingTo("85.45");
     }
 
     @Test

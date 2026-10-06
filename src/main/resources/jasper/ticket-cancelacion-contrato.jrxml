@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Comprobante de CANCELACIÓN DE CONTRATO (C-06, RN-26). Ticket angosto (~80 mm, 227 pt) con
+     el mismo ancho que la nota de movimiento. Incluye: contrato, cliente, prendas devueltas,
+     monto reingresado a caja, motivo, usuario, fecha/hora y línea de firma del cliente que
+     acredita que recibió las prendas (TODO G-09 por confirmar con Jorge). -->
+<jasperReport xmlns="http://jasperreports.sourceforge.net/jasperreports" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://jasperreports.sourceforge.net/jasperreports http://jasperreports.sourceforge.net/xsd/jasperreport.xsd" name="ticket-cancelacion-contrato" pageWidth="227" pageHeight="842" whenNoDataType="AllSectionsNoDetail" columnWidth="211" leftMargin="8" rightMargin="8" topMargin="8" bottomMargin="8" isIgnorePagination="true">
+	<property name="net.sf.jasperreports.awt.ignore.missing.font" value="true"/>
+	<style name="Base" isDefault="true" fontName="Arial" fontSize="7"/>
+	<parameter name="P_EMPRESA" class="java.lang.String"/>
+	<parameter name="P_EMPRESA_DATOS" class="java.lang.String"/>
+	<parameter name="P_SUCURSAL" class="java.lang.String"/>
+	<parameter name="P_FECHA" class="java.lang.String"/>
+	<parameter name="P_CONTRATO" class="java.lang.String"/>
+	<parameter name="P_CLIENTE" class="java.lang.String"/>
+	<parameter name="P_MONTO" class="java.lang.String"/>
+	<parameter name="P_MONTO_LETRA" class="java.lang.String"/>
+	<parameter name="P_MOTIVO" class="java.lang.String"/>
+	<parameter name="P_USUARIO" class="java.lang.String"/>
+	<field name="partida" class="java.lang.String"/>
+	<field name="descripcion" class="java.lang.String"/>
+	<field name="detalle" class="java.lang.String"/>
+	<title>
+		<band height="112" splitType="Stretch">
+			<textField textAdjust="StretchHeight">
+				<reportElement x="0" y="0" width="211" height="13"/>
+				<textElement textAlignment="Center"><font size="11" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_EMPRESA}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="0" y="13" width="211" height="9" isRemoveLineWhenBlank="true"/>
+				<textElement textAlignment="Center"><font size="6.5"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_EMPRESA_DATOS}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="0" y="23" width="211" height="9" isRemoveLineWhenBlank="true"/>
+				<textElement textAlignment="Center"><font size="6.5"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_SUCURSAL}]]></textFieldExpression>
+			</textField>
+			<line>
+				<reportElement positionType="Float" x="0" y="34" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="37" width="211" height="12"/>
+				<textElement textAlignment="Center"><font size="10" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[CANCELACIÓN DE CONTRATO]]></text>
+			</staticText>
+			<textField>
+				<reportElement positionType="Float" x="0" y="50" width="211" height="10"/>
+				<textElement textAlignment="Center"/>
+				<textFieldExpression><![CDATA[$P{P_FECHA}]]></textFieldExpression>
+			</textField>
+			<line>
+				<reportElement positionType="Float" x="0" y="62" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<textField textAdjust="StretchHeight">
+				<reportElement positionType="Float" x="0" y="65" width="211" height="10"/>
+				<textElement><font size="8" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_CONTRATO}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="0" y="76" width="211" height="9" isRemoveLineWhenBlank="true"/>
+				<textFieldExpression><![CDATA[$P{P_CLIENTE}]]></textFieldExpression>
+			</textField>
+			<line>
+				<reportElement positionType="Float" x="0" y="97" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="100" width="211" height="10"/>
+				<textElement><font isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[PRENDAS DEVUELTAS AL CLIENTE]]></text>
+			</staticText>
+		</band>
+	</title>
+	<detail>
+		<band height="19" splitType="Stretch">
+			<textField>
+				<reportElement x="0" y="0" width="12" height="9"/>
+				<textFieldExpression><![CDATA[$F{partida}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement x="12" y="0" width="199" height="9"/>
+				<textFieldExpression><![CDATA[$F{descripcion}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="12" y="9" width="199" height="9" isRemoveLineWhenBlank="true"/>
+				<textElement><font size="6.5"/></textElement>
+				<textFieldExpression><![CDATA[$F{detalle}]]></textFieldExpression>
+			</textField>
+		</band>
+	</detail>
+	<summary>
+		<band height="180" splitType="Stretch">
+			<line>
+				<reportElement x="0" y="1" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="7" width="115" height="13"/>
+				<textElement><font size="10" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[MONTO REINGRESADO]]></text>
+			</staticText>
+			<textField textAdjust="StretchHeight">
+				<reportElement positionType="Float" x="115" y="7" width="96" height="13"/>
+				<textElement textAlignment="Right"><font size="10" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_MONTO}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight">
+				<reportElement positionType="Float" x="0" y="22" width="211" height="10"/>
+				<textElement textAlignment="Center"><font isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_MONTO_LETRA}]]></textFieldExpression>
+			</textField>
+			<line>
+				<reportElement positionType="Float" x="0" y="36" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="40" width="211" height="9"/>
+				<textElement><font isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[Motivo:]]></text>
+			</staticText>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="0" y="50" width="211" height="20"/>
+				<textFieldExpression><![CDATA[$P{P_MOTIVO}]]></textFieldExpression>
+			</textField>
+			<line>
+				<reportElement positionType="Float" x="0" y="74" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="78" width="100" height="9"/>
+				<text><![CDATA[Atendió:]]></text>
+			</staticText>
+			<textField isBlankWhenNull="true">
+				<reportElement positionType="Float" x="100" y="78" width="111" height="9"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$P{P_USUARIO}]]></textFieldExpression>
+			</textField>
+			<!-- Firma del cliente: TODO G-09 (confirmar con Jorge que se requiere firma). Deja la línea
+			     visible por defecto; si Jorge dice que no, cambiar la plantilla y el servicio. -->
+			<line>
+				<reportElement positionType="Float" x="25" y="108" width="161" height="1"/>
+				<graphicElement><pen lineWidth="0.5"/></graphicElement>
+			</line>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="110" width="211" height="9"/>
+				<textElement textAlignment="Center"/>
+				<text><![CDATA[Firma del cliente]]></text>
+			</staticText>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="120" width="211" height="9"/>
+				<textElement textAlignment="Center"><font size="6.5"/></textElement>
+				<text><![CDATA[Recibí de conformidad las prendas descritas en este comprobante]]></text>
+			</staticText>
+			<textField textAdjust="StretchHeight">
+				<reportElement positionType="Float" x="0" y="140" width="211" height="9"/>
+				<textElement textAlignment="Center"><font size="6" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA["ESTE NO ES UN COMPROBANTE FISCAL"]]></textFieldExpression>
+			</textField>
+		</band>
+	</summary>
+</jasperReport>

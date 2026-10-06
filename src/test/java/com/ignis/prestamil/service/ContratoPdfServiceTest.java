@@ -7,7 +7,10 @@ import com.ignis.prestamil.model.PartidaContrato;
 import com.ignis.prestamil.model.Plazo;
 import com.ignis.prestamil.model.PlazoParametro;
 import com.ignis.prestamil.model.Sucursal;
+import com.ignis.prestamil.exception.ConflictException;
+import com.ignis.prestamil.model.TipoMovimiento;
 import com.ignis.prestamil.model.TipoPrenda;
+import com.ignis.prestamil.repository.MovimientoContratoRepository;
 import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.SucursalRepository;
 import com.ignis.prestamil.response.VencimientoResponse;
@@ -19,14 +22,21 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
@@ -41,13 +51,18 @@ class ContratoPdfServiceTest {
     @Mock PlazoParametroRepository plazoParametroRepository;
     @Mock SucursalRepository sucursalRepository;
     @Mock ParametrosSistemaCache parametrosSistemaCache;
+    @Mock MovimientoContratoRepository movimientoRepository;
+
+    private static final LocalDate HOY = LocalDate.of(2026, 10, 5);
+    private final Clock clock = Clock.fixed(
+            HOY.atTime(12, 30).atZone(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
 
     private ContratoPdfService construir() {
         // Motor REAL (Pasada 2): el PDF ahora delega el calculo al motor unico. Testear con motor
         // real garantiza que la fila extemporanea del PDF cuadra con lo que el motor produce.
         CalculoContratoService motor = new CalculoContratoService(parametrosSistemaCache);
         return new ContratoPdfService(contratoService, plazoParametroRepository, sucursalRepository,
-                motor, parametrosSistemaCache);
+                motor, parametrosSistemaCache, movimientoRepository, clock);
     }
 
     @Test
@@ -388,6 +403,91 @@ class ContratoPdfServiceTest {
 
         assertThat((BigDecimal) params.get("P_comisionReposicion"))
                 .isEqualByComparingTo("85.50");
+    }
+
+    // =========================================================================
+    // C-02: PDF del contrato por reposición exige RE no cancelado del día
+    // =========================================================================
+
+    /** Stub de la query del repo: existe/no existe RE no cancelado hoy para el contrato dado. */
+    private void existeReHoy(boolean existe) {
+        lenient().when(movimientoRepository
+                .existsByContratoIdAndCanceladoFalseAndTipoInAndFechaGreaterThanEqualAndFechaLessThan(
+                        anyLong(), any(), any(), any()))
+                .thenReturn(existe);
+    }
+
+    @Test
+    void pdfPorReposicion_sinReHoy_lanza409() {
+        // Criterio 1: sin movimiento RE de hoy, el endpoint responde 409 y no se intenta generar el PDF.
+        ContratoPdfService svc = construir();
+        existeReHoy(false);
+
+        assertThatThrownBy(() -> svc.generarPdfParaReposicion(1L))
+                .isInstanceOf(ConflictException.class)
+                .hasMessageContaining("reposición registrada hoy");
+
+        org.mockito.Mockito.verify(contratoService, org.mockito.Mockito.never()).findById(1L);
+    }
+
+    @Test
+    void pdfPorReposicion_conReCobradoHoy_devuelveElPdf() {
+        // Criterio 2: con un RE cobrado del día, el PDF se genera igual que /pdf.
+        lenient().when(parametrosSistemaCache.getIvaPorcentaje()).thenReturn(new BigDecimal("16.00"));
+        ContratoPdfService svc = construir();
+        existeReHoy(true);
+        prepararContratoFixture();
+
+        byte[] pdf = svc.generarPdfParaReposicion(1L);
+
+        assertThat(pdf).isNotEmpty();
+        assertThat(new String(pdf, 0, 4)).isEqualTo("%PDF");
+    }
+
+    @Test
+    void pdfPorReposicion_conReExentoEnCero_devuelveElPdf() {
+        // Criterio 3: la exención del cobro deja un RE de $0 no cancelado; sigue siendo válido para el PDF.
+        lenient().when(parametrosSistemaCache.getIvaPorcentaje()).thenReturn(new BigDecimal("16.00"));
+        ContratoPdfService svc = construir();
+        existeReHoy(true);
+        prepararContratoFixture();
+
+        byte[] pdf = svc.generarPdfParaReposicion(1L);
+
+        assertThat(pdf).isNotEmpty();
+        assertThat(new String(pdf, 0, 4)).isEqualTo("%PDF");
+    }
+
+    @Test
+    void pdfPorReposicion_filtraSoloTipoRE_noPorOtrosMovimientos() {
+        // Si solo hubo refrendos o abonos hoy pero no RE, la query devuelve false y el PDF se bloquea.
+        // El filtro por tipos lo hace la query (set = {RE}); el service solo pregunta.
+        ContratoPdfService svc = construir();
+        when(movimientoRepository
+                .existsByContratoIdAndCanceladoFalseAndTipoInAndFechaGreaterThanEqualAndFechaLessThan(
+                        eq(1L), eq(EnumSet.of(TipoMovimiento.RE)), any(), any()))
+                .thenReturn(false);
+
+        assertThatThrownBy(() -> svc.generarPdfParaReposicion(1L))
+                .isInstanceOf(ConflictException.class);
+    }
+
+    /** Monta el fixture mínimo que necesita Jasper para generar el PDF; comparte uso con los tres tests. */
+    private void prepararContratoFixture() {
+        Contrato c = fixtureContratoSimple();
+        c.setMontoPrestamo(new BigDecimal("1000.00"));
+        c.setFechaVencimiento(LocalDate.of(2026, 11, 2));
+
+        PlazoParametro pp = new PlazoParametro();
+        pp.setPorcInteres(new BigDecimal("2.9"));
+        pp.setPorcAlmacen(new BigDecimal("0.6"));
+        pp.setPorcGastosAdmin(new BigDecimal("0"));
+        pp.setPorcSancionSemanal(new BigDecimal("2"));
+
+        when(contratoService.findById(1L)).thenReturn(c);
+        when(contratoService.calcularAmortizacion(1L)).thenReturn(amortizacion());
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(6L, 4, 1))
+                .thenReturn(Optional.of(pp));
     }
 
     private Contrato fixtureContratoSimple() {

@@ -130,4 +130,25 @@ public class MovimientoContratoController {
             Authentication authentication) {
         return ResponseEntity.ok(movimientoService.cancelar(id, request, authentication.getName()));
     }
+
+    /**
+     * Comprobante de cancelación en PDF. Dispatcha según el tipo del movimiento:
+     * <ul>
+     *   <li>EMP cancelado → "CANCELACIÓN DE CONTRATO" (C-06): prendas devueltas, monto reingresado,
+     *       motivo, usuario, fecha/hora, firma del cliente.</li>
+     *   <li>Cualquier otro cobro cancelado → "CANCELACIÓN DE MOVIMIENTO / DEVOLUCIÓN" (C-07):
+     *       monto devuelto en efectivo, desglose del pago original (incluida la parte con tarjeta),
+     *       motivo, usuario, fecha/hora, firma del cliente.</li>
+     * </ul>
+     * GET /api/movimientos/{id}/ticket-cancelacion
+     */
+    @GetMapping("/{id}/ticket-cancelacion")
+    public ResponseEntity<byte[]> ticketCancelacion(@PathVariable Long id) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_PDF);
+        byte[] pdf = ticketService.generarPdfCancelacion(id);
+        headers.add(HttpHeaders.CONTENT_DISPOSITION,
+                "inline; filename=cancelacion-" + id + ".pdf");
+        return new ResponseEntity<>(pdf, headers, HttpStatus.OK);
+    }
 }

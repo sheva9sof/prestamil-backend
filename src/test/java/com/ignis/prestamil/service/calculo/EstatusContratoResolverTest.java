@@ -262,4 +262,38 @@ class EstatusContratoResolverTest {
         assertThat(EstatusContratoResolver.accionPara(TipoOperacion.REFRENDO_PARCIAL, EstatusOperativo.VIGENTE))
                 .isEqualTo(REFRENDO_PARCIAL);
     }
+
+    // =========================================================================
+    // RN-29: un movimiento por contrato por día (C-01)
+    // =========================================================================
+
+    @Nested
+    class UnMovimientoPorDia {
+
+        @ParameterizedTest(name = "{0}")
+        @EnumSource(value = EstatusOperativo.class, names = {"VIGENTE", "EN_GRACIA", "VENCIDO", "EN_VENTA"})
+        void yaTuvoMovimientoHoy_quitaTodosLosCobrosPeroDejaReposicionConsultaYCancelacion(EstatusOperativo estatus) {
+            Set<AccionContrato> acciones = EstatusContratoResolver.accionesDisponibles(estatus, 5, false, true);
+
+            assertThat(acciones).doesNotContain(REFRENDO, FINIQUITO, ABONO_CAPITAL, REFRENDO_PARCIAL,
+                    REFRENDO_EXTEMPORANEO, FINIQUITO_EXTEMPORANEO);
+            assertThat(acciones).contains(REPOSICION, CONSULTA, CANCELACION);
+        }
+
+        @Test
+        void sinMovimientoHoy_elConjuntoNoCambia() {
+            Set<AccionContrato> conFlagApagado = EstatusContratoResolver.accionesDisponibles(
+                    EstatusOperativo.VIGENTE, 5, false, false);
+            Set<AccionContrato> sinFlag = EstatusContratoResolver.accionesDisponibles(
+                    EstatusOperativo.VIGENTE, 5, false);
+
+            assertThat(conFlagApagado).containsExactlyInAnyOrderElementsOf(sinFlag);
+        }
+
+        @Test
+        void motivoEstaExpuesto_paraQueElFrontendMuestreElMismoTexto() {
+            assertThat(EstatusContratoResolver.MOTIVO_UNO_POR_DIA)
+                    .isEqualTo("Este contrato ya tuvo un movimiento hoy. Para hacer otro, cancele el anterior.");
+        }
+    }
 }

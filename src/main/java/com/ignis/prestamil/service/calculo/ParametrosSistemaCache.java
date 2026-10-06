@@ -54,4 +54,22 @@ public class ParametrosSistemaCache {
                     return FALLBACK_IVA;
                 });
     }
+
+    /**
+     * C-04: indica si el monto fijo de reposicion de contrato ya incluye IVA. Default true
+     * cuando el parametro no existe o es NULL (lectura mas probable de la reunion 2026-09-30 con
+     * Jorge). Lee {@code parametros_sistema(id=18).valor_numerico} donde 1 = incluye IVA, 0 = no.
+     *
+     * @return true si el monto fijo lleva IVA incluido; false si debe sumarse encima
+     */
+    @Cacheable(cacheNames = CACHE_NAME, key = "'reposicionIncluyeIva'")
+    public boolean isReposicionIncluyeIva() {
+        return repository.findById(Constantes.REPOSICION_INCLUYE_IVA)
+                .map(p -> {
+                    BigDecimal v = p.getValorNumerico();
+                    // Null = sin configurar; mantenemos el default documentado en C-04
+                    return v == null ? Boolean.TRUE : v.signum() != 0;
+                })
+                .orElse(Boolean.TRUE);
+    }
 }

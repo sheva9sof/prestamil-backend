@@ -27,6 +27,11 @@ public class CotizacionMovimientoResponse {
     // Estado actual
     private EstatusOperativo estatusActual;
     private Set<AccionContrato> accionesDisponibles;
+    /**
+     * Motivo por el que una acción de cobro fue removida de {@code accionesDisponibles}; hoy solo lo
+     * pobla la regla "un movimiento por contrato por día" (RN-29, C-01). Null si no hubo bloqueo.
+     */
+    private String motivoAccionesDeshabilitadas;
     private LocalDate fechaContrato;
     private LocalDate fechaVencimiento;
     private BigDecimal saldoCapital;

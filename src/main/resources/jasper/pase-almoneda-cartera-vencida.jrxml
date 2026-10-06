@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Resultados del pase de almoneda: pestaña "Cartera vencida" (C-11). Carta horizontal porque la
+     dirección del cliente es larga. Mismas columnas que la pantalla y el CSV; totales al final.
+     Todos los campos llegan ya formateados como texto desde PaseAlmonedaReporteService. -->
+<jasperReport xmlns="http://jasperreports.sourceforge.net/jasperreports" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://jasperreports.sourceforge.net/jasperreports http://jasperreports.sourceforge.net/xsd/jasperreport.xsd" name="pase-almoneda-cartera-vencida" pageWidth="792" pageHeight="612" orientation="Landscape" whenNoDataType="AllSectionsNoDetail" columnWidth="736" leftMargin="28" rightMargin="28" topMargin="28" bottomMargin="28">
+	<property name="net.sf.jasperreports.awt.ignore.missing.font" value="true"/>
+	<style name="Base" isDefault="true" fontName="Arial" fontSize="8"/>
+	<style name="Encabezado" mode="Opaque" backcolor="#E9ECEF" fontSize="8" isBold="true" pdfFontName="Helvetica-Bold">
+		<box topPadding="2" leftPadding="3" bottomPadding="2" rightPadding="3">
+			<bottomPen lineWidth="0.75"/>
+		</box>
+	</style>
+	<style name="Celda">
+		<box topPadding="2" leftPadding="3" bottomPadding="2" rightPadding="3">
+			<bottomPen lineWidth="0.25" lineColor="#BBBBBB"/>
+		</box>
+	</style>
+	<parameter name="P_EMPRESA" class="java.lang.String"/>
+	<parameter name="P_SUCURSAL" class="java.lang.String"/>
+	<parameter name="P_FECHA_PASE" class="java.lang.String"/>
+	<parameter name="P_IMPRESO" class="java.lang.String"/>
+	<parameter name="P_TOTALES" class="java.lang.String"/>
+	<parameter name="P_SIN_DATOS" class="java.lang.Boolean"/>
+	<field name="contrato" class="java.lang.String"/>
+	<field name="cliente" class="java.lang.String"/>
+	<field name="direccion" class="java.lang.String"/>
+	<field name="telefono" class="java.lang.String"/>
+	<field name="vencimiento" class="java.lang.String"/>
+	<field name="saldo" class="java.lang.String"/>
+	<title>
+		<band height="70" splitType="Stretch">
+			<textField>
+				<reportElement x="0" y="0" width="736" height="16"/>
+				<textElement textAlignment="Center"><font size="12" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_EMPRESA}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="0" y="16" width="736" height="11" isRemoveLineWhenBlank="true"/>
+				<textElement textAlignment="Center"/>
+				<textFieldExpression><![CDATA[$P{P_SUCURSAL}]]></textFieldExpression>
+			</textField>
+			<line>
+				<reportElement positionType="Float" x="0" y="31" width="736" height="1"/>
+				<graphicElement><pen lineWidth="0.5"/></graphicElement>
+			</line>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="35" width="736" height="15"/>
+				<textElement textAlignment="Center"><font size="11" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[RESULTADOS DEL PASE DE ALMONEDA - CARTERA VENCIDA]]></text>
+			</staticText>
+			<textField>
+				<reportElement positionType="Float" x="0" y="52" width="368" height="12"/>
+				<textElement><font size="9" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_FECHA_PASE}]]></textFieldExpression>
+			</textField>
+			<textField>
+				<reportElement positionType="Float" x="368" y="52" width="368" height="12"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$P{P_IMPRESO}]]></textFieldExpression>
+			</textField>
+		</band>
+	</title>
+	<columnHeader>
+		<band height="16" splitType="Stretch">
+			<staticText>
+				<reportElement style="Encabezado" x="0" y="0" width="80" height="16"/>
+				<text><![CDATA[Contrato]]></text>
+			</staticText>
+			<staticText>
+				<reportElement style="Encabezado" x="80" y="0" width="150" height="16"/>
+				<text><![CDATA[Cliente]]></text>
+			</staticText>
+			<staticText>
+				<reportElement style="Encabezado" x="230" y="0" width="260" height="16"/>
+				<text><![CDATA[Dirección]]></text>
+			</staticText>
+			<staticText>
+				<reportElement style="Encabezado" x="490" y="0" width="80" height="16"/>
+				<text><![CDATA[Teléfono]]></text>
+			</staticText>
+			<staticText>
+				<reportElement style="Encabezado" x="570" y="0" width="70" height="16"/>
+				<text><![CDATA[Vencimiento]]></text>
+			</staticText>
+			<staticText>
+				<reportElement style="Encabezado" x="640" y="0" width="96" height="16"/>
+				<textElement textAlignment="Right"/>
+				<text><![CDATA[Saldo]]></text>
+			</staticText>
+		</band>
+	</columnHeader>
+	<detail>
+		<band height="14" splitType="Prevent">
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement style="Celda" stretchType="ContainerHeight" x="0" y="0" width="80" height="14"/>
+				<textFieldExpression><![CDATA[$F{contrato}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement style="Celda" stretchType="ContainerHeight" x="80" y="0" width="150" height="14"/>
+				<textFieldExpression><![CDATA[$F{cliente}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement style="Celda" stretchType="ContainerHeight" x="230" y="0" width="260" height="14"/>
+				<textFieldExpression><![CDATA[$F{direccion}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement style="Celda" stretchType="ContainerHeight" x="490" y="0" width="80" height="14"/>
+				<textFieldExpression><![CDATA[$F{telefono}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement style="Celda" stretchType="ContainerHeight" x="570" y="0" width="70" height="14"/>
+				<textFieldExpression><![CDATA[$F{vencimiento}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement style="Celda" stretchType="ContainerHeight" x="640" y="0" width="96" height="14"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$F{saldo}]]></textFieldExpression>
+			</textField>
+		</band>
+	</detail>
+	<pageFooter>
+		<band height="16" splitType="Stretch">
+			<textField>
+				<reportElement x="0" y="4" width="600" height="12"/>
+				<textElement><font size="7"/></textElement>
+				<textFieldExpression><![CDATA["Pase de almoneda - Cartera vencida - " + $P{P_FECHA_PASE}]]></textFieldExpression>
+			</textField>
+			<textField>
+				<reportElement x="600" y="4" width="106" height="12"/>
+				<textElement textAlignment="Right"><font size="7"/></textElement>
+				<textFieldExpression><![CDATA["Página " + $V{PAGE_NUMBER} + " de"]]></textFieldExpression>
+			</textField>
+			<textField evaluationTime="Report">
+				<reportElement x="706" y="4" width="30" height="12"/>
+				<textElement><font size="7"/></textElement>
+				<textFieldExpression><![CDATA[" " + $V{PAGE_NUMBER}]]></textFieldExpression>
+			</textField>
+		</band>
+	</pageFooter>
+	<summary>
+		<band height="36" splitType="Stretch">
+			<staticText>
+				<reportElement x="0" y="4" width="736" height="14" forecolor="#6C757D" isRemoveLineWhenBlank="true">
+					<printWhenExpression><![CDATA[$P{P_SIN_DATOS}]]></printWhenExpression>
+				</reportElement>
+				<textElement textAlignment="Center"><font size="9"/></textElement>
+				<text><![CDATA[Sin contratos pasados a cartera vencida en esta fecha.]]></text>
+			</staticText>
+			<textField>
+				<reportElement positionType="Float" x="0" y="20" width="736" height="14"/>
+				<box topPadding="2" rightPadding="3"><topPen lineWidth="0.75"/></box>
+				<textElement textAlignment="Right"><font size="9" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_TOTALES}]]></textFieldExpression>
+			</textField>
+		</band>
+	</summary>
+</jasperReport>

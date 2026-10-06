@@ -206,10 +206,13 @@ class TicketMovimientoServiceTest {
                 .contains(tuple("Préstamo original", "$1,195.00"), tuple("Nuevo préstamo", "$1,195.00"),
                         tuple("% Intereses", "1.13 %"), tuple("% Almacenaje", "0.60 %"),
                         tuple("G.Oper. x Vta.", "18.00 %"), tuple("Moratorios %", "2.00 %"), tuple("% IVA", "16.00 %"));
+        // C-05: la nueva fecha de vencimiento sale como línea grande (P_NUEVO_VENCIMIENTO),
+        // no en el bloque P_MOVIMIENTO. "Comercialización" se queda con fuente normal.
         assertThat(renglones(params, "P_MOVIMIENTO"))
                 .extracting(LineaTicketRow::getEtiqueta, LineaTicketRow::getValor)
                 .containsExactly(tuple("Periodos pagados", "4 normales / 0 extemp."),
-                        tuple("Nuevo vencimiento", "10/09/2026"), tuple("Comercialización", "25/09/2026"));
+                        tuple("Comercialización", "25/09/2026"));
+        assertThat(params.get("P_NUEVO_VENCIMIENTO")).isEqualTo("10/septiembre/2026");
         assertThat(renglones(params, "P_TOTALES"))
                 .extracting(LineaTicketRow::getEtiqueta, LineaTicketRow::getValor)
                 .containsExactly(tuple("Intereses", "$82.69"), tuple("Sanción", "$0.00"),
@@ -235,7 +238,9 @@ class TicketMovimientoServiceTest {
                 .extracting(LineaTicketRow::getEtiqueta, LineaTicketRow::getValor)
                 .contains(tuple("Capital", "$1,195.00"));
         assertThat(renglones(params, "P_MOVIMIENTO")).extracting(LineaTicketRow::getEtiqueta)
-                .doesNotContain("Nuevo vencimiento");
+                .doesNotContain("Nuevo vencimiento", "Comercialización");
+        // Finiquito no imprime la línea grande de nuevo vencimiento (no hay refrendo que extender)
+        assertThat(params.get("P_NUEVO_VENCIMIENTO")).isNull();
         assertThat(params.get("P_TOTAL_LETRA")).isEqualTo("*** MIL DOSCIENTOS NOVENTA PESOS 92/100 M.N. ***");
     }
 
@@ -275,6 +280,43 @@ class TicketMovimientoServiceTest {
         assertThat(new String(pdf, 0, 4)).isEqualTo("%PDF");
     }
 
+    /**
+     * C-05: la línea grande "NUEVO VENCIMIENTO" sale al mismo tamaño/negrita que TOTAL. Este test
+     * genera un refrendo con vencimiento en septiembre (el nombre de mes más largo en español),
+     * mide el ancho real de ambas cadenas con la fuente Helvetica-Bold a 10pt para confirmar que
+     * ninguna se corta en el ancho del ticket térmico (~211 pt útiles). El PDF resultante se escribe
+     * en {@code target/ticket-c05-nuevo-vencimiento.pdf} para inspección visual.
+     */
+    @Test
+    void c05_tickeConVencimientoSeptiembreGeneraPdfConLaFechaLarga() throws Exception {
+        MovimientoContrato m = refrendoC2();
+        m.setFechaVencNueva(LocalDate.of(2026, 9, 28)); // "28/septiembre/2026" = mes más largo
+        when(movimientoRepository.findById(7L)).thenReturn(Optional.of(m));
+
+        // Parámetro con fecha larga (el Jasper lo imprime a tamaño TOTAL)
+        assertThat(service.armarParametros(m).get("P_NUEVO_VENCIMIENTO")).isEqualTo("28/septiembre/2026");
+
+        // Medición de ancho real: Helvetica-Bold a 10pt (misma fuente que TOTAL en la plantilla).
+        // La plantilla reserva 115 pt para la etiqueta y 96 pt para la fecha (de 211 pt disponibles).
+        com.lowagie.text.pdf.BaseFont helveticaBold = com.lowagie.text.pdf.BaseFont.createFont(
+                com.lowagie.text.pdf.BaseFont.HELVETICA_BOLD,
+                com.lowagie.text.pdf.BaseFont.WINANSI,
+                com.lowagie.text.pdf.BaseFont.NOT_EMBEDDED);
+        float anchoEtiqueta = helveticaBold.getWidthPoint("NUEVO VENCIMIENTO", 10f);
+        float anchoFecha = helveticaBold.getWidthPoint("28/septiembre/2026", 10f);
+        assertThat(anchoEtiqueta).as("etiqueta cabe en 115 pt").isLessThanOrEqualTo(115f);
+        assertThat(anchoFecha).as("fecha larga cabe en 96 pt").isLessThanOrEqualTo(96f);
+
+        byte[] pdf = service.generarPdf(7L);
+        assertThat(pdf).isNotEmpty();
+        assertThat(new String(pdf, 0, 4)).isEqualTo("%PDF");
+
+        // Para inspección visual del ancho (Jorge pidió validar que no se corte en ~80 mm)
+        java.nio.file.Path salida = java.nio.file.Paths.get("target", "ticket-c05-nuevo-vencimiento.pdf");
+        java.nio.file.Files.createDirectories(salida.getParent());
+        java.nio.file.Files.write(salida, pdf);
+    }
+
     @Test
     void generarPdf_movimientoCanceladoYSinFormaDePago_tambienSeImprime() {
         MovimientoContrato m = refrendoC2();
@@ -312,6 +354,89 @@ class TicketMovimientoServiceTest {
         assertThatThrownBy(() -> service.generarPdfVigente(42L))
                 .isInstanceOf(com.ignis.prestamil.exception.ResourceNotFoundException.class)
                 .hasMessageContaining("No hay movimiento cobrado");
+    }
+
+    // =========================================================================
+    // C-07: comprobante "CANCELACIÓN DE MOVIMIENTO / DEVOLUCIÓN"
+    // =========================================================================
+
+    @Test
+    void cancelacionMovimientoMixto_desgloseConTarjetaYSinEmp() {
+        MovimientoContrato rf = refrendoC2();
+        rf.setCancelado(true);
+        rf.setFechaCancelacion(LocalDateTime.of(2026, 8, 11, 13, 15));
+        rf.setMotivoCancelacion("El cliente iba a finiquitar");
+        Usuario gerente = new Usuario();
+        gerente.setNombreUsuario("gerente1");
+        rf.setUsuarioCancela(gerente);
+
+        Map<String, Object> params = service.armarParametrosCancelacionMovimiento(rf);
+
+        assertThat(params.get("P_TIPO_MOVIMIENTO")).isEqualTo("MOVIMIENTO: REFRENDO (RF)");
+        assertThat(params.get("P_FOLIO_NOTA")).isEqualTo("Folio nota: 27323");
+        assertThat(params.get("P_CONTRATO")).isEqualTo("Contrato: 1493");
+        assertThat(params.get("P_MONTO")).isEqualTo("$95.92");
+        assertThat(params.get("P_FECHA")).isEqualTo("11/08/2026 13:15");
+        assertThat(params.get("P_MOTIVO")).isEqualTo("El cliente iba a finiquitar");
+        assertThat(params.get("P_USUARIO")).isEqualTo("gerente1");
+        assertThat((String) params.get("P_PAGO_ORIGINAL"))
+                .contains("Efectivo: $50.00")
+                .contains("Tarjeta: $45.92");
+        assertThat((String) params.get("P_TARJETA"))
+                .contains("DEVOLUCIÓN DE PAGO CON TARJETA")
+                .contains("****1234")
+                .contains("BBVA")
+                .contains("A1B2C3");
+    }
+
+    @Test
+    void cancelacionMovimientoEfectivoPuro_sinBloqueDeTarjeta() {
+        MovimientoContrato rf = refrendoC2();
+        rf.setImporteEfectivo(new BigDecimal("95.92"));
+        rf.setImporteTarjeta(BigDecimal.ZERO);
+        rf.setTipoTarjeta(null);
+        rf.setTarjetaUltimos4(null);
+        rf.setBancoEmisor(null);
+        rf.setAutorizacionBanco(null);
+        rf.setCancelado(true);
+        rf.setMotivoCancelacion("Se capturó el plazo equivocado");
+        Usuario gerente = new Usuario();
+        gerente.setNombreUsuario("gerente1");
+        rf.setUsuarioCancela(gerente);
+
+        Map<String, Object> params = service.armarParametrosCancelacionMovimiento(rf);
+
+        assertThat((String) params.get("P_PAGO_ORIGINAL")).contains("Efectivo: $95.92")
+                .doesNotContain("Tarjeta");
+        assertThat(params.get("P_TARJETA")).isNull();
+    }
+
+    @Test
+    void generarPdfCancelacion_cobroCancelado_producePdfDeDevolucion() {
+        MovimientoContrato rf = refrendoC2();
+        rf.setCancelado(true);
+        rf.setFechaCancelacion(LocalDateTime.of(2026, 8, 11, 13, 15));
+        rf.setMotivoCancelacion("Se capturó el plazo equivocado");
+        Usuario gerente = new Usuario();
+        gerente.setNombreUsuario("gerente1");
+        rf.setUsuarioCancela(gerente);
+        when(movimientoRepository.findById(7L)).thenReturn(Optional.of(rf));
+
+        byte[] pdf = service.generarPdfCancelacion(7L);
+
+        assertThat(pdf).isNotEmpty();
+        assertThat(new String(pdf, 0, 4)).isEqualTo("%PDF");
+    }
+
+    @Test
+    void generarPdfCancelacion_sinCancelar_400() {
+        MovimientoContrato rf = refrendoC2();
+        rf.setCancelado(false);
+        when(movimientoRepository.findById(7L)).thenReturn(Optional.of(rf));
+
+        assertThatThrownBy(() -> service.generarPdfCancelacion(7L))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("cancelado");
     }
 
     @Test

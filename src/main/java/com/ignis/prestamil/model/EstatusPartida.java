@@ -12,5 +12,7 @@ public enum EstatusPartida {
     /** Vendida. */
     VEN,
     /** Apartada. */
-    APA
+    APA,
+    /** Cancelada: devuelta al cliente al cancelar el contrato recién creado (C-06, RN-26). */
+    CAN
 }

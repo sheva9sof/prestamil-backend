@@ -129,4 +129,19 @@ public class ContratoController {
         headers.add(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=contrato-" + id + ".pdf");
         return new ResponseEntity<>(pdf, headers, HttpStatus.OK);
     }
+
+    /**
+     * PDF del contrato para una reposición/reimpresión (C-02). Solo entrega el PDF si existe un
+     * movimiento RE no cancelado del día; si no, responde 409 y el usuario debe cobrar la reposición
+     * primero. El endpoint {@code /pdf} genérico no toca esta validación: lo sigue usando la creación.
+     * GET /api/contratos/{id}/pdf-reposicion
+     */
+    @GetMapping("/{id}/pdf-reposicion")
+    public ResponseEntity<byte[]> pdfReposicion(@PathVariable Long id) {
+        byte[] pdf = contratoPdfService.generarPdfParaReposicion(id);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_PDF);
+        headers.add(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=contrato-" + id + "-reposicion.pdf");
+        return new ResponseEntity<>(pdf, headers, HttpStatus.OK);
+    }
 }

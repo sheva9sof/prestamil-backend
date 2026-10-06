@@ -67,6 +67,8 @@ public class MovimientoContratoService {
     private final BitacoraRepository bitacoraRepository;
     private final CalculoContratoService calculoContratoService;
     private final CobroService cobroService;
+    private final MovimientoCajaService movimientoCajaService;
+    private final com.ignis.prestamil.service.calculo.ParametrosSistemaCache parametrosSistemaCache;
     private final Clock clock;
 
     public MovimientoContratoService(MovimientoContratoRepository movimientoRepository,
@@ -79,6 +81,8 @@ public class MovimientoContratoService {
                                      BitacoraRepository bitacoraRepository,
                                      CalculoContratoService calculoContratoService,
                                      CobroService cobroService,
+                                     MovimientoCajaService movimientoCajaService,
+                                     com.ignis.prestamil.service.calculo.ParametrosSistemaCache parametrosSistemaCache,
                                      Clock clock) {
         this.movimientoRepository = movimientoRepository;
         this.contratoRepository = contratoRepository;
@@ -90,6 +94,8 @@ public class MovimientoContratoService {
         this.bitacoraRepository = bitacoraRepository;
         this.calculoContratoService = calculoContratoService;
         this.cobroService = cobroService;
+        this.movimientoCajaService = movimientoCajaService;
+        this.parametrosSistemaCache = parametrosSistemaCache;
         this.clock = clock;
     }
 
@@ -158,6 +164,19 @@ public class MovimientoContratoService {
 
         movimientoRepository.save(mov);
         contratoRepository.save(contrato);
+
+        // C-07: cada cobro deja huella en caja — base del corte de caja. El concepto marca la parte
+        // con tarjeta cuando aplica para que el corte distinga ingreso de efectivo real vs tarjeta.
+        if (mov.getMonto() != null && mov.getMonto().signum() > 0) {
+            movimientoCajaService.registrar(
+                    turno,
+                    contrato.getSucursalId(),
+                    TipoMovimientoCaja.ENTRADA,
+                    conceptoCobro(mov, contrato),
+                    mov.getMonto(),
+                    usuario,
+                    mov);
+        }
 
         log.info("Movimiento {} contrato={} folioNota={} periodos={}+{} interes={} sancion={} iva={} total={}",
                 mov.getTipo(), contrato.getFolio(), mov.getFolioNota(), c.periodosNormalesAplicados(),
@@ -238,6 +257,11 @@ public class MovimientoContratoService {
                 ? BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP)
                 : calcularImporteReposicion(contrato, param);
 
+        // C-04: en reposicion por monto fijo se desglosa el IVA — Jorge lo pidio para el corte de
+        // caja (30-sep). La reposicion por porcentaje queda sin IVA desglosado (fuera del scope de
+        // C-04). Con noCobrar=true o porcentaje, iva=0 y total=importe.
+        DesgloseIvaReposicion desglose = calcularDesgloseIvaReposicion(importe, param, request.isNoCobrar());
+
         Turno turno = turnoActivo();
 
         MovimientoContrato mov = new MovimientoContrato();
@@ -245,10 +269,10 @@ public class MovimientoContratoService {
         mov.setTurno(turno);
         mov.setUsuario(usuario);
         mov.setTipo(TipoMovimiento.RE);
-        mov.setMonto(importe);
+        mov.setMonto(desglose.total);
         mov.setInteres(BigDecimal.ZERO);
         mov.setSancion(BigDecimal.ZERO);
-        mov.setIva(BigDecimal.ZERO);
+        mov.setIva(desglose.iva);
         mov.setAbonoCapital(BigDecimal.ZERO);
         mov.setSemanasVencidas(0);
         mov.setDiasGraciaUsados(0);
@@ -259,8 +283,8 @@ public class MovimientoContratoService {
         mov.setObservaciones(observacionesReposicion(request));
 
         // Un importe 0 no exige ventana de Cobro; con importe > 0 se valida el pago (RN-24)
-        PagoRequest pago = request.getPago() != null ? request.getPago() : pagoExactoEnEfectivo(importe);
-        cobroService.aplicarPago(mov, pago, importe);
+        PagoRequest pago = request.getPago() != null ? request.getPago() : pagoExactoEnEfectivo(desglose.total);
+        cobroService.aplicarPago(mov, pago, desglose.total);
 
         // La reposición no cambia el contrato: estado anterior y nuevo son iguales
         registrarEstadoAnterior(mov, contrato);
@@ -269,8 +293,21 @@ public class MovimientoContratoService {
         mov.setFolioNota(siguienteFolioNota(contrato.getSucursalId()));
         movimientoRepository.save(mov);
 
-        log.info("Reposición contrato={} folioNota={} importe={} exenta={} usuario={}",
-                contrato.getFolio(), mov.getFolioNota(), importe, request.isNoCobrar(), username);
+        // C-07: la reposición cobrada entra a caja. La exenta ($0) no mueve caja.
+        if (mov.getMonto() != null && mov.getMonto().signum() > 0) {
+            movimientoCajaService.registrar(
+                    turno,
+                    contrato.getSucursalId(),
+                    TipoMovimientoCaja.ENTRADA,
+                    conceptoCobro(mov, contrato),
+                    mov.getMonto(),
+                    usuario,
+                    mov);
+        }
+
+        log.info("Reposición contrato={} folioNota={} total={} iva={} exenta={} usuario={}",
+                contrato.getFolio(), mov.getFolioNota(), desglose.total, desglose.iva,
+                request.isNoCobrar(), username);
         return toResponse(mov, contrato);
     }
 
@@ -282,6 +319,39 @@ public class MovimientoContratoService {
         }
         BigDecimal monto = param.getMontoReposicion() != null ? param.getMontoReposicion() : BigDecimal.ZERO;
         return monto.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /** Desglose IVA / total de una reposición. Solo aplica al monto fijo (C-04). */
+    private record DesgloseIvaReposicion(BigDecimal total, BigDecimal iva) {}
+
+    /**
+     * C-04: desglosa IVA del {@link PlazoParametro#getMontoReposicion monto fijo} de reposición.
+     * Si {@code reposicion_incluye_iva=true} (default), el monto configurado es IVA incluido y
+     * subtotal = total − IVA. Si es false, el monto es base y total = monto × (1 + IVA). En
+     * reposición por porcentaje o exenta (importe = 0) devolvemos iva = 0 y total = importe.
+     */
+    private DesgloseIvaReposicion calcularDesgloseIvaReposicion(BigDecimal importe,
+                                                                 PlazoParametro param, boolean noCobrar) {
+        BigDecimal cero = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        if (noCobrar || importe == null || importe.signum() == 0) {
+            return new DesgloseIvaReposicion(cero, cero);
+        }
+        if (Boolean.TRUE.equals(param.getReposicionEsPorcentaje())) {
+            // Scope de C-04 estricto: solo monto fijo. Porcentaje mantiene iva=0 por ahora.
+            return new DesgloseIvaReposicion(importe.setScale(2, RoundingMode.HALF_UP), cero);
+        }
+        BigDecimal ivaPorc = parametrosSistemaCache.getIvaPorcentaje();
+        BigDecimal factor = BigDecimal.ONE.add(ivaPorc.movePointLeft(2));
+        if (parametrosSistemaCache.isReposicionIncluyeIva()) {
+            // Total = monto; IVA = total − total/factor (redondeado a centavos). El subtotal se
+            // deriva como total − iva al emitir el ticket, así la suma siempre cuadra.
+            BigDecimal subtotalCrudo = importe.divide(factor, 10, RoundingMode.HALF_UP);
+            BigDecimal iva = importe.subtract(subtotalCrudo).setScale(2, RoundingMode.HALF_UP);
+            return new DesgloseIvaReposicion(importe.setScale(2, RoundingMode.HALF_UP), iva);
+        }
+        // Monto es base: IVA se suma encima; total = base + iva.
+        BigDecimal iva = importe.multiply(ivaPorc).movePointLeft(2).setScale(2, RoundingMode.HALF_UP);
+        return new DesgloseIvaReposicion(importe.add(iva).setScale(2, RoundingMode.HALF_UP), iva);
     }
 
     /** Verifica que el rol del usuario esté en {@code ROLES_PERMITIDOS_EXENTAR_REPOSICION}. */
@@ -342,7 +412,7 @@ public class MovimientoContratoService {
         Disponibilidad disponibilidad = validarOperacion(contrato, param, p, request.getTipoOperacion(), hoy);
         CotizacionMovimiento c = calculoContratoService.cotizar(contrato, p, request.getTipoOperacion(),
                 hoy, request.getPeriodos(), request.getAbonoCapital());
-        return toCotizacionResponse(contrato, disponibilidad.estatus(), disponibilidad.acciones(), c);
+        return toCotizacionResponse(contrato, disponibilidad, c);
     }
 
     /**
@@ -393,6 +463,14 @@ public class MovimientoContratoService {
         Usuario usuario = usuarioRepository.findByNombreUsuario(username)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado: " + username));
 
+        // C-03: las reposiciones no se cancelan por nadie — ni siquiera Sistemas. La hoja ya se
+        // consumió al imprimir, así que la reposición "entra porque entra". Se rechaza antes de
+        // validar rol para que el mensaje sea el mismo para gerente y sistemas.
+        // FUTURO: reversión de RE solo por rol SISTEMAS con motivo (falla de máquina, corte de luz).
+        if (mov.getTipo() == TipoMovimiento.RE) {
+            throw new BadRequestException("Las reposiciones de contrato no se pueden cancelar");
+        }
+
         validarRolPuedeCancelar(usuario);
         validarMotivo(request.getMotivo());
 
@@ -400,10 +478,12 @@ public class MovimientoContratoService {
             throw new BadRequestException("El movimiento ya está cancelado");
         }
 
-        // RN-26: solo el último no cancelado del contrato
+        // RN-26 + C-03: solo el último no cancelado del contrato, ignorando los RE (una reposición
+        // posterior no debe bloquear la cancelación del EMP u otro movimiento previo).
         Contrato contrato = mov.getContrato();
         MovimientoContrato ultimo = movimientoRepository
-                .findFirstByContratoIdAndCanceladoFalseOrderByFechaDescIdDesc(contrato.getId())
+                .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(
+                        contrato.getId(), TipoMovimiento.RE)
                 .orElseThrow(() -> new BadRequestException("El contrato no tiene un movimiento vigente que cancelar"));
         if (!ultimo.getId().equals(mov.getId())) {
             throw new BadRequestException(
@@ -437,11 +517,83 @@ public class MovimientoContratoService {
         movimientoRepository.save(mov);
         contratoRepository.save(contrato);
 
+        // C-06/C-07: toda cancelación mueve caja. EMP cancelado → ENTRADA (el cliente devuelve el
+        // préstamo); cobro cancelado → SALIDA por el total devuelto en efectivo. La devolución al
+        // cliente siempre sale de caja aunque el cobro original haya sido en tarjeta: el concepto
+        // deja constancia de la parte con tarjeta (últimos 4, autorización, importe) para el corte y
+        // la auditoría (TODO G-06: confirmar con Alejandro el formato de la devolución de tarjeta).
+        // La reposición no se revierte (C-03): si hubo RE, su propio movimiento sigue vigente y no
+        // se registra flujo de caja al cancelar.
+        if (mov.getTipo() == TipoMovimiento.EMP) {
+            movimientoCajaService.registrar(
+                    turnoMov,
+                    contrato.getSucursalId(),
+                    TipoMovimientoCaja.ENTRADA,
+                    "CANCELACIÓN DE CONTRATO " + nz(contrato.getFolio()) + " - Préstamo devuelto",
+                    mov.getMonto(),
+                    usuario,
+                    mov);
+        } else if (mov.getTipo() != TipoMovimiento.RE) {
+            movimientoCajaService.registrar(
+                    turnoMov,
+                    contrato.getSucursalId(),
+                    TipoMovimientoCaja.SALIDA,
+                    conceptoDevolucion(mov, contrato),
+                    mov.getMonto(),
+                    usuario,
+                    mov);
+        }
+
         registrarBitacora(username, valorViejo, snapshotContrato(contrato), mov);
 
         log.info("Cancelación mov={} contrato={} tipo={} usuario={} motivo={}",
                 mov.getId(), contrato.getFolio(), mov.getTipo(), username, request.getMotivo());
         return toResponse(mov, contrato);
+    }
+
+    private static String nz(String s) {
+        return s != null ? s : "";
+    }
+
+    /**
+     * Concepto del ENTRADA de caja al registrar un cobro (C-07). Para un cobro mixto deja constancia
+     * de la parte con tarjeta (últimos 4, autorización, importe) para que el corte de caja distinga
+     * efectivo real vs tarjeta sin tener que cruzar con el movimiento de contrato. Columna
+     * {@code concepto} tope 120 caracteres.
+     */
+    private static String conceptoCobro(MovimientoContrato mov, Contrato contrato) {
+        String tipo = mov.getTipo() != null ? mov.getTipo().getEtiqueta().toUpperCase() : "MOVIMIENTO";
+        String folio = mov.getFolioNota() != null ? mov.getFolioNota().toString() : nz(contrato.getFolio());
+        StringBuilder sb = new StringBuilder("COBRO ").append(tipo)
+                .append(" FOLIO ").append(folio)
+                .append(" CONTRATO ").append(nz(contrato.getFolio()));
+        BigDecimal tarjeta = mov.getImporteTarjeta();
+        if (tarjeta != null && tarjeta.signum() > 0) {
+            sb.append("; TARJETA ****").append(nz(mov.getTarjetaUltimos4()))
+                    .append(" AUT ").append(nz(mov.getAutorizacionBanco()))
+                    .append(" $").append(tarjeta.toPlainString());
+        }
+        return sb.length() > 120 ? sb.substring(0, 120) : sb.toString();
+    }
+
+    /**
+     * Concepto del SALIDA de caja al cancelar un cobro (C-07). Para un cobro mixto deja constancia
+     * de la parte pagada con tarjeta (últimos 4, autorización, importe) porque el cliente recibe
+     * efectivo pero el cobro original tocó dos medios; el corte y la auditoría necesitan separarlos.
+     * El límite de 120 caracteres de la columna {@code concepto} nos obliga a recortar.
+     */
+    private static String conceptoDevolucion(MovimientoContrato mov, Contrato contrato) {
+        String tipo = mov.getTipo() != null ? mov.getTipo().getEtiqueta().toUpperCase() : "MOVIMIENTO";
+        String folio = mov.getFolioNota() != null ? mov.getFolioNota().toString() : nz(contrato.getFolio());
+        StringBuilder sb = new StringBuilder("DEVOLUCIÓN POR CANCELACIÓN DE ").append(tipo)
+                .append(" FOLIO ").append(folio);
+        BigDecimal tarjeta = mov.getImporteTarjeta();
+        if (tarjeta != null && tarjeta.signum() > 0) {
+            sb.append("; TARJETA ****").append(nz(mov.getTarjetaUltimos4()))
+                    .append(" AUT ").append(nz(mov.getAutorizacionBanco()))
+                    .append(" $").append(tarjeta.toPlainString());
+        }
+        return sb.length() > 120 ? sb.substring(0, 120) : sb.toString();
     }
 
     /** Restaura en el contrato lo que este movimiento cambió. */
@@ -472,6 +624,17 @@ public class MovimientoContratoService {
                     }
                 });
             }
+        }
+        // C-06: cancelar el EMP = cancelar el contrato. Las prendas se devuelven al cliente, así
+        // que las partidas en operación pasan a CAN (bóveda las ve "devueltas"). Las que ya salieron
+        // de operación por otra vía (VEN, APA) no deberían existir en un EMP del día, pero las
+        // dejamos como estén para no sobreescribir estados finales.
+        if (mov.getTipo() == TipoMovimiento.EMP && contrato.getPartidas() != null) {
+            contrato.getPartidas().forEach(p -> {
+                if (p.getEstatus() == EstatusPartida.OP) {
+                    p.setEstatus(EstatusPartida.CAN);
+                }
+            });
         }
     }
 
@@ -524,22 +687,31 @@ public class MovimientoContratoService {
     // =========================================================================
 
     /** Estatus operativo y acciones habilitadas del contrato en la fecha de operación. */
-    private record Disponibilidad(EstatusOperativo estatus, Set<AccionContrato> acciones) {
+    private record Disponibilidad(EstatusOperativo estatus, Set<AccionContrato> acciones,
+                                  boolean yaTuvoMovimientoHoy) {
     }
 
     /**
-     * Valida la operación contra la matriz RN-16 y el máximo de refrendos (RN-28). La cotización y el
-     * registro usan esta misma validación, así que lo que se cotiza es lo que se puede cobrar.
+     * Valida la operación contra la matriz RN-16, el máximo de refrendos (RN-28) y la regla
+     * "un movimiento por contrato por día" (RN-29, C-01). La cotización y el registro usan la misma
+     * validación, así que lo que se cotiza es lo que se puede cobrar.
      */
     private Disponibilidad validarOperacion(Contrato contrato, PlazoParametro param, ParametrosCalculo p,
                                             TipoOperacion operacion, LocalDate hoy) {
         EstatusOperativo estatus = EstatusContratoResolver.estatusDerivado(contrato, p.diasGraciaSancion(), hoy);
         int transcurridos = calculoContratoService.situacion(contrato, p, hoy).periodosTranscurridos();
         boolean agotados = EstatusContratoResolver.refrendosAgotados(contrato, param);
-        Set<AccionContrato> acciones = EstatusContratoResolver.accionesDisponibles(estatus, transcurridos, agotados);
+        boolean yaTuvoMovimientoHoy = yaTuvoMovimientoHoy(contrato.getId(), hoy);
+        Set<AccionContrato> acciones = EstatusContratoResolver.accionesDisponibles(
+                estatus, transcurridos, agotados, yaTuvoMovimientoHoy);
 
         AccionContrato accion = EstatusContratoResolver.accionPara(operacion, estatus);
         if (!acciones.contains(accion)) {
+            // RN-29: el motivo del día tiene prioridad; es la causa real cuando el estatus permite la
+            // operación pero ya hubo un cobro hoy
+            if (yaTuvoMovimientoHoy && ACCIONES_DE_COBRO_SET.contains(accion)) {
+                throw new BadRequestException(EstatusContratoResolver.MOTIVO_UNO_POR_DIA);
+            }
             if (agotados && operacion != TipoOperacion.FINIQUITO) {
                 throw new BadRequestException("El contrato alcanzó el máximo de refrendos permitidos ("
                         + param.getNumMaxRefrendos() + "); solo se puede finiquitar");
@@ -547,8 +719,25 @@ public class MovimientoContratoService {
             throw new BadRequestException(
                     "La operación " + accion + " no está disponible para un contrato " + estatus);
         }
-        return new Disponibilidad(estatus, acciones);
+        return new Disponibilidad(estatus, acciones, yaTuvoMovimientoHoy);
     }
+
+    /**
+     * ¿Existe un movimiento no cancelado hoy en el contrato cuyo tipo cuente para la regla
+     * "un movimiento por día" (RN-29)? El reloj inyectado decide "hoy".
+     */
+    private boolean yaTuvoMovimientoHoy(Long contratoId, LocalDate hoy) {
+        LocalDateTime inicio = hoy.atStartOfDay();
+        LocalDateTime finExclusivo = hoy.plusDays(1).atStartOfDay();
+        return movimientoRepository
+                .existsByContratoIdAndCanceladoFalseAndTipoInAndFechaGreaterThanEqualAndFechaLessThan(
+                        contratoId, TipoMovimiento.CUENTAN_UNO_POR_DIA, inicio, finExclusivo);
+    }
+
+    private static final Set<AccionContrato> ACCIONES_DE_COBRO_SET = java.util.EnumSet.of(
+            AccionContrato.REFRENDO, AccionContrato.FINIQUITO, AccionContrato.ABONO_CAPITAL,
+            AccionContrato.REFRENDO_PARCIAL, AccionContrato.REFRENDO_EXTEMPORANEO,
+            AccionContrato.FINIQUITO_EXTEMPORANEO);
 
     private Turno turnoActivo() {
         return turnoRepository.findByActivo(true)
@@ -671,8 +860,7 @@ public class MovimientoContratoService {
         mov.setEstatusNuevo(contrato.getEstatus());
     }
 
-    private CotizacionMovimientoResponse toCotizacionResponse(Contrato contrato, EstatusOperativo estatus,
-                                                              Set<AccionContrato> acciones,
+    private CotizacionMovimientoResponse toCotizacionResponse(Contrato contrato, Disponibilidad disponibilidad,
                                                               CotizacionMovimiento c) {
         SituacionPeriodos s = c.situacion();
         DesgloseCobro d = c.desglose();
@@ -682,8 +870,11 @@ public class MovimientoContratoService {
         r.setTipoOperacion(c.operacion());
         r.setTipoMovimiento(c.tipoMovimiento());
 
-        r.setEstatusActual(estatus);
-        r.setAccionesDisponibles(acciones);
+        r.setEstatusActual(disponibilidad.estatus());
+        r.setAccionesDisponibles(disponibilidad.acciones());
+        if (disponibilidad.yaTuvoMovimientoHoy()) {
+            r.setMotivoAccionesDeshabilitadas(EstatusContratoResolver.MOTIVO_UNO_POR_DIA);
+        }
         r.setFechaContrato(contrato.getFechaContrato());
         r.setFechaVencimiento(contrato.getFechaVencimiento());
         r.setSaldoCapital(contrato.getSaldoCapital());

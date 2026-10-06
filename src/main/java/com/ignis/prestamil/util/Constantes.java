@@ -20,6 +20,10 @@ public class Constantes {
     public static final int PORCENTAJE_MINIMO_APARTADOS = 13;
     public static final int IMPORTE_MINIMO_APARTADOS = 14;
     public static final int PORCENTAJE_SANCION_APARTADOS = 15;
+    // 16 y 17 estan en 003-session-params.sql (timeout de sesion y aviso previo).
+    // C-04: default true = monto_reposicion fijo es IVA incluido ($50 = $43.10 + $6.90).
+    // false = monto es base y se suma IVA encima ($50 = $50.00 + $8.00). G-03 pendiente con Jorge.
+    public static final int REPOSICION_INCLUYE_IVA = 18;
 
     // Nombres de configuraciones y menús
     public static final String ROLES_PERMITIDOS_APERTURA_TURNOS = "ROLES_PERMITIDOS_APERTURA_TURNOS";

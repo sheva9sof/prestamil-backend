@@ -37,5 +37,11 @@
     <include file="db/changelog/changes/030-plazo-parametro-descuento-interes.sql"/>
     <include file="db/changelog/changes/031-roles-permitidos-exentar-reposicion.sql"/>
     <include file="db/changelog/changes/032-roles-permitidos-cancelar-movimiento.sql"/>
+    <include file="db/changelog/changes/033-parametro-reposicion-incluye-iva.sql"/>
+    <include file="db/changelog/changes/034-movimiento-caja.sql"/>
+    <include file="db/changelog/changes/035-pase-almoneda.sql"/>
+    <include file="db/changelog/changes/036-pase-almoneda-detalle.sql"/>
+    <include file="db/changelog/changes/037-menu-pase-almoneda.sql"/>
+    <include file="db/changelog/changes/038-eliminar-menu-parametros-prestamo.sql"/>
 
 </databaseChangeLog>

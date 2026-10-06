@@ -46,4 +46,11 @@ public class ContratoOperacionResponse {
     private BigDecimal interesPorPeriodo;
 
     private Set<AccionContrato> accionesDisponibles;
+
+    /**
+     * Motivo por el que las acciones de cobro quedaron fuera de {@code accionesDisponibles}; hoy solo
+     * lo pobla la regla "un movimiento por contrato por día" (RN-29, C-01). Null si no hubo bloqueo.
+     * El frontend lo usa como tooltip del botón deshabilitado.
+     */
+    private String motivoAccionesDeshabilitadas;
 }

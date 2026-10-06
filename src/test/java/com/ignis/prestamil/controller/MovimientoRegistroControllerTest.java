@@ -23,6 +23,7 @@ import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.TurnoRepository;
 import com.ignis.prestamil.repository.UsuarioRepository;
 import com.ignis.prestamil.service.CobroService;
+import com.ignis.prestamil.service.MovimientoCajaService;
 import com.ignis.prestamil.service.MovimientoContratoService;
 import com.ignis.prestamil.service.TicketMovimientoService;
 import com.ignis.prestamil.service.calculo.CalculoContratoService;
@@ -82,6 +83,7 @@ class MovimientoRegistroControllerTest {
     @Mock BitacoraRepository bitacoraRepository;
     @Mock ParametrosSistemaCache parametrosSistemaCache;
     @Mock TicketMovimientoService ticketService;
+    @Mock MovimientoCajaService movimientoCajaService;
 
     @BeforeEach
     void setUp() {
@@ -113,7 +115,7 @@ class MovimientoRegistroControllerTest {
         MovimientoContratoService service = new MovimientoContratoService(movimientoRepository, contratoRepository,
                 plazoParametroRepository, turnoRepository, usuarioRepository, folioNotaRepository,
                 configuracionRepository, bitacoraRepository, new CalculoContratoService(parametrosSistemaCache),
-                new CobroService(bancoRepository), clock);
+                new CobroService(bancoRepository), movimientoCajaService, parametrosSistemaCache, clock);
         // Fechas como texto ISO, igual que el ObjectMapper de Spring Boot
         MappingJackson2HttpMessageConverter json = new MappingJackson2HttpMessageConverter(
                 Jackson2ObjectMapperBuilder.json().featuresToDisable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS).build());

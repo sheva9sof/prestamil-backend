@@ -23,6 +23,8 @@
 	<parameter name="P_MOVIMIENTO" class="net.sf.jasperreports.engine.JRDataSource"/>
 	<parameter name="P_TOTALES" class="net.sf.jasperreports.engine.JRDataSource"/>
 	<parameter name="P_TOTAL" class="java.lang.String"/>
+	<!-- C-05: nueva fecha de vencimiento al tamaño de TOTAL. null en finiquitos y reposiciones. -->
+	<parameter name="P_NUEVO_VENCIMIENTO" class="java.lang.String" isForPrompting="false"/>
 	<parameter name="P_PAGO" class="net.sf.jasperreports.engine.JRDataSource"/>
 	<parameter name="P_TOTAL_LETRA" class="java.lang.String"/>
 	<parameter name="P_USUARIO" class="java.lang.String"/>
@@ -118,7 +120,7 @@
 		</band>
 	</detail>
 	<summary>
-		<band height="152" splitType="Stretch">
+		<band height="166" splitType="Stretch">
 			<line>
 				<reportElement x="0" y="1" width="211" height="1"/>
 				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
@@ -198,8 +200,26 @@
 				<textElement textAlignment="Right"><font size="10" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
 				<textFieldExpression><![CDATA[$P{P_TOTAL}]]></textFieldExpression>
 			</textField>
+			<!-- C-05: NUEVO VENCIMIENTO al mismo tamaño/negrita que TOTAL (los clientes no leían la fecha).
+			     Ancho 115/96 porque "NUEVO VENCIMIENTO" en Helvetica-Bold 10pt mide ~109pt y una fecha
+			     larga ("28/septiembre/2026") ~92pt; con 211pt de columna disponible, es el único reparto
+			     que deja ambos con margen de respiro sin truncarse. -->
+			<staticText>
+				<reportElement positionType="Float" x="0" y="61" width="115" height="13" isRemoveLineWhenBlank="true">
+					<printWhenExpression><![CDATA[$P{P_NUEVO_VENCIMIENTO} != null]]></printWhenExpression>
+				</reportElement>
+				<textElement><font size="10" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[NUEVO VENCIMIENTO]]></text>
+			</staticText>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="115" y="61" width="96" height="13" isRemoveLineWhenBlank="true">
+					<printWhenExpression><![CDATA[$P{P_NUEVO_VENCIMIENTO} != null]]></printWhenExpression>
+				</reportElement>
+				<textElement textAlignment="Right"><font size="10" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_NUEVO_VENCIMIENTO}]]></textFieldExpression>
+			</textField>
 			<componentElement>
-				<reportElement positionType="Float" x="0" y="61" width="211" height="10"/>
+				<reportElement positionType="Float" x="0" y="75" width="211" height="10"/>
 				<jr:list xmlns:jr="http://jasperreports.sourceforge.net/jasperreports/components" xsi:schemaLocation="http://jasperreports.sourceforge.net/jasperreports/components http://jasperreports.sourceforge.net/xsd/components.xsd" printOrder="Vertical">
 					<datasetRun subDataset="Lineas">
 						<dataSourceExpression><![CDATA[$P{P_PAGO}]]></dataSourceExpression>
@@ -218,36 +238,36 @@
 				</jr:list>
 			</componentElement>
 			<textField textAdjust="StretchHeight">
-				<reportElement positionType="Float" x="0" y="74" width="211" height="10"/>
+				<reportElement positionType="Float" x="0" y="88" width="211" height="10"/>
 				<textElement textAlignment="Center"><font isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
 				<textFieldExpression><![CDATA[$P{P_TOTAL_LETRA}]]></textFieldExpression>
 			</textField>
 			<line>
-				<reportElement positionType="Float" x="46" y="100" width="120" height="1"/>
+				<reportElement positionType="Float" x="46" y="114" width="120" height="1"/>
 				<graphicElement><pen lineWidth="0.5"/></graphicElement>
 			</line>
 			<staticText>
-				<reportElement positionType="Float" x="0" y="102" width="211" height="9"/>
+				<reportElement positionType="Float" x="0" y="116" width="211" height="9"/>
 				<textElement textAlignment="Center"/>
 				<text><![CDATA[CAJERA(O)]]></text>
 			</staticText>
 			<textField isBlankWhenNull="true">
-				<reportElement positionType="Float" x="0" y="111" width="211" height="9"/>
+				<reportElement positionType="Float" x="0" y="125" width="211" height="9"/>
 				<textElement textAlignment="Center"><font size="6.5"/></textElement>
 				<textFieldExpression><![CDATA[$P{P_USUARIO}]]></textFieldExpression>
 			</textField>
 			<textField textAdjust="StretchHeight">
-				<reportElement positionType="Float" x="0" y="123" width="211" height="9"/>
+				<reportElement positionType="Float" x="0" y="137" width="211" height="9"/>
 				<textElement textAlignment="Center"><font size="6" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
 				<textFieldExpression><![CDATA["ESTA NOTA FORMARÁ PARTE DE LA FACTURACIÓN GLOBAL DEL DÍA"]]></textFieldExpression>
 			</textField>
 			<textField textAdjust="StretchHeight">
-				<reportElement positionType="Float" x="0" y="132" width="211" height="9"/>
+				<reportElement positionType="Float" x="0" y="146" width="211" height="9"/>
 				<textElement textAlignment="Center"><font size="6" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
 				<textFieldExpression><![CDATA["ESTE NO ES UN COMPROBANTE FISCAL"]]></textFieldExpression>
 			</textField>
 			<staticText>
-				<reportElement positionType="Float" x="0" y="143" width="211" height="9"/>
+				<reportElement positionType="Float" x="0" y="157" width="211" height="9"/>
 				<textElement textAlignment="Center"/>
 				<text><![CDATA[Gracias por su preferencia]]></text>
 			</staticText>

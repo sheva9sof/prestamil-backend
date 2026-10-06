@@ -11,6 +11,7 @@ import com.ignis.prestamil.model.PlazoParametro;
 import com.ignis.prestamil.model.Sucursal;
 import com.ignis.prestamil.model.TipoMovimiento;
 import com.ignis.prestamil.model.TipoTarjeta;
+import com.ignis.prestamil.model.Usuario;
 import com.ignis.prestamil.repository.MovimientoContratoRepository;
 import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.SucursalRepository;
@@ -58,6 +59,9 @@ public class TicketMovimientoService {
 
     private static final DateTimeFormatter FECHA = DateTimeFormatter.ofPattern("dd/MM/yyyy");
     private static final DateTimeFormatter FECHA_HORA = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
+    // C-05: fecha larga para la línea grande de "NUEVO VENCIMIENTO" (ej. "28/septiembre/2026").
+    private static final DateTimeFormatter FECHA_LARGA =
+            DateTimeFormatter.ofPattern("dd/MMMM/yyyy", java.util.Locale.of("es", "MX"));
 
     private final MovimientoContratoRepository movimientoRepository;
     private final SucursalRepository sucursalRepository;
@@ -65,6 +69,8 @@ public class TicketMovimientoService {
     private final CalculoContratoService calculoContratoService;
 
     private JasperReport reporte; // cacheado (la plantilla no cambia en runtime)
+    private JasperReport reporteCancelacion; // cacheado (ticket C-06)
+    private JasperReport reporteCancelacionMovimiento; // cacheado (ticket C-07)
 
     public TicketMovimientoService(MovimientoContratoRepository movimientoRepository,
                                    SucursalRepository sucursalRepository,
@@ -186,19 +192,26 @@ public class TicketMovimientoService {
         if (mov.getDiasGraciaUsados() != null && mov.getDiasGraciaUsados() > 0) {
             movimiento.add(linea("Días de gracia usados", String.valueOf(mov.getDiasGraciaUsados())));
         }
+        // C-05: la nueva fecha de vencimiento sale como línea grande al nivel del TOTAL (ver plantilla).
+        // La "Comercialización" se queda en el bloque de movimiento con fuente normal.
         if (mov.getFechaVencNueva() != null && esRefrendo(mov.getTipo())) {
-            movimiento.add(linea("Nuevo vencimiento", mov.getFechaVencNueva().format(FECHA)));
             movimiento.add(linea("Comercialización", mov.getFechaVencNueva()
                     .plusDays(Constantes.DIAS_VENCIMIENTO_A_COMERCIALIZACION).format(FECHA)));
         }
         params.put("P_MOVIMIENTO", new JRBeanCollectionDataSource(movimiento));
+        params.put("P_NUEVO_VENCIMIENTO",
+                mov.getFechaVencNueva() != null && esRefrendo(mov.getTipo())
+                        ? mov.getFechaVencNueva().format(FECHA_LARGA)
+                        : null);
 
         // Totales: subtotal = base del IVA; el abono y el capital van por fuera del IVA (RN-12).
-        // Reposición: no lleva intereses, sanción ni IVA; el importe es el subtotal.
+        // Reposición (C-04): el monto fijo trae IVA desglosado — subtotal = total − IVA.
         List<LineaTicketRow> totales = new ArrayList<>();
         BigDecimal iva = cero(mov.getIva());
         if (mov.getTipo() == TipoMovimiento.RE) {
-            totales.add(linea("Subtotal", FormatoDocumento.money(mov.getMonto())));
+            BigDecimal totalRe = cero(mov.getMonto());
+            BigDecimal subtotalRe = totalRe.subtract(iva);
+            totales.add(linea("Subtotal", FormatoDocumento.money(subtotalRe)));
             totales.add(linea("IVA", FormatoDocumento.money(iva)));
         } else {
             BigDecimal interes = cero(mov.getInteres());
@@ -228,6 +241,226 @@ public class TicketMovimientoService {
         params.put("P_TOTAL_LETRA", "*** " + NumeroALetras.importe(cero(mov.getMonto())) + " ***");
         params.put("P_USUARIO", mov.getUsuario() != null ? nz(mov.getUsuario().getNombreUsuario()) : "");
         return params;
+    }
+
+    /**
+     * Genera el comprobante de "CANCELACIÓN DE CONTRATO" para un empeño cancelado (C-06, RN-26).
+     * Incluye los datos requeridos para la auditoría y la firma del cliente que recibe las prendas:
+     * contrato, cliente, prendas devueltas, monto reingresado a caja, motivo, usuario, fecha y hora
+     * y línea de firma. Si Jorge confirma que no se requiere firma (TODO G-09), basta con editar la
+     * plantilla.
+     *
+     * @param movimientoId identificador del movimiento EMP cancelado
+     * @return bytes del PDF
+     * @throws ResourceNotFoundException si el movimiento no existe
+     * @throws BadRequestException       si el movimiento no es un EMP cancelado
+     */
+    @Transactional(readOnly = true)
+    public byte[] generarPdfCancelacionContrato(Long movimientoId) {
+        MovimientoContrato mov = movimientoRepository.findById(movimientoId)
+                .orElseThrow(() -> new ResourceNotFoundException("Movimiento no encontrado: " + movimientoId));
+        if (mov.getTipo() != TipoMovimiento.EMP || !Boolean.TRUE.equals(mov.getCancelado())) {
+            throw new BadRequestException(
+                    "El comprobante de cancelación de contrato solo se genera para un empeño cancelado");
+        }
+        Map<String, Object> params = armarParametrosCancelacion(mov);
+        try {
+            JasperPrint print = JasperFillManager.fillReport(getReporteCancelacion(), params,
+                    new JRBeanCollectionDataSource(buildPartidas(mov.getContrato().getPartidas())));
+            return JasperExportManager.exportReportToPdf(print);
+        } catch (JRException e) {
+            throw new BadRequestException("No se pudo generar el comprobante de cancelación: " + e.getMessage());
+        }
+    }
+
+    /** Parámetros del ticket de cancelación. Package-private para verificar su contenido en tests. */
+    Map<String, Object> armarParametrosCancelacion(MovimientoContrato mov) {
+        Contrato contrato = mov.getContrato();
+        Sucursal sucursal = sucursalRepository.findById(contrato.getSucursalId()).orElse(null);
+        Empresa empresa = sucursal != null ? sucursal.getEmpresa() : null;
+
+        Map<String, Object> params = new HashMap<>();
+        params.put("P_EMPRESA", empresa != null && empresa.getNombre() != null
+                ? empresa.getNombre().toUpperCase() : "PRESTAMIL");
+        params.put("P_EMPRESA_DATOS", lineas(
+                empresa != null ? empresa.getRazonSocial() : null,
+                FormatoDocumento.domicilioFiscal(empresa)));
+        params.put("P_SUCURSAL", sucursal == null ? "" : lineas(
+                "Expedido en la sucursal: " + (sucursal.getNumeroSucursal() != null
+                        ? sucursal.getNumeroSucursal() + " " : "")
+                        + nz(sucursal.getNombre()),
+                FormatoDocumento.domicilio(sucursal),
+                sucursal.getTelefono() != null && !sucursal.getTelefono().isBlank()
+                        ? "Tel. " + sucursal.getTelefono() : null));
+        // Fecha de la cancelación (no la del empeño): es la que firma el cliente al recibir las
+        // prendas; si no se guardó, caemos a la fecha del movimiento.
+        java.time.LocalDateTime cuando = mov.getFechaCancelacion() != null
+                ? mov.getFechaCancelacion() : mov.getFecha();
+        params.put("P_FECHA", cuando != null ? cuando.format(FECHA_HORA) : "");
+        params.put("P_CONTRATO", "Contrato: " + nz(contrato.getFolio()));
+        Cliente cliente = contrato.getCliente();
+        params.put("P_CLIENTE", cliente == null ? "" : lineas(
+                "Cliente: " + cliente.getId() + " " + FormatoDocumento.nombreCompleto(cliente),
+                FormatoDocumento.domicilio(cliente.getDireccion())));
+
+        BigDecimal monto = cero(mov.getMonto());
+        params.put("P_MONTO", FormatoDocumento.money(monto));
+        params.put("P_MONTO_LETRA", "*** " + NumeroALetras.importe(monto) + " ***");
+        params.put("P_MOTIVO", nz(mov.getMotivoCancelacion()));
+        Usuario usuarioCancela = mov.getUsuarioCancela();
+        params.put("P_USUARIO", usuarioCancela != null ? nz(usuarioCancela.getNombreUsuario()) : "");
+        return params;
+    }
+
+    /**
+     * Dispatcher del comprobante de cancelación: EMP cancelado → cancelación de contrato (C-06);
+     * cualquier otro cobro cancelado → cancelación de movimiento / devolución (C-07). Centraliza
+     * la decisión para que el controlador no tenga que conocer los tipos.
+     *
+     * @param movimientoId identificador del movimiento cancelado
+     * @return bytes del PDF del comprobante correspondiente
+     */
+    @Transactional(readOnly = true)
+    public byte[] generarPdfCancelacion(Long movimientoId) {
+        MovimientoContrato mov = movimientoRepository.findById(movimientoId)
+                .orElseThrow(() -> new ResourceNotFoundException("Movimiento no encontrado: " + movimientoId));
+        if (mov.getTipo() == TipoMovimiento.EMP) {
+            return generarPdfCancelacionContrato(movimientoId);
+        }
+        return generarPdfCancelacionMovimiento(movimientoId);
+    }
+
+    /**
+     * Genera el comprobante "CANCELACIÓN DE MOVIMIENTO / DEVOLUCIÓN" para un cobro cancelado (C-07).
+     * Incluye tipo y folio del movimiento, contrato, cliente, monto devuelto en efectivo, desglose
+     * de pago original (efectivo y tarjeta con últimos 4, banco y autorización), motivo, usuario
+     * que canceló, fecha/hora y línea de firma del cliente. Aplica a cualquier movimiento con cobro
+     * cancelado (RF, RPG, RC, RP, RPX, RX, FI, FX, RE); los EMP cancelados usan {@link #generarPdfCancelacionContrato}.
+     *
+     * @param movimientoId identificador del movimiento cancelado
+     * @return bytes del PDF
+     * @throws ResourceNotFoundException si el movimiento no existe
+     * @throws BadRequestException       si el movimiento no está cancelado o es un empeño
+     */
+    @Transactional(readOnly = true)
+    public byte[] generarPdfCancelacionMovimiento(Long movimientoId) {
+        MovimientoContrato mov = movimientoRepository.findById(movimientoId)
+                .orElseThrow(() -> new ResourceNotFoundException("Movimiento no encontrado: " + movimientoId));
+        if (!Boolean.TRUE.equals(mov.getCancelado())) {
+            throw new BadRequestException(
+                    "El comprobante de cancelación de movimiento solo se genera para un movimiento cancelado");
+        }
+        if (mov.getTipo() == TipoMovimiento.EMP) {
+            throw new BadRequestException(
+                    "El empeño cancelado usa el comprobante de cancelación de contrato");
+        }
+        Map<String, Object> params = armarParametrosCancelacionMovimiento(mov);
+        try {
+            JasperPrint print = JasperFillManager.fillReport(getReporteCancelacionMovimiento(), params,
+                    new JRBeanCollectionDataSource(List.of(new Object())));
+            return JasperExportManager.exportReportToPdf(print);
+        } catch (JRException e) {
+            throw new BadRequestException(
+                    "No se pudo generar el comprobante de cancelación: " + e.getMessage());
+        }
+    }
+
+    /** Parámetros del ticket de cancelación de movimiento. Package-private para verificar en tests. */
+    Map<String, Object> armarParametrosCancelacionMovimiento(MovimientoContrato mov) {
+        Contrato contrato = mov.getContrato();
+        Sucursal sucursal = sucursalRepository.findById(contrato.getSucursalId()).orElse(null);
+        Empresa empresa = sucursal != null ? sucursal.getEmpresa() : null;
+
+        Map<String, Object> params = new HashMap<>();
+        params.put("P_EMPRESA", empresa != null && empresa.getNombre() != null
+                ? empresa.getNombre().toUpperCase() : "PRESTAMIL");
+        params.put("P_EMPRESA_DATOS", lineas(
+                empresa != null ? empresa.getRazonSocial() : null,
+                FormatoDocumento.domicilioFiscal(empresa)));
+        params.put("P_SUCURSAL", sucursal == null ? "" : lineas(
+                "Expedido en la sucursal: " + (sucursal.getNumeroSucursal() != null
+                        ? sucursal.getNumeroSucursal() + " " : "")
+                        + nz(sucursal.getNombre()),
+                FormatoDocumento.domicilio(sucursal),
+                sucursal.getTelefono() != null && !sucursal.getTelefono().isBlank()
+                        ? "Tel. " + sucursal.getTelefono() : null));
+        java.time.LocalDateTime cuando = mov.getFechaCancelacion() != null
+                ? mov.getFechaCancelacion() : mov.getFecha();
+        params.put("P_FECHA", cuando != null ? cuando.format(FECHA_HORA) : "");
+        params.put("P_TIPO_MOVIMIENTO", "MOVIMIENTO: "
+                + (mov.getTipo() != null ? mov.getTipo().getEtiqueta().toUpperCase() : "")
+                + " (" + mov.getTipo() + ")");
+        params.put("P_FOLIO_NOTA", "Folio nota: "
+                + (mov.getFolioNota() != null ? mov.getFolioNota() : "S/F"));
+        params.put("P_CONTRATO", "Contrato: " + nz(contrato.getFolio()));
+        Cliente cliente = contrato.getCliente();
+        params.put("P_CLIENTE", cliente == null ? "" : lineas(
+                "Cliente: " + cliente.getId() + " " + FormatoDocumento.nombreCompleto(cliente),
+                FormatoDocumento.domicilio(cliente.getDireccion())));
+
+        BigDecimal total = cero(mov.getMonto());
+        params.put("P_MONTO", FormatoDocumento.money(total));
+        params.put("P_MONTO_LETRA", "*** " + NumeroALetras.importe(total) + " ***");
+
+        BigDecimal efectivo = cero(mov.getImporteEfectivo());
+        BigDecimal tarjeta = cero(mov.getImporteTarjeta());
+        StringBuilder original = new StringBuilder();
+        if (efectivo.signum() > 0) {
+            original.append("Efectivo: ").append(FormatoDocumento.money(efectivo));
+        }
+        if (tarjeta.signum() > 0) {
+            if (original.length() > 0) original.append("\n");
+            original.append("Tarjeta: ").append(FormatoDocumento.money(tarjeta));
+        }
+        if (original.length() == 0) {
+            original.append("Efectivo: ").append(FormatoDocumento.money(total));
+        }
+        params.put("P_PAGO_ORIGINAL", original.toString());
+
+        if (tarjeta.signum() > 0) {
+            String tipo = mov.getTipoTarjeta() == TipoTarjeta.CREDITO ? "crédito" : "débito";
+            StringBuilder t = new StringBuilder("DEVOLUCIÓN DE PAGO CON TARJETA\n");
+            t.append("Tarjeta ").append(tipo).append(" ****").append(nz(mov.getTarjetaUltimos4())).append("\n");
+            if (mov.getBancoEmisor() != null) {
+                t.append("Banco: ").append(mov.getBancoEmisor().getNombre()).append("\n");
+            }
+            t.append("Autorización: ").append(nz(mov.getAutorizacionBanco()));
+            params.put("P_TARJETA", t.toString());
+        } else {
+            params.put("P_TARJETA", null);
+        }
+
+        params.put("P_MOTIVO", nz(mov.getMotivoCancelacion()));
+        Usuario usuarioCancela = mov.getUsuarioCancela();
+        params.put("P_USUARIO", usuarioCancela != null ? nz(usuarioCancela.getNombreUsuario()) : "");
+        return params;
+    }
+
+    private synchronized JasperReport getReporteCancelacionMovimiento() {
+        if (reporteCancelacionMovimiento == null) {
+            try (InputStream is = new ClassPathResource(
+                    "jasper/ticket-cancelacion-movimiento.jrxml").getInputStream()) {
+                reporteCancelacionMovimiento = JasperCompileManager.compileReport(is);
+            } catch (IOException | JRException e) {
+                throw new BadRequestException(
+                        "No se pudo cargar la plantilla del ticket de cancelación de movimiento: "
+                                + e.getMessage());
+            }
+        }
+        return reporteCancelacionMovimiento;
+    }
+
+    private synchronized JasperReport getReporteCancelacion() {
+        if (reporteCancelacion == null) {
+            try (InputStream is = new ClassPathResource(
+                    "jasper/ticket-cancelacion-contrato.jrxml").getInputStream()) {
+                reporteCancelacion = JasperCompileManager.compileReport(is);
+            } catch (IOException | JRException e) {
+                throw new BadRequestException(
+                        "No se pudo cargar la plantilla del ticket de cancelación: " + e.getMessage());
+            }
+        }
+        return reporteCancelacion;
     }
 
     // ---------------------------------------------------------------------

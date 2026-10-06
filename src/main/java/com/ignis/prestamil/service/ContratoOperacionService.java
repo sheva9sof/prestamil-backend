@@ -13,6 +13,7 @@ import com.ignis.prestamil.model.MovimientoContrato;
 import com.ignis.prestamil.model.PartidaContrato;
 import com.ignis.prestamil.model.PlazoParametro;
 import com.ignis.prestamil.model.Sucursal;
+import com.ignis.prestamil.model.TipoMovimiento;
 import com.ignis.prestamil.repository.ContratoRepository;
 import com.ignis.prestamil.repository.ContratoSpecifications;
 import com.ignis.prestamil.repository.MovimientoContratoRepository;
@@ -199,7 +200,8 @@ public class ContratoOperacionService {
 
     /** Estado del contrato a una fecha, con los parámetros efectivos ya resueltos. */
     private record Evaluacion(Contrato contrato, ParametrosCalculo parametros, EstatusOperativo estatus,
-                              SituacionPeriodos situacion, Set<AccionContrato> acciones) {
+                              SituacionPeriodos situacion, Set<AccionContrato> acciones,
+                              boolean yaTuvoMovimientoHoy) {
     }
 
     private Evaluacion evaluar(Contrato contrato, LocalDate hoy, Map<String, Optional<PlazoParametro>> parametros) {
@@ -207,10 +209,16 @@ public class ContratoOperacionService {
         ParametrosCalculo p = calculoContratoService.resolverParametros(contrato, vigente);
         EstatusOperativo estatus = EstatusContratoResolver.estatusDerivado(contrato, p.diasGraciaSancion(), hoy);
         SituacionPeriodos s = OPERABLES.contains(estatus) ? calculoContratoService.situacion(contrato, p, hoy) : null;
+        // RN-29: si hoy ya hubo un cobro no cancelado en el contrato, los botones se apagan en el detalle.
+        boolean yaTuvoMovimientoHoy = OPERABLES.contains(estatus)
+                && movimientoRepository
+                        .existsByContratoIdAndCanceladoFalseAndTipoInAndFechaGreaterThanEqualAndFechaLessThan(
+                                contrato.getId(), TipoMovimiento.CUENTAN_UNO_POR_DIA,
+                                hoy.atStartOfDay(), hoy.plusDays(1).atStartOfDay());
         Set<AccionContrato> acciones = EstatusContratoResolver.accionesDisponibles(
                 estatus, s != null ? s.periodosTranscurridos() : 0,
-                EstatusContratoResolver.refrendosAgotados(contrato, vigente));
-        return new Evaluacion(contrato, p, estatus, s, acciones);
+                EstatusContratoResolver.refrendosAgotados(contrato, vigente), yaTuvoMovimientoHoy);
+        return new Evaluacion(contrato, p, estatus, s, acciones, yaTuvoMovimientoHoy);
     }
 
     private <R extends ContratoOperacionResponse> R llenarFila(R r, Evaluacion e) {
@@ -240,6 +248,9 @@ public class ContratoOperacionService {
         r.setMontoAvaluo(c.getMontoAvaluo());
         r.setInteresPorPeriodo(calculoContratoService.interesPorPeriodo(c.getSaldoCapital(), e.parametros()));
         r.setAccionesDisponibles(e.acciones());
+        if (e.yaTuvoMovimientoHoy()) {
+            r.setMotivoAccionesDeshabilitadas(EstatusContratoResolver.MOTIVO_UNO_POR_DIA);
+        }
         return r;
     }
 

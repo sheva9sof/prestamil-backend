@@ -1,12 +1,15 @@
 package com.ignis.prestamil.service;
 
 import com.ignis.prestamil.exception.BadRequestException;
+import com.ignis.prestamil.exception.ConflictException;
 import com.ignis.prestamil.model.Cliente;
 import com.ignis.prestamil.model.Contrato;
 import com.ignis.prestamil.model.PartidaContrato;
 import com.ignis.prestamil.model.Plazo;
 import com.ignis.prestamil.model.PlazoParametro;
 import com.ignis.prestamil.model.Sucursal;
+import com.ignis.prestamil.model.TipoMovimiento;
+import com.ignis.prestamil.repository.MovimientoContratoRepository;
 import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.SucursalRepository;
 import com.ignis.prestamil.response.VencimientoResponse;
@@ -35,8 +38,12 @@ import java.io.InputStream;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.text.DecimalFormat;
+import java.time.Clock;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -63,6 +70,8 @@ public class ContratoPdfService {
     private final SucursalRepository sucursalRepository;
     private final CalculoContratoService calculoContratoService;
     private final ParametrosSistemaCache parametrosSistemaCache;
+    private final MovimientoContratoRepository movimientoRepository;
+    private final Clock clock;
 
     private JasperReport reporte; // cacheado (la plantilla no cambia en runtime)
 
@@ -70,12 +79,40 @@ public class ContratoPdfService {
                               PlazoParametroRepository plazoParametroRepository,
                               SucursalRepository sucursalRepository,
                               CalculoContratoService calculoContratoService,
-                              ParametrosSistemaCache parametrosSistemaCache) {
+                              ParametrosSistemaCache parametrosSistemaCache,
+                              MovimientoContratoRepository movimientoRepository,
+                              Clock clock) {
         this.contratoService = contratoService;
         this.plazoParametroRepository = plazoParametroRepository;
         this.sucursalRepository = sucursalRepository;
         this.calculoContratoService = calculoContratoService;
         this.parametrosSistemaCache = parametrosSistemaCache;
+        this.movimientoRepository = movimientoRepository;
+        this.clock = clock;
+    }
+
+    /**
+     * Genera el PDF del contrato para una reposición/reimpresión (C-02). Exige un movimiento RE no
+     * cancelado para ese contrato con fecha de hoy, cobrado o exento ($0): el ticket debe haberse
+     * emitido antes del contrato para evitar que el personal entregue el contrato sin cobrar.
+     *
+     * @param contratoId id del contrato
+     * @return bytes del PDF del contrato
+     * @throws ConflictException 409 si no existe un RE no cancelado hoy
+     */
+    @Transactional(readOnly = true)
+    public byte[] generarPdfParaReposicion(Long contratoId) {
+        LocalDate hoy = LocalDate.now(clock);
+        LocalDateTime inicio = hoy.atStartOfDay();
+        LocalDateTime finExclusivo = hoy.plusDays(1).atStartOfDay();
+        boolean existeReHoy = movimientoRepository
+                .existsByContratoIdAndCanceladoFalseAndTipoInAndFechaGreaterThanEqualAndFechaLessThan(
+                        contratoId, EnumSet.of(TipoMovimiento.RE), inicio, finExclusivo);
+        if (!existeReHoy) {
+            throw new ConflictException(
+                    "El contrato no tiene una reposición registrada hoy; cobre la reposición antes de imprimir el contrato.");
+        }
+        return generarPdf(contratoId);
     }
 
     /**

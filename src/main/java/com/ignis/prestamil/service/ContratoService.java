@@ -42,12 +42,17 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
     private final ParametrosSistemaCache parametrosSistemaCache;
     private final CalculoContratoService calculoContratoService;
     private final MovimientoContratoRepository movimientoContratoRepository;
+    private final MovimientoCajaService movimientoCajaService;
 
     private static final List<Integer> KILATAJES_COCAE = List.of(6, 8, 10, 12, 14, 18, 21, 24);
     private static final BigDecimal LEY_925 = new BigDecimal("925");
     // Ley de plata baja: COCAE la maneja como 720 (fineness estándar 0.720). La columna de precio
     // sigue llamándose ley_725 por compatibilidad; almacena el precio por gramo de esta ley.
     private static final BigDecimal LEY_720 = new BigDecimal("720");
+    // C-08 (RN-30, PLAN-CORRECCIONES-30SEP): el total prestado en partidas sujetas al redondeo
+    // se baja al múltiplo de $5 más cercano. COCAE lo hace para entregar efectivo fácil de contar
+    // ("no le estamos prestando 10 centavos"). El ajuste se descuenta de la última partida.
+    private static final BigDecimal MULTIPLO_REDONDEO_PRESTAMO = new BigDecimal("5");
     // (IVA_PORCENTAJE eliminado en Pasada 2: el IVA lo lee CalculoContratoService del snapshot del
     // contrato o del cache de parametros_sistema con fallback 16 + log.warn.)
     private static final String MSG_PLATA_SIN_CONFIG =
@@ -67,7 +72,8 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
                            PlazoHechuraAlhajaRepository plazoHechuraAlhajaRepository,
                            ParametrosSistemaCache parametrosSistemaCache,
                            CalculoContratoService calculoContratoService,
-                           MovimientoContratoRepository movimientoContratoRepository) {
+                           MovimientoContratoRepository movimientoContratoRepository,
+                           MovimientoCajaService movimientoCajaService) {
         super(repository);
         this.clienteRepository = clienteRepository;
         this.plazoRepository = plazoRepository;
@@ -82,6 +88,7 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
         this.parametrosSistemaCache = parametrosSistemaCache;
         this.calculoContratoService = calculoContratoService;
         this.movimientoContratoRepository = movimientoContratoRepository;
+        this.movimientoCajaService = movimientoCajaService;
     }
 
     /**
@@ -131,6 +138,12 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
             totalAvaluo = totalAvaluo.add(partida.getAvaluoContrato());
             partidas.add(partida);
         }
+
+        // 6.b C-08 (RN-30): el total prestado en partidas sujetas al redondeo (hoy solo alhajas,
+        // ver aplicaRedondeoMultiploDe5) debe ser múltiplo de $5. El frontend ya descuenta la
+        // diferencia en la última partida; aquí validamos para que un cliente que lo omita no
+        // pueda cerrar el contrato con centavos.
+        validarRedondeoMultiploDe5(partidas);
 
         // 7. Construir contrato
         Contrato contrato = new Contrato();
@@ -182,7 +195,19 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
         guardado = repository.save(guardado);
 
         // 11. Movimiento EMP (periodo 0): primera fila del historial del contrato
-        registrarMovimientoEmpeno(guardado, turno, usuario);
+        MovimientoContrato emp = registrarMovimientoEmpeno(guardado, turno, usuario);
+
+        // 12. C-07: el préstamo entregado al cliente sale de caja. Base del corte de caja.
+        if (totalPrestamo != null && totalPrestamo.signum() > 0) {
+            movimientoCajaService.registrar(
+                    turno,
+                    guardado.getSucursalId(),
+                    TipoMovimientoCaja.SALIDA,
+                    "PRÉSTAMO CONTRATO " + guardado.getFolio(),
+                    totalPrestamo,
+                    usuario,
+                    emp);
+        }
 
         log.info("Contrato creado: {} | cliente={} | monto={}", guardado.getFolio(),
                 cliente.getId(), totalPrestamo);
@@ -252,7 +277,7 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
      * Registra el movimiento EMP (empeño, periodo 0) de un contrato recién creado. El monto es el
      * préstamo entregado; no hay estado anterior porque el contrato no existía.
      */
-    private void registrarMovimientoEmpeno(Contrato contrato, Turno turno, Usuario usuario) {
+    private MovimientoContrato registrarMovimientoEmpeno(Contrato contrato, Turno turno, Usuario usuario) {
         MovimientoContrato emp = new MovimientoContrato();
         emp.setContrato(contrato);
         emp.setTurno(turno);
@@ -268,6 +293,7 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
         emp.setFecha(contrato.getFechaApertura());
         emp.setObservaciones("Empeño");
         movimientoContratoRepository.save(emp);
+        return emp;
     }
 
     /**
@@ -548,6 +574,49 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
         return precioGramo
                 .multiply(pr.getPesoNeto())
                 .setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * ¿Al tipo de prenda le aplica el redondeo del total a múltiplo de $5 (C-08 / RN-30)?
+     * Único lugar donde vive la regla por tipo: cuando el negocio confirme si extender
+     * la regla a plata/relojes/varios (G-04), basta con tocar este método.
+     *
+     * TODO G-04: hoy aplica solo a alhajas; pendiente de validar con Jorge.
+     */
+    private boolean aplicaRedondeoMultiploDe5(TipoPrenda tipoPrenda) {
+        return esAlhaja(tipoPrenda);
+    }
+
+    /** floor(valor / 5) × 5 con escala 2. Nunca redondea hacia arriba (ver C-08). */
+    private BigDecimal redondearAMultiploDe5(BigDecimal valor) {
+        if (valor == null) {
+            return BigDecimal.ZERO.setScale(2);
+        }
+        return valor.divide(MULTIPLO_REDONDEO_PRESTAMO, 0, RoundingMode.FLOOR)
+                .multiply(MULTIPLO_REDONDEO_PRESTAMO)
+                .setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Valida la regla C-08/RN-30: el total prestado en partidas sujetas al redondeo (hoy solo
+     * alhajas) debe ser múltiplo de $5. El frontend ajusta la última partida; si el request
+     * llega sin el ajuste, rechazamos con un mensaje que explica cómo corregirlo.
+     */
+    private void validarRedondeoMultiploDe5(List<PartidaContrato> partidas) {
+        BigDecimal totalRedondeable = partidas.stream()
+                .filter(p -> aplicaRedondeoMultiploDe5(p.getTipoPrenda()))
+                .map(PartidaContrato::getMontoPrestamo)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (totalRedondeable.signum() <= 0) {
+            return;
+        }
+        BigDecimal esperado = redondearAMultiploDe5(totalRedondeable);
+        if (totalRedondeable.compareTo(esperado) != 0) {
+            throw new BadRequestException(String.format(
+                    "El préstamo total de alhajas (%s) debe ser múltiplo de $5. "
+                    + "Esperado: %s. Ajuste la última partida de alhaja para descontar la diferencia.",
+                    totalRedondeable.setScale(2, RoundingMode.HALF_UP), esperado));
+        }
     }
 
     /**

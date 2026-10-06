@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Comprobante de CANCELACIÓN DE MOVIMIENTO / DEVOLUCIÓN (C-07). Ticket angosto (~80 mm, 227 pt),
+     mismo ancho que la nota de movimiento. Incluye: tipo y folio del movimiento cancelado, contrato,
+     cliente, monto devuelto en efectivo, desglose de pago original (efectivo y tarjeta con últimos 4,
+     banco y autorización), motivo, usuario que cancela, fecha/hora y firma del cliente. TODO G-06:
+     confirmar con Alejandro el formato de la devolución de tarjeta. -->
+<jasperReport xmlns="http://jasperreports.sourceforge.net/jasperreports" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://jasperreports.sourceforge.net/jasperreports http://jasperreports.sourceforge.net/xsd/jasperreport.xsd" name="ticket-cancelacion-movimiento" pageWidth="227" pageHeight="842" whenNoDataType="AllSectionsNoDetail" columnWidth="211" leftMargin="8" rightMargin="8" topMargin="8" bottomMargin="8" isIgnorePagination="true">
+	<property name="net.sf.jasperreports.awt.ignore.missing.font" value="true"/>
+	<style name="Base" isDefault="true" fontName="Arial" fontSize="7"/>
+	<parameter name="P_EMPRESA" class="java.lang.String"/>
+	<parameter name="P_EMPRESA_DATOS" class="java.lang.String"/>
+	<parameter name="P_SUCURSAL" class="java.lang.String"/>
+	<parameter name="P_FECHA" class="java.lang.String"/>
+	<parameter name="P_TIPO_MOVIMIENTO" class="java.lang.String"/>
+	<parameter name="P_FOLIO_NOTA" class="java.lang.String"/>
+	<parameter name="P_CONTRATO" class="java.lang.String"/>
+	<parameter name="P_CLIENTE" class="java.lang.String"/>
+	<parameter name="P_MONTO" class="java.lang.String"/>
+	<parameter name="P_MONTO_LETRA" class="java.lang.String"/>
+	<parameter name="P_PAGO_ORIGINAL" class="java.lang.String"/>
+	<parameter name="P_TARJETA" class="java.lang.String" isForPrompting="false"/>
+	<parameter name="P_MOTIVO" class="java.lang.String"/>
+	<parameter name="P_USUARIO" class="java.lang.String"/>
+	<title>
+		<band height="130" splitType="Stretch">
+			<textField textAdjust="StretchHeight">
+				<reportElement x="0" y="0" width="211" height="13"/>
+				<textElement textAlignment="Center"><font size="11" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_EMPRESA}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="0" y="13" width="211" height="9" isRemoveLineWhenBlank="true"/>
+				<textElement textAlignment="Center"><font size="6.5"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_EMPRESA_DATOS}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="0" y="23" width="211" height="9" isRemoveLineWhenBlank="true"/>
+				<textElement textAlignment="Center"><font size="6.5"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_SUCURSAL}]]></textFieldExpression>
+			</textField>
+			<line>
+				<reportElement positionType="Float" x="0" y="34" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="37" width="211" height="12"/>
+				<textElement textAlignment="Center"><font size="10" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[CANCELACIÓN DE MOVIMIENTO]]></text>
+			</staticText>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="49" width="211" height="10"/>
+				<textElement textAlignment="Center"><font size="9" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[DEVOLUCIÓN AL CLIENTE]]></text>
+			</staticText>
+			<textField>
+				<reportElement positionType="Float" x="0" y="61" width="211" height="10"/>
+				<textElement textAlignment="Center"/>
+				<textFieldExpression><![CDATA[$P{P_FECHA}]]></textFieldExpression>
+			</textField>
+			<line>
+				<reportElement positionType="Float" x="0" y="73" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<textField textAdjust="StretchHeight">
+				<reportElement positionType="Float" x="0" y="76" width="211" height="10"/>
+				<textElement><font size="8" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_TIPO_MOVIMIENTO}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="0" y="87" width="211" height="9" isRemoveLineWhenBlank="true"/>
+				<textFieldExpression><![CDATA[$P{P_FOLIO_NOTA}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight">
+				<reportElement positionType="Float" x="0" y="97" width="211" height="10"/>
+				<textElement><font size="8" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_CONTRATO}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="0" y="108" width="211" height="9" isRemoveLineWhenBlank="true"/>
+				<textFieldExpression><![CDATA[$P{P_CLIENTE}]]></textFieldExpression>
+			</textField>
+		</band>
+	</title>
+	<summary>
+		<band height="220" splitType="Stretch">
+			<line>
+				<reportElement x="0" y="1" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="7" width="115" height="13"/>
+				<textElement><font size="10" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[DEVOLUCIÓN EFECTIVO]]></text>
+			</staticText>
+			<textField textAdjust="StretchHeight">
+				<reportElement positionType="Float" x="115" y="7" width="96" height="13"/>
+				<textElement textAlignment="Right"><font size="10" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_MONTO}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight">
+				<reportElement positionType="Float" x="0" y="22" width="211" height="10"/>
+				<textElement textAlignment="Center"><font isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_MONTO_LETRA}]]></textFieldExpression>
+			</textField>
+			<line>
+				<reportElement positionType="Float" x="0" y="36" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="40" width="211" height="9"/>
+				<textElement><font isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[Pago original:]]></text>
+			</staticText>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="0" y="50" width="211" height="18"/>
+				<textFieldExpression><![CDATA[$P{P_PAGO_ORIGINAL}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="0" y="70" width="211" height="24" isRemoveLineWhenBlank="true"/>
+				<textElement><font isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_TARJETA}]]></textFieldExpression>
+			</textField>
+			<line>
+				<reportElement positionType="Float" x="0" y="98" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="102" width="211" height="9"/>
+				<textElement><font isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[Motivo:]]></text>
+			</staticText>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="0" y="112" width="211" height="20"/>
+				<textFieldExpression><![CDATA[$P{P_MOTIVO}]]></textFieldExpression>
+			</textField>
+			<line>
+				<reportElement positionType="Float" x="0" y="136" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="140" width="100" height="9"/>
+				<text><![CDATA[Atendió:]]></text>
+			</staticText>
+			<textField isBlankWhenNull="true">
+				<reportElement positionType="Float" x="100" y="140" width="111" height="9"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$P{P_USUARIO}]]></textFieldExpression>
+			</textField>
+			<line>
+				<reportElement positionType="Float" x="25" y="170" width="161" height="1"/>
+				<graphicElement><pen lineWidth="0.5"/></graphicElement>
+			</line>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="172" width="211" height="9"/>
+				<textElement textAlignment="Center"/>
+				<text><![CDATA[Firma del cliente]]></text>
+			</staticText>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="182" width="211" height="9"/>
+				<textElement textAlignment="Center"><font size="6.5"/></textElement>
+				<text><![CDATA[Recibí de conformidad el monto en efectivo descrito en este comprobante]]></text>
+			</staticText>
+			<textField textAdjust="StretchHeight">
+				<reportElement positionType="Float" x="0" y="200" width="211" height="9"/>
+				<textElement textAlignment="Center"><font size="6" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA["ESTE NO ES UN COMPROBANTE FISCAL"]]></textFieldExpression>
+			</textField>
+		</band>
+	</summary>
+</jasperReport>

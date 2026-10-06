@@ -23,6 +23,19 @@ import java.util.Set;
  */
 public final class EstatusContratoResolver {
 
+    /**
+     * Mensaje que ve el cajero cuando el contrato ya tuvo un movimiento hoy (RN-29, C-01). Se expone
+     * en la cotización y como título del tooltip del botón deshabilitado en el frontend.
+     */
+    public static final String MOTIVO_UNO_POR_DIA =
+            "Este contrato ya tuvo un movimiento hoy. Para hacer otro, cancele el anterior.";
+
+    /** Acciones de cobro que se bloquean cuando ya hubo un movimiento del día (RN-29, C-01). */
+    private static final Set<AccionContrato> ACCIONES_DE_COBRO = EnumSet.of(
+            AccionContrato.REFRENDO, AccionContrato.FINIQUITO, AccionContrato.ABONO_CAPITAL,
+            AccionContrato.REFRENDO_PARCIAL, AccionContrato.REFRENDO_EXTEMPORANEO,
+            AccionContrato.FINIQUITO_EXTEMPORANEO);
+
     private EstatusContratoResolver() {
     }
 
@@ -99,10 +112,32 @@ public final class EstatusContratoResolver {
      */
     public static Set<AccionContrato> accionesDisponibles(EstatusOperativo estatus, int periodosTranscurridos,
                                                           boolean refrendosAgotados) {
+        return accionesDisponibles(estatus, periodosTranscurridos, refrendosAgotados, false);
+    }
+
+    /**
+     * Igual que {@link #accionesDisponibles(EstatusOperativo, int, boolean)}, pero bloqueando además
+     * los cobros si el contrato ya tuvo un movimiento del día (RN-29, C-01): refrendo, finiquito,
+     * abono a capital, parcial y los extemporáneos salen del conjunto; reposición, consulta y
+     * cancelación siguen disponibles (RE no cuenta — TODO G-01).
+     *
+     * @param estatus                 estatus operativo del contrato
+     * @param periodosTranscurridos   periodos que cobraría un refrendo completo hoy
+     * @param refrendosAgotados       resultado de {@link #refrendosAgotados}
+     * @param yaTuvoMovimientoHoy     true si existe un movimiento no cancelado hoy cuyo tipo cuenta
+     *                                para la regla ({@link com.ignis.prestamil.model.TipoMovimiento#CUENTAN_UNO_POR_DIA})
+     * @return las acciones habilitadas
+     */
+    public static Set<AccionContrato> accionesDisponibles(EstatusOperativo estatus, int periodosTranscurridos,
+                                                          boolean refrendosAgotados,
+                                                          boolean yaTuvoMovimientoHoy) {
         Set<AccionContrato> acciones = accionesPorEstatus(estatus, periodosTranscurridos);
         if (refrendosAgotados) {
             acciones.removeAll(EnumSet.of(AccionContrato.REFRENDO, AccionContrato.REFRENDO_EXTEMPORANEO,
                     AccionContrato.REFRENDO_PARCIAL, AccionContrato.ABONO_CAPITAL));
+        }
+        if (yaTuvoMovimientoHoy) {
+            acciones.removeAll(ACCIONES_DE_COBRO);
         }
         return acciones;
     }
