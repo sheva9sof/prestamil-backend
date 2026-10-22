@@ -164,9 +164,10 @@ public class ContratoPdfService {
         BigDecimal porcAlmacen  = pc.porcAlmacen();
         BigDecimal porcGastos   = pc.porcGastosAdmin();
         BigDecimal porcTotal    = porcInteres.add(porcAlmacen).add(porcGastos);
-        // La sancion solo entra al contrato si el plazo la tiene activada. Con el interruptor en NO
-        // el prestamo sigue generando interes y almacenaje, pero la sancion es 0.
-        BigDecimal porcSancion  = pc.aplicarSancion() ? pc.porcSancionSemanal() : BigDecimal.ZERO;
+        // D-14 (2026-10-08): la sanción se imprime siempre con el % configurado. Antes se
+        // apagaba con el toggle aplicarSancion y la tabla mostraba 0% aunque el cobro siguiera
+        // aplicando el 2% — divergencia PROFECO entre lo divulgado y lo cobrado.
+        BigDecimal porcSancion  = pc.porcSancionSemanal();
         BigDecimal porcIva      = pc.porcIva();
         BigDecimal comisionVenta = valOr(parametro != null ? parametro.getComisionPorVentaPrenda() : null);
 
@@ -300,7 +301,7 @@ public class ContratoPdfService {
                         .divide(p.getAvaluoContrato(), 2, RoundingMode.HALF_UP)
                     : BigDecimal.ZERO;
             filas.add(new PrendaRow(
-                    nz(p.getDescripcion()),
+                    FormatoDocumento.descripcionPartida(p),
                     caracteristicas.trim(),
                     money(p.getAvaluoContrato()),
                     money(p.getMontoPrestamo()),
@@ -309,7 +310,7 @@ public class ContratoPdfService {
         return filas;
     }
 
-    private List<PagoRow> buildPagos(List<VencimientoResponse> vencimientos, Contrato contrato) {
+    List<PagoRow> buildPagos(List<VencimientoResponse> vencimientos, Contrato contrato) {
         List<PagoRow> filas = new ArrayList<>();
         String mutuo = money(contrato.getMontoPrestamo());
         for (VencimientoResponse v : vencimientos) {
@@ -365,7 +366,7 @@ public class ContratoPdfService {
      * correcto solo con plazo semanal). El IVA (truncado DOWN a 2 dec) se aplica sobre
      * {@code interes + almacen + sancion}, misma base que en caja; los gastos admin no se cobran por periodo.
      */
-    private List<PagoExtemporaneoRow> buildPagosExtemporaneos(
+    List<PagoExtemporaneoRow> buildPagosExtemporaneos(
             Contrato contrato, PlazoParametro parametro, Plazo plazo, java.time.LocalDate baseFecha) {
         List<PagoExtemporaneoRow> filas = new ArrayList<>();
         BigDecimal prestamo = valOr(contrato.getMontoPrestamo());

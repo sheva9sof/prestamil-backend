@@ -1,6 +1,7 @@
 package com.ignis.prestamil.request;
 
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.Getter;
@@ -18,19 +19,18 @@ public class CatValorPrendaRequest {
     @Min(1)
     private Integer idAtributo;
 
-    /**
-     * Nombre estándar del catálogo. Opcional: el modal de alta ya no lo captura
-     * (el ítem se identifica por clave). Si llega null, el servicio conserva el
-     * valor existente en lugar de borrarlo.
-     */
+    /** Descripción general estandarizada ("ESCLAVA 14K"). Obligatoria desde D-09. */
+    @NotBlank
     @Size(max = 100)
     private String descripcion;
 
+    /** Clave estándar; puede repetirse entre prendas que difieren en descripción o kilataje. */
+    @NotBlank
     @Size(max = 20)
     private String clave;
 
     @Min(0)
     private Integer kilataje;
 
-    private Boolean contienePiedad;
+    private Boolean contienePiedra;
 }

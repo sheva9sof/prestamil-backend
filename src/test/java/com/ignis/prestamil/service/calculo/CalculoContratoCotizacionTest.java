@@ -431,18 +431,27 @@ class CalculoContratoCotizacionTest {
         }
 
         @Test
-        void parcialVencidoQueNoAlcanzaAPonerseAlCorriente_sigueVencido() {
-            // 45 dias → 7 periodos (4+3). Paga 1: nuevo vencimiento = +35 dias, sigue vencido.
+        void parcialVencidoConNMenorAlMinimo_seAjustaAExtemporaneosMasUno_saleDeVenta() {
+            // D-03 (RN-31): 45 dias → 7 periodos (4+3). n=1 queda por debajo del mínimo
+            // extemporáneos+1 = 4; se ajusta a 4 con aviso y el contrato regresa a VIGENTE.
             Contrato c = contrato("1000.00", fechaContrato, vencimiento);
 
             CotizacionMovimiento cot = motor.cotizar(c, params("1.13"), TipoOperacion.REFRENDO_PARCIAL,
                     fechaContrato.plusDays(45), 1, null);
 
             assertThat(cot.tipoMovimiento()).isEqualTo(TipoMovimiento.RPX);
-            assertThat(cot.periodosExtemporaneosAplicados()).isEqualTo(1);
-            assertThat(cot.desglose().sancion()).isEqualByComparingTo("20.00"); // solo el ext cubierto
-            assertThat(cot.fechaVencimientoNueva()).isEqualTo(fechaContrato.plusDays(35));
-            assertThat(cot.estatusNuevo()).isEqualTo(EstatusOperativo.VENCIDO);
+            assertThat(cot.periodosMinimos()).isEqualTo(4);
+            assertThat(cot.periodosMaximos()).isEqualTo(6);
+            assertThat(cot.periodosAplicados()).isEqualTo(4);
+            assertThat(cot.periodosExtemporaneosAplicados()).isEqualTo(3);
+            assertThat(cot.periodosNormalesAplicados()).isEqualTo(1);
+            assertThat(cot.desglose().sancion()).isEqualByComparingTo("60.00"); // 1000 × 2% × 3 ext
+            // FC' = FC + 4·7 = 29-sep; FV' = 29-sep + 28 = 27-oct
+            assertThat(cot.fechaContratoNueva()).isEqualTo(fechaContrato.plusDays(28));
+            assertThat(cot.fechaVencimientoNueva()).isEqualTo(fechaContrato.plusDays(56));
+            assertThat(cot.estatusNuevo()).isEqualTo(EstatusOperativo.VIGENTE);
+            assertThat(cot.advertencias()).singleElement().asString()
+                    .contains("1").contains("4");
         }
 
         @Test
@@ -480,13 +489,154 @@ class CalculoContratoCotizacionTest {
             assertThat(cot.fechaContratoNueva()).isEqualTo(d(2027, 3, 31));
         }
 
+        /**
+         * C14 (plan 07-oct §2.7): parcial de 1 periodo en un contrato vigente. FC 10-sep, FV 08-oct,
+         * T 07-oct → 27 días transcurridos → 4 periodos iniciados (sin atraso). Parcial n=1 debe
+         * cubrir 1 periodo y mover la fecha de contrato una semana (FC' 17-sep, FV' 15-oct).
+         */
         @Test
-        void sancionApagada_extemporaneoSinSancion() {
+        void c14_parcialDeUnPeriodo_contratoVigente_mueveFcUnaSemana() {
+            Contrato c = contrato("7760.30", d(2026, 9, 10), d(2026, 10, 8));
+
+            CotizacionMovimiento cot = motor.cotizar(c, params("1.13"), TipoOperacion.REFRENDO_PARCIAL,
+                    d(2026, 10, 7), 1, null);
+
+            assertThat(cot.tipoMovimiento()).isEqualTo(TipoMovimiento.RP);
+            assertThat(cot.situacion().periodosTranscurridos()).isEqualTo(4);
+            assertThat(cot.situacion().periodosExtemporaneos()).isZero();
+            assertThat(cot.periodosMaximos()).isEqualTo(3);
+            assertThat(cot.periodosAplicados()).isEqualTo(1);
+            assertThat(cot.periodosNormalesAplicados()).isEqualTo(1);
+            assertThat(cot.periodosExtemporaneosAplicados()).isZero();
+            assertThat(cot.fechaContratoNueva()).isEqualTo(d(2026, 9, 17));
+            assertThat(cot.fechaVencimientoNueva()).isEqualTo(d(2026, 10, 15));
+            assertThat(cot.estatusNuevo()).isEqualTo(EstatusOperativo.VIGENTE);
+            assertThat(cot.advertencias()).isEmpty();
+        }
+
+        /**
+         * C16 (plan 07-oct §2.7): parcial de 1 periodo con el contrato en periodo de gracia.
+         * FC 08-sep, FV 06-oct, T 07-oct → 29 días, 1 día de atraso ≤ 2 gracia. Debe cobrar 1 periodo,
+         * sin sanción, mover FC a 15-sep y FV a 13-oct, y dejar el contrato en VIGENTE.
+         */
+        @Test
+        void c16_parcialDeUnPeriodo_contratoEnGracia_sinSancion_estatusVigente() {
+            Contrato c = contrato("1500.00", d(2026, 9, 8), d(2026, 10, 6));
+
+            CotizacionMovimiento cot = motor.cotizar(c, params("1.13"), TipoOperacion.REFRENDO_PARCIAL,
+                    d(2026, 10, 7), 1, null);
+
+            assertThat(cot.tipoMovimiento()).isEqualTo(TipoMovimiento.RP);
+            assertThat(cot.situacion().periodosTranscurridos()).isEqualTo(4);
+            assertThat(cot.situacion().periodosExtemporaneos()).isZero();
+            assertThat(cot.situacion().diasGraciaUsados()).isEqualTo(1);
+            assertThat(cot.periodosMaximos()).isEqualTo(3);
+            assertThat(cot.periodosAplicados()).isEqualTo(1);
+            assertThat(cot.periodosExtemporaneosAplicados()).isZero();
+            assertThat(cot.desglose().sancion()).isEqualByComparingTo("0");
+            assertThat(cot.fechaContratoNueva()).isEqualTo(d(2026, 9, 15));
+            assertThat(cot.fechaVencimientoNueva()).isEqualTo(d(2026, 10, 13));
+            assertThat(cot.fechaComercializacionNueva()).isEqualTo(d(2026, 10, 28));
+            assertThat(cot.estatusNuevo()).isEqualTo(EstatusOperativo.VIGENTE);
+            assertThat(cot.advertencias()).isEmpty();
+        }
+
+        /**
+         * C17 (plan 07-oct §2.7): contrato en venta, 4 normales + 4 extemporáneos. En el parcial el
+         * mínimo es extemporáneos + 1 = 5 y el máximo transcurridos − 1 = 7 (D-03, RN-31). Para que el
+         * contrato cuadre con los números de Jorge (interés + almacenaje por periodo = 22.05) se usa
+         * porcInteres = 2.90 (sumado al 0.60 del fixture).
+         */
+        @Test
+        void c17_parcialEnVenta_minimoEsExtemporaneosMasUno_maximoEsTranscurridosMenosUno() {
+            Contrato c = contrato("630.00", d(2026, 8, 16), d(2026, 9, 13));
+
+            CotizacionMovimiento cot = motor.cotizar(c, params("2.90"), TipoOperacion.REFRENDO_PARCIAL,
+                    d(2026, 10, 7), 7, null);
+
+            assertThat(cot.situacion().periodosTranscurridos()).isEqualTo(8);
+            assertThat(cot.situacion().periodosNormales()).isEqualTo(4);
+            assertThat(cot.situacion().periodosExtemporaneos()).isEqualTo(4);
+            assertThat(cot.periodosMinimos()).isEqualTo(5);
+            assertThat(cot.periodosMaximos()).isEqualTo(7);
+            assertThat(cot.periodosAplicados()).isEqualTo(7);
+            assertThat(cot.advertencias()).isEmpty();
+        }
+
+        /**
+         * C18 (plan 07-oct §2.7): mismo contrato que C17 con n = 4. Al estar por debajo del mínimo
+         * (5), el motor lo ajusta a 5 con aviso; FC' = 20-sep, FV' = 18-oct y el estatus pasa a
+         * VIGENTE.
+         */
+        @Test
+        void c18_parcialEnVenta_nMenorAlMinimo_seAjustaA5_dejaContratoVigente() {
+            Contrato c = contrato("630.00", d(2026, 8, 16), d(2026, 9, 13));
+
+            CotizacionMovimiento cot = motor.cotizar(c, params("2.90"), TipoOperacion.REFRENDO_PARCIAL,
+                    d(2026, 10, 7), 4, null);
+
+            assertThat(cot.periodosMinimos()).isEqualTo(5);
+            assertThat(cot.periodosAplicados()).isEqualTo(5);
+            assertThat(cot.periodosExtemporaneosAplicados()).isEqualTo(4);
+            assertThat(cot.periodosNormalesAplicados()).isEqualTo(1);
+            // Sanción cubre los 4 extemporáneos: 630 × 2% × 4 = 50.40 (RN-31)
+            assertThat(cot.desglose().sancion()).isEqualByComparingTo("50.40");
+            assertThat(cot.fechaContratoNueva()).isEqualTo(d(2026, 9, 20));
+            assertThat(cot.fechaVencimientoNueva()).isEqualTo(d(2026, 10, 18));
+            assertThat(cot.estatusNuevo()).isEqualTo(EstatusOperativo.VIGENTE);
+            assertThat(cot.advertencias()).singleElement().asString()
+                    .contains("4").contains("5");
+        }
+
+        /**
+         * D-03: en VIGENTE/EN_GRACIA el mínimo del parcial sigue siendo 1 (basta recorrer una semana).
+         * Mismo contrato que C16: 1 día de atraso ≤ gracia 2 → EN_GRACIA.
+         */
+        @Test
+        void parcialEnGracia_minimoEsUno() {
+            Contrato c = contrato("1500.00", d(2026, 9, 8), d(2026, 10, 6));
+
+            CotizacionMovimiento cot = motor.cotizar(c, params("1.13"), TipoOperacion.REFRENDO_PARCIAL,
+                    d(2026, 10, 7), 1, null);
+
+            assertThat(cot.situacion().extemporaneo()).isFalse();
+            assertThat(cot.situacion().diasGraciaUsados()).isEqualTo(1);
+            assertThat(cot.periodosMinimos()).isEqualTo(1);
+            assertThat(cot.periodosMaximos()).isEqualTo(3);
+            assertThat(cot.periodosAplicados()).isEqualTo(1);
+            assertThat(cot.advertencias()).isEmpty();
+        }
+
+        @Test
+        void sancionApagadaConPorcentajeMayorACero_siguieCobrandoSancion() {
+            // D-14 (2026-10-08): el gate aplicarSancion fue removido del motor. Un ParametrosCalculo
+            // con porcSancionSemanal=2 y aplicarSancion=false YA NO cobra 0; cobra el 2% igual
+            // que con el gate en true. "Sin sanción" ahora se expresa configurando el porcentaje
+            // en 0, no apagando el toggle. Si el negocio quiere apagarla en un plazo, se guarda
+            // porcSancionSemanal=0 explícitamente desde Plazos y Periodos.
+            Contrato c = contrato("1000.00", fechaContrato, vencimiento);
+            ParametrosCalculo p = params("1.13");
+            ParametrosCalculo gateOff = new ParametrosCalculo(p.porcInteres(), p.porcAlmacen(),
+                    p.porcGastosAdmin(), p.porcSancionSemanal(), p.diasGraciaSancion(), false, p.porcIva(),
+                    p.porcDescuentoInteres());
+
+            CotizacionMovimiento cot = motor.cotizar(c, gateOff, TipoOperacion.REFRENDO,
+                    vencimiento.plusDays(10), null, null);
+
+            // 1000 × 2% × 2 semanas = 40.00. El gate false no la apaga.
+            assertThat(cot.tipoMovimiento()).isEqualTo(TipoMovimiento.RX);
+            assertThat(cot.situacion().periodosExtemporaneos()).isEqualTo(2);
+            assertThat(cot.desglose().sancion()).isEqualByComparingTo("40.00");
+        }
+
+        @Test
+        void porcSancionCero_desactivaSancion() {
+            // D-14: la unica forma valida de "apagar sancion" es configurar porcSancionSemanal=0.
             Contrato c = contrato("1000.00", fechaContrato, vencimiento);
             ParametrosCalculo p = params("1.13");
             ParametrosCalculo sinSancion = new ParametrosCalculo(p.porcInteres(), p.porcAlmacen(),
-                    p.porcGastosAdmin(), p.porcSancionSemanal(), p.diasGraciaSancion(), false, p.porcIva(),
-                    p.porcDescuentoInteres());
+                    p.porcGastosAdmin(), BigDecimal.ZERO, p.diasGraciaSancion(), p.aplicarSancion(),
+                    p.porcIva(), p.porcDescuentoInteres());
 
             CotizacionMovimiento cot = motor.cotizar(c, sinSancion, TipoOperacion.REFRENDO,
                     vencimiento.plusDays(10), null, null);
@@ -494,6 +644,166 @@ class CalculoContratoCotizacionTest {
             assertThat(cot.tipoMovimiento()).isEqualTo(TipoMovimiento.RX);
             assertThat(cot.situacion().periodosExtemporaneos()).isEqualTo(2);
             assertThat(cot.desglose().sancion()).isEqualByComparingTo("0");
+        }
+    }
+
+    /**
+     * D-04 (plan 07-oct §2.3, §2.7 C17): el contrato en venta cobra la misma sanción
+     * (630 × 2% × min(n, 4)) por REFRENDO (→ RX), FINIQUITO (→ FX) y REFRENDO_PARCIAL con
+     * n ∈ {5, 7}, y la sanción entra en la base del IVA en los cuatro caminos.
+     *
+     * <p>Fixture C17: S = 630, porcInteres 2.90 + porcAlmacen 0.60 → 22.05 por periodo;
+     * FC 16-ago-2026, FV 13-sep-2026, operación 07-oct-2026 → 24 días de atraso,
+     * 8 periodos transcurridos (4 normales + 4 extemporáneos), ceil(24/7) = 4 semanas.</p>
+     */
+    @Nested
+    class D04SancionVisibleEnTodosLosCaminos {
+
+        private final LocalDate fechaContrato = d(2026, 8, 16);
+        private final LocalDate vencimiento = d(2026, 9, 13);
+        private final LocalDate hoy = d(2026, 10, 7);
+        private final BigDecimal sancionEsperada = new BigDecimal("50.40"); // 630 × 2% × 4
+
+        private Contrato c17() {
+            Contrato c = contrato("630.00", fechaContrato, vencimiento);
+            c.setEstatus(EstatusContrato.EN_VENTA);
+            return c;
+        }
+
+        /** La sanción tiene que entrar en la base del IVA, no quedarse colgada aparte. */
+        private void assertSancionEnBaseIva(CotizacionMovimiento cot) {
+            DesgloseCobro d = cot.desglose();
+            BigDecimal baseEsperada = d.interes().add(d.almacen()).subtract(d.descuento()).add(d.sancion());
+            assertThat(d.baseIva())
+                    .as("baseIva debe incluir la sanción (interés + almacén − descuento + sanción)")
+                    .isEqualByComparingTo(baseEsperada);
+            // IVA = baseIva × 16% truncado DOWN a 2 decimales (RN-10).
+            BigDecimal ivaEsperado = baseEsperada.multiply(new BigDecimal("16.00"))
+                    .divide(new BigDecimal("100"), 2, java.math.RoundingMode.DOWN);
+            assertThat(d.iva()).isEqualByComparingTo(ivaEsperado);
+        }
+
+        @Test
+        void refrendoEnVenta_resuelveARX_sancionEsSaldoPor2PorCuatroSemanas() {
+            CotizacionMovimiento cot = motor.cotizar(c17(), params("2.90"),
+                    TipoOperacion.REFRENDO, hoy, null, null);
+
+            assertThat(cot.tipoMovimiento()).isEqualTo(TipoMovimiento.RX);
+            assertThat(cot.periodosAplicados()).isEqualTo(8);
+            assertThat(cot.periodosExtemporaneosAplicados()).isEqualTo(4);
+            assertThat(cot.desglose().semanasVencidas()).isEqualTo(4);
+            assertThat(cot.desglose().sancion()).isEqualByComparingTo(sancionEsperada);
+            assertSancionEnBaseIva(cot);
+        }
+
+        @Test
+        void finiquitoEnVenta_resuelveAFX_sancionIgualQueElRX() {
+            CotizacionMovimiento cot = motor.cotizar(c17(), params("2.90"),
+                    TipoOperacion.FINIQUITO, hoy, null, null);
+
+            assertThat(cot.tipoMovimiento()).isEqualTo(TipoMovimiento.FX);
+            assertThat(cot.periodosAplicados()).isEqualTo(8);
+            assertThat(cot.periodosExtemporaneosAplicados()).isEqualTo(4);
+            assertThat(cot.desglose().semanasVencidas()).isEqualTo(4);
+            assertThat(cot.desglose().sancion()).isEqualByComparingTo(sancionEsperada);
+            assertSancionEnBaseIva(cot);
+            assertThat(cot.capital()).isEqualByComparingTo("630.00");
+        }
+
+        @Test
+        void parcialEnVentaConSieteSemanas_resuelveARPX_cubreLosCuatroExtemporaneos() {
+            CotizacionMovimiento cot = motor.cotizar(c17(), params("2.90"),
+                    TipoOperacion.REFRENDO_PARCIAL, hoy, 7, null);
+
+            assertThat(cot.tipoMovimiento()).isEqualTo(TipoMovimiento.RPX);
+            assertThat(cot.periodosAplicados()).isEqualTo(7);
+            assertThat(cot.periodosExtemporaneosAplicados()).isEqualTo(4);
+            assertThat(cot.desglose().semanasVencidas()).isEqualTo(4);
+            assertThat(cot.desglose().sancion()).isEqualByComparingTo(sancionEsperada);
+            assertSancionEnBaseIva(cot);
+        }
+
+        @Test
+        void parcialEnVentaConCincoSemanas_resuelveARPX_mismaSancionQueElRX() {
+            CotizacionMovimiento cot = motor.cotizar(c17(), params("2.90"),
+                    TipoOperacion.REFRENDO_PARCIAL, hoy, 5, null);
+
+            assertThat(cot.tipoMovimiento()).isEqualTo(TipoMovimiento.RPX);
+            assertThat(cot.periodosAplicados()).isEqualTo(5);
+            assertThat(cot.periodosExtemporaneosAplicados()).isEqualTo(4);
+            assertThat(cot.desglose().semanasVencidas()).isEqualTo(4);
+            assertThat(cot.desglose().sancion()).isEqualByComparingTo(sancionEsperada);
+            assertSancionEnBaseIva(cot);
+        }
+
+        /** Cross-check: los cuatro caminos cobran exactamente la misma sanción por semana. */
+        @Test
+        void rxFxYRpxCobranLaMismaSancion_mismasSemanas() {
+            Contrato c = c17();
+            ParametrosCalculo p = params("2.90");
+
+            BigDecimal sRx  = motor.cotizar(c, p, TipoOperacion.REFRENDO,         hoy, null, null).desglose().sancion();
+            BigDecimal sFx  = motor.cotizar(c, p, TipoOperacion.FINIQUITO,        hoy, null, null).desglose().sancion();
+            BigDecimal sRp7 = motor.cotizar(c, p, TipoOperacion.REFRENDO_PARCIAL, hoy, 7,    null).desglose().sancion();
+            BigDecimal sRp5 = motor.cotizar(c, p, TipoOperacion.REFRENDO_PARCIAL, hoy, 5,    null).desglose().sancion();
+
+            assertThat(sRx).isEqualByComparingTo(sancionEsperada);
+            assertThat(sFx).isEqualByComparingTo(sancionEsperada);
+            assertThat(sRp7).isEqualByComparingTo(sancionEsperada);
+            assertThat(sRp5).isEqualByComparingTo(sancionEsperada);
+        }
+
+        /**
+         * D-04 (cotización): aunque la sanción pueda ser 0 (contrato vigente / en gracia), la
+         * cotización debe entregar el porcentaje y las semanas al frontend para que el modal
+         * pueda imprimir siempre la línea "Sanción extemporánea (p% × n sem.)".
+         */
+        @Test
+        void vigenteSinSancion_porcentajeYSemanasSiguenEnLaCotizacion() {
+            // Contrato vigente, 1 periodo transcurrido, sin atraso: sanción 0 pero %Sanción = 2 y semanas = 0.
+            Contrato c = contrato("1000.00", d(2026, 10, 1), d(2026, 10, 29));
+            CotizacionMovimiento cot = motor.cotizar(c, params("1.13"),
+                    TipoOperacion.REFRENDO, d(2026, 10, 7), null, null);
+
+            assertThat(cot.tipoMovimiento()).isEqualTo(TipoMovimiento.RF);
+            assertThat(cot.desglose().sancion()).isEqualByComparingTo("0");
+            assertThat(cot.desglose().semanasVencidas()).isZero();
+            assertThat(cot.parametros().porcSancionSemanal()).isEqualByComparingTo("2.00");
+        }
+
+        /**
+         * D-14: con el gate {@code aplicarSancion} removido del motor, un contrato con
+         * {@code aplicarSancion=false} (contrato pre-SANC-04, o config vieja) debe cobrar la
+         * misma sanción que uno con {@code aplicarSancion=true} del mismo porcentaje. El toggle
+         * sigue existiendo en {@link ParametrosCalculo} por compatibilidad pero no influye en el
+         * cálculo. Antes del fix esto hubiera dado {@code sancion=0} y divergencia PROFECO
+         * (PDF 0% vs caja 2%).
+         */
+        @Test
+        void rxConAplicarSancionFalse_cobraLaMismaSancionQueConTrue() {
+            // Contrato de C17 (venta: 4 periodos + 4 ext). Misma configuración salvo el toggle.
+            ParametrosCalculo conGate = new ParametrosCalculo(
+                    new BigDecimal("2.90"), new BigDecimal("0.60"), new BigDecimal("1.00"),
+                    new BigDecimal("2.00"), 2, true,
+                    new BigDecimal("16.00"), BigDecimal.ZERO);
+            ParametrosCalculo sinGate = new ParametrosCalculo(
+                    new BigDecimal("2.90"), new BigDecimal("0.60"), new BigDecimal("1.00"),
+                    new BigDecimal("2.00"), 2, false,   // ← aplicarSancion = false
+                    new BigDecimal("16.00"), BigDecimal.ZERO);
+
+            CotizacionMovimiento conGateCot = motor.cotizar(c17(), conGate,
+                    TipoOperacion.REFRENDO, hoy, null, null);
+            CotizacionMovimiento sinGateCot = motor.cotizar(c17(), sinGate,
+                    TipoOperacion.REFRENDO, hoy, null, null);
+
+            // El RX es el que cuenta: 630 × 2% × 4 sem = 50.40, igual en ambos.
+            assertThat(conGateCot.desglose().sancion()).isEqualByComparingTo("50.40");
+            assertThat(sinGateCot.desglose().sancion()).isEqualByComparingTo("50.40");
+            assertThat(sinGateCot.desglose().sancion())
+                    .isEqualByComparingTo(conGateCot.desglose().sancion());
+            // Y la base del IVA incluye la sanción en ambos (no se "oculta" ni se "resta").
+            assertThat(sinGateCot.desglose().baseIva())
+                    .isEqualByComparingTo(conGateCot.desglose().baseIva());
         }
     }
 }

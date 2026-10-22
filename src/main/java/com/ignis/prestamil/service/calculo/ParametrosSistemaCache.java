@@ -23,6 +23,8 @@ public class ParametrosSistemaCache {
 
     static final String CACHE_NAME = "parametrosSistemaIva";
     static final BigDecimal FALLBACK_IVA = new BigDecimal("16");
+    // D-14: default usado cuando el registro parametros_sistema(id=19) no existe o es NULL.
+    static final BigDecimal FALLBACK_SANCION_SEMANAL = new BigDecimal("2");
 
     private final ParametrosSistemaRepository repository;
 
@@ -71,5 +73,31 @@ public class ParametrosSistemaCache {
                     return v == null ? Boolean.TRUE : v.signum() != 0;
                 })
                 .orElse(Boolean.TRUE);
+    }
+
+    /**
+     * D-14: devuelve el % de sanción semanal por default aplicado cuando al guardar un plazo
+     * el request no incluye el campo. Lee {@code parametros_sistema(id=19)}; fallback a 2 con
+     * {@code log.warn} si falta o es NULL/0, para que la configuración no quede en 0 silenciosa.
+     */
+    @Cacheable(cacheNames = CACHE_NAME, key = "'sancionSemanalDefault'")
+    public BigDecimal getPorcSancionSemanalDefault() {
+        return repository.findById(Constantes.SANCION_SEMANAL_DEFAULT)
+                .map(p -> {
+                    BigDecimal v = p.getValorNumerico();
+                    if (v == null || v.signum() == 0) {
+                        log.warn("% sanción semanal default no configurado (parametros_sistema id={},"
+                                + " valorNumerico={}). Usando fallback {}%.",
+                                Constantes.SANCION_SEMANAL_DEFAULT, v, FALLBACK_SANCION_SEMANAL);
+                        return FALLBACK_SANCION_SEMANAL;
+                    }
+                    return v;
+                })
+                .orElseGet(() -> {
+                    log.warn("Parametro % sancion semanal default ausente (parametros_sistema id={}). "
+                            + "Usando fallback {}%.",
+                            Constantes.SANCION_SEMANAL_DEFAULT, FALLBACK_SANCION_SEMANAL);
+                    return FALLBACK_SANCION_SEMANAL;
+                });
     }
 }

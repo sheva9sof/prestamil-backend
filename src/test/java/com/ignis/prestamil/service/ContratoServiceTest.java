@@ -7,6 +7,8 @@ import com.ignis.prestamil.model.CatValorPrenda;
 import com.ignis.prestamil.model.Cliente;
 import com.ignis.prestamil.model.Contrato;
 import com.ignis.prestamil.model.EstatusContrato;
+import com.ignis.prestamil.model.FolioBolsa;
+import com.ignis.prestamil.model.FolioCodigoBarras;
 import com.ignis.prestamil.model.MovimientoContrato;
 import com.ignis.prestamil.model.PartidaContrato;
 import com.ignis.prestamil.model.Plazo;
@@ -20,6 +22,8 @@ import com.ignis.prestamil.model.Usuario;
 import com.ignis.prestamil.repository.CatValorPrendaRepository;
 import com.ignis.prestamil.repository.ClienteRepository;
 import com.ignis.prestamil.repository.ContratoRepository;
+import com.ignis.prestamil.repository.FolioBolsaRepository;
+import com.ignis.prestamil.repository.FolioCodigoBarrasRepository;
 import com.ignis.prestamil.repository.MovimientoContratoRepository;
 import com.ignis.prestamil.repository.PlazoHechuraAlhajaRepository;
 import com.ignis.prestamil.repository.PlazoParametroRepository;
@@ -29,7 +33,9 @@ import com.ignis.prestamil.repository.TurnoRepository;
 import com.ignis.prestamil.repository.UsuarioRepository;
 import com.ignis.prestamil.request.ContratoRequest;
 import com.ignis.prestamil.request.PartidaContratoRequest;
+import com.ignis.prestamil.request.RecalcularPartidasRequest;
 import com.ignis.prestamil.response.ContratoResponse;
+import com.ignis.prestamil.response.PartidaRecalculadaResponse;
 import com.ignis.prestamil.response.VencimientoResponse;
 import com.ignis.prestamil.service.calculo.CalculoContratoService;
 import com.ignis.prestamil.service.calculo.ParametrosSistemaCache;
@@ -102,6 +108,9 @@ class ContratoServiceTest {
     @Mock
     MovimientoCajaService movimientoCajaService;
 
+    @Mock
+    BolsaService bolsaService;
+
     CalculoContratoService calculoContratoService;
     ContratoService contratoService;
 
@@ -125,12 +134,19 @@ class ContratoServiceTest {
                 parametrosSistemaCache,
                 calculoContratoService,
                 movimientoContratoRepository,
-                movimientoCajaService
+                movimientoCajaService,
+                bolsaService
         );
 
         // El snapshot del changeset 026 siempre pide el IVA vigente al crear un contrato.
         // Sin este stub los tests que persistan un contrato lanzarian NPE al leer el cache.
         lenient().when(parametrosSistemaCache.getIvaPorcentaje()).thenReturn(new BigDecimal("16.00"));
+
+        // Precio de avalúo por gramo de ALHAJA (valor del oro). Por defecto neutro = precio de
+        // préstamo de la celda, así el avalúo real de los tests queda en precioPrestamo × peso. Los
+        // tests del avalúo real como valor del oro lo sobreescriben con un valor mayor.
+        lenient().when(plazoService.calcularPrecioAvaluoGramo(any(PlazoHechuraAlhaja.class)))
+                .thenAnswer(inv -> inv.<PlazoHechuraAlhaja>getArgument(0).getPrecioPrestamo());
 
         // Stubs comunes a todos los tests: turno activo, cajero, cliente, plazo y tipo de prenda ALHAJA
         Turno turno = new Turno();
@@ -319,6 +335,79 @@ class ContratoServiceTest {
         contratoService.crearContrato(request, "cajero1");
 
         assertThat(capturarPartidaGuardada().getValorPrenda()).isSameAs(valorCatalogo);
+    }
+
+    @Test
+    void crearContrato_copiaClaveYDescripcionGeneralDelCatalogo_noLasDelCliente() {
+        // D-09: clave y descripción general son el estándar del catálogo; el cliente no puede
+        // mandar otras. Se copian a la partida para que el contrato firmado no cambie si después
+        // Sistemas edita el catálogo.
+        ContratoRequest request = buildRequestBase();
+        PartidaContratoRequest partida = buildPartidaAlhaja(
+                new BigDecimal("100.00"), 14, "N",
+                BigDecimal.ONE, new BigDecimal("50.00"));
+        partida.setIdValorPrenda(25);
+        partida.setClavePrenda("OTRA");
+        partida.setDescripcion("Esclava con mariposa, broche roto");
+        request.getPartidas().add(partida);
+
+        PlazoHechuraAlhaja tabla = new PlazoHechuraAlhaja();
+        tabla.setPrecioPrestamo(new BigDecimal("100.0000"));
+        when(plazoHechuraAlhajaRepository.findById(new PlazoHechuraAlhajaId(1, 1, 14, "N")))
+                .thenReturn(Optional.of(tabla));
+        CatValorPrenda valorCatalogo = buildValorCatalogo(25, 4, tipoPrendaRepository.findById(1).orElseThrow());
+        valorCatalogo.setClave("ESC14");
+        valorCatalogo.setDescripcion("ESCLAVA 14K");
+        when(catValorPrendaRepository.findById(25)).thenReturn(Optional.of(valorCatalogo));
+        stubPersistencia();
+
+        contratoService.crearContrato(request, "cajero1");
+
+        PartidaContrato guardada = capturarPartidaGuardada();
+        assertThat(guardada.getClavePrenda()).isEqualTo("ESC14");
+        assertThat(guardada.getDescripcionGeneral()).isEqualTo("ESCLAVA 14K");
+        assertThat(guardada.getDescripcion()).isEqualTo("Esclava con mariposa, broche roto");
+
+        // Editar el catálogo después no toca el snapshot de la partida
+        valorCatalogo.setDescripcion("ESCLAVA ORO 14K");
+        assertThat(guardada.getDescripcionGeneral()).isEqualTo("ESCLAVA 14K");
+    }
+
+    @Test
+    void crearContrato_descripcionEspecificaCorta_rechazaConNumeroDePartida() {
+        ContratoRequest request = buildRequestBase();
+        PartidaContratoRequest partida = buildPartidaAlhaja(
+                new BigDecimal("100.00"), 14, "N",
+                BigDecimal.ONE, new BigDecimal("50.00"));
+        partida.setDescripcion("Celular");
+        request.getPartidas().add(partida);
+
+        BadRequestException ex = assertThrows(BadRequestException.class,
+                () -> contratoService.crearContrato(request, "cajero1"));
+
+        assertThat(ex.getMessage()).contains("Partida 1").contains("al menos 10 caracteres");
+    }
+
+    @Test
+    void crearContrato_variosSinMarcaNiModelo_rechazaListandoLosFaltantes() {
+        TipoPrenda varios = new TipoPrenda();
+        varios.setId(3);
+        varios.setTipo("VARIOS");
+        when(tipoPrendaRepository.findById(3)).thenReturn(Optional.of(varios));
+
+        ContratoRequest request = buildRequestBase();
+        PartidaContratoRequest pr = new PartidaContratoRequest();
+        pr.setIdTipoPrenda(3);
+        pr.setDescripcion("Bocina bluetooth negra con cable");
+        pr.setSerieImei("SN-1");
+        pr.setAvaluoReal(new BigDecimal("1000.00"));
+        pr.setMontoPrestamo(new BigDecimal("500.00"));
+        request.getPartidas().add(pr);
+
+        BadRequestException ex = assertThrows(BadRequestException.class,
+                () -> contratoService.crearContrato(request, "cajero1"));
+
+        assertThat(ex.getMessage()).contains("VARIOS").contains("marca, modelo");
     }
 
     @Test
@@ -893,12 +982,88 @@ class ContratoServiceTest {
         assertThat(emp.getTipo()).isEqualTo(TipoMovimiento.EMP);
         assertThat(emp.getContrato()).isSameAs(guardado);
         assertThat(emp.getMonto()).isEqualByComparingTo("500.00");
-        assertThat(emp.getSaldoAnterior()).isNull();
+        // D-11: snapshot "pre-contrato" para que la cancelación del día (C-06) reverta a saldo 0
+        // y estatus CANCELADO sin lógica especial en el revert genérico.
+        assertThat(emp.getSaldoAnterior()).isEqualByComparingTo("0");
+        assertThat(emp.getEstatusAnterior()).isEqualTo(EstatusContrato.CANCELADO);
+        assertThat(emp.getNumRefrendosAnterior()).isZero();
         assertThat(emp.getSaldoNuevo()).isEqualByComparingTo("500.00");
         assertThat(emp.getFechaContratoNueva()).isEqualTo(guardado.getFechaContrato());
         assertThat(emp.getFechaVencNueva()).isEqualTo(guardado.getFechaVencimiento());
         assertThat(emp.getEstatusNuevo()).isEqualTo(EstatusContrato.VIGENTE);
         assertThat(emp.getFecha()).isEqualTo(guardado.getFechaApertura());
+    }
+
+    // =========================================================================
+    // D-10 — bolsa y código de barras por partida
+    // =========================================================================
+
+    /**
+     * Dos contratos seguidos en la misma sucursal: bolsas consecutivas y códigos de barras distintos y
+     * consecutivos, uno por partida. Usa el BolsaService real sobre contadores en memoria (el bloqueo
+     * real lo prueba BolsaServiceIT).
+     */
+    @Test
+    void crearContrato_dosContratosSeguidos_obtienenBolsasConsecutivasYCodigosDeBarrasUnicos() {
+        FolioBolsa folioBolsa = new FolioBolsa();
+        folioBolsa.setSucursalId(1);
+        folioBolsa.setUltimoFolio(3968);
+        FolioBolsaRepository folioBolsaRepository = org.mockito.Mockito.mock(FolioBolsaRepository.class);
+        when(folioBolsaRepository.findBySucursalId(1)).thenReturn(Optional.of(folioBolsa));
+
+        FolioCodigoBarras folioCodigo = new FolioCodigoBarras();
+        folioCodigo.setId(FolioCodigoBarras.ID_UNICO);
+        folioCodigo.setUltimoFolio(40L);
+        FolioCodigoBarrasRepository folioCodigoRepository =
+                org.mockito.Mockito.mock(FolioCodigoBarrasRepository.class);
+        when(folioCodigoRepository.findWithLockById(FolioCodigoBarras.ID_UNICO)).thenReturn(Optional.of(folioCodigo));
+
+        ContratoService conBolsaReal = new ContratoService(repository, clienteRepository, plazoRepository,
+                turnoRepository, usuarioRepository, tipoPrendaRepository, catValorPrendaRepository, contratoMapper,
+                plazoParametroRepository, plazoService, plazoHechuraAlhajaRepository, parametrosSistemaCache,
+                calculoContratoService, movimientoContratoRepository, movimientoCajaService,
+                new BolsaService(folioBolsaRepository, folioCodigoRepository));
+        stubTablaAlhaja("100.0000");
+        stubPersistencia();
+
+        // Primer contrato con dos partidas, segundo con una
+        ContratoRequest primero = buildRequestBase();
+        primero.getPartidas().add(buildPartidaAlhaja(new BigDecimal("100.00"), 14, "N",
+                BigDecimal.ONE, new BigDecimal("50.00")));
+        primero.getPartidas().add(buildPartidaAlhaja(new BigDecimal("100.00"), 14, "N",
+                BigDecimal.ONE, new BigDecimal("50.00")));
+        ContratoRequest segundo = buildRequestBase();
+        segundo.getPartidas().add(buildPartidaAlhaja(new BigDecimal("100.00"), 14, "N",
+                BigDecimal.ONE, new BigDecimal("50.00")));
+
+        conBolsaReal.crearContrato(primero, "cajero1");
+        conBolsaReal.crearContrato(segundo, "cajero1");
+
+        ArgumentCaptor<Contrato> captor = ArgumentCaptor.forClass(Contrato.class);
+        verify(repository, org.mockito.Mockito.atLeastOnce()).save(captor.capture());
+        List<Contrato> contratos = captor.getAllValues().stream().distinct().toList();
+        assertThat(contratos).hasSize(2);
+        assertThat(contratos.get(0).getNumBolsa()).isEqualTo(3969);
+        assertThat(contratos.get(1).getNumBolsa()).isEqualTo(3970);
+
+        List<String> codigos = contratos.stream()
+                .flatMap(c -> c.getPartidas().stream())
+                .map(PartidaContrato::getCodigoBarras)
+                .toList();
+        assertThat(codigos).containsExactly("0000000041", "0000000042", "0000000043");
+        assertThat(folioCodigo.getUltimoFolio()).isEqualTo(43L);
+    }
+
+    /** Si el contrato se rechaza antes de guardarse, no se consume bolsa ni código de barras. */
+    @Test
+    void crearContrato_rechazado_noTomaBolsaNiCodigoDeBarras() {
+        ContratoRequest request = buildRequestBase();
+        request.getPartidas().add(buildPartidaAlhaja(new BigDecimal("100.00"), 24, "N",
+                BigDecimal.ONE, new BigDecimal("50.00")));
+
+        assertThrows(BadRequestException.class, () -> contratoService.crearContrato(request, "cajero1"));
+
+        org.mockito.Mockito.verifyNoInteractions(bolsaService);
     }
 
     // =========================================================================
@@ -1004,7 +1169,10 @@ class ContratoServiceTest {
         ContratoRequest request = buildRequestBase();
         PartidaContratoRequest pr = new PartidaContratoRequest();
         pr.setIdTipoPrenda(3);
-        pr.setDescripcion("Laptop");
+        pr.setDescripcion("Laptop gris, cargador original");
+        pr.setMarca("Dell");
+        pr.setModelo("Latitude 5420");
+        pr.setSerieImei("SN-48291");
         pr.setAvaluoReal(new BigDecimal("1000.00"));
         pr.setMontoPrestamo(new BigDecimal("503.75"));
         request.getPartidas().add(pr);
@@ -1064,5 +1232,517 @@ class ContratoServiceTest {
 
         org.mockito.Mockito.verify(movimientoContratoRepository, org.mockito.Mockito.never())
                 .save(any(MovimientoContrato.class));
+    }
+
+    // =========================================================================
+    // D-05: tabla de amortización — columna de almacenaje bien separada del
+    // interés, filas monótonas. Casos de referencia C19 (préstamo 575.08) y
+    // C20 (contrato 1493 de COCAE). Tolerancia ±0.03 (plan 07-oct 2.7).
+    // =========================================================================
+
+    /** Monta un contrato semanal de 4 periodos para calcularAmortizacion. */
+    private Contrato fixtureContratoSemanal(BigDecimal prestamo) {
+        TipoPrenda plata = new TipoPrenda();
+        plata.setId(4); plata.setTipo("PLATAS");
+        PartidaContrato partida = new PartidaContrato();
+        partida.setTipoPrenda(plata);
+
+        Plazo plazo = new Plazo();
+        plazo.setId(6L); plazo.setDiasPorPeriodo(7); plazo.setNumeroPeriodos(4);
+
+        Contrato c = new Contrato();
+        c.setId(99L);
+        c.setMontoPrestamo(prestamo);
+        c.setFechaApertura(LocalDateTime.of(2026, 8, 15, 0, 0));
+        c.setSucursalId(1);
+        c.setPlazo(plazo);
+        List<PartidaContrato> partidas = new ArrayList<>();
+        partidas.add(partida);
+        c.setPartidas(partidas);
+        return c;
+    }
+
+    private void assertCercano(BigDecimal actual, String esperado, String etiqueta) {
+        BigDecimal esp = new BigDecimal(esperado);
+        BigDecimal tol = new BigDecimal("0.03");
+        assertThat(actual.subtract(esp).abs())
+                .as("%s: esperado %s, obtenido %s (tolerancia ±0.03)", etiqueta, esperado, actual)
+                .isLessThanOrEqualTo(tol);
+    }
+
+    @Test
+    void calcularAmortizacion_C19_filasNormalesS1aS4() {
+        // C19 — préstamo 575.08, i 1.55%, a 0.6%, s 2%, 4 semanas + 2 extemporáneas (plata).
+        // Fila por fila contra los valores esperados del plan 07-oct 2.7, con tolerancia ±0.03
+        // porque el motor redondea cada componente a 2 dec antes de sumar (diferencias ≤ $0.01).
+        Contrato contrato = fixtureContratoSemanal(new BigDecimal("575.08"));
+        when(repository.findById(99L)).thenReturn(Optional.of(contrato));
+
+        PlazoParametro parametro = new PlazoParametro();
+        parametro.setPorcInteres(new BigDecimal("1.55"));
+        parametro.setPorcAlmacen(new BigDecimal("0.6"));
+        parametro.setPorcGastosAdmin(new BigDecimal("0"));
+        parametro.setPorcSancionSemanal(new BigDecimal("2"));
+        parametro.setAplicarSancionPorPeriodo(true);
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(6L, 4, 1))
+                .thenReturn(Optional.of(parametro));
+
+        List<VencimientoResponse> filas = contratoService.calcularAmortizacion(99L);
+
+        assertThat(filas).hasSize(4);
+
+        // S1: 8.91 / 3.45 / 1.98 / 14.34 (interes / almacen / iva / refrendo)
+        VencimientoResponse s1 = filas.get(0);
+        assertCercano(s1.getInteres(),      "8.91",  "S1 interes");
+        assertCercano(s1.getAlmacen(),      "3.45",  "S1 almacen");
+        assertCercano(s1.getIva(),          "1.98",  "S1 iva");
+        assertCercano(s1.getTotalInteres().add(s1.getIva()),
+                                            "14.34", "S1 refrendo");
+        // Clave del bug D-05: almacen NUNCA debe igualar al interes en una fila normal.
+        assertThat(s1.getAlmacen()).isNotEqualByComparingTo(s1.getInteres());
+
+        // S4: 35.65 / 13.80 / 7.91 / 57.37
+        VencimientoResponse s4 = filas.get(3);
+        assertCercano(s4.getInteres(),      "35.65", "S4 interes");
+        assertCercano(s4.getAlmacen(),      "13.80", "S4 almacen");
+        assertCercano(s4.getIva(),          "7.91",  "S4 iva");
+        assertCercano(s4.getTotalInteres().add(s4.getIva()),
+                                            "57.37", "S4 refrendo");
+    }
+
+    @Test
+    void calcularAmortizacion_C20_contra_COCAE_contrato1493() {
+        // C20 — contrato 1493 de COCAE (S 1,195, i 1.13%, a 0.6%, s 2%). Filas S1–S4 normales
+        // contra los valores de 2.6 (tabla de amortización) con tolerancia ±0.03.
+        Contrato contrato = fixtureContratoSemanal(new BigDecimal("1195.00"));
+        when(repository.findById(99L)).thenReturn(Optional.of(contrato));
+
+        PlazoParametro parametro = new PlazoParametro();
+        parametro.setPorcInteres(new BigDecimal("1.13"));
+        parametro.setPorcAlmacen(new BigDecimal("0.6"));
+        parametro.setPorcGastosAdmin(new BigDecimal("0"));
+        parametro.setPorcSancionSemanal(new BigDecimal("2"));
+        parametro.setAplicarSancionPorPeriodo(true);
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(6L, 4, 1))
+                .thenReturn(Optional.of(parametro));
+
+        List<VencimientoResponse> filas = contratoService.calcularAmortizacion(99L);
+
+        assertThat(filas).hasSize(4);
+
+        // S1 esperado: interes 13.50, almacen 7.17, iva 3.30, refrendo 23.97, desempeno 1,218.97
+        VencimientoResponse s1 = filas.get(0);
+        assertCercano(s1.getInteres(),   "13.50",    "1493 S1 interes");
+        assertCercano(s1.getAlmacen(),   "7.17",     "1493 S1 almacen");
+        assertCercano(s1.getIva(),       "3.30",     "1493 S1 iva");
+        assertCercano(s1.getTotalInteres().add(s1.getIva()),
+                                         "23.97",    "1493 S1 refrendo");
+        assertCercano(s1.getDesempeno(), "1218.97",  "1493 S1 desempeno");
+        // Regresión D-05: almacen ≠ interes.
+        assertThat(s1.getAlmacen()).isNotEqualByComparingTo(s1.getInteres());
+
+        // S4 esperado: interes 54.01 (1195 × 1.13% × 4), almacen 28.68, iva (interes+almacen)×16%
+        VencimientoResponse s4 = filas.get(3);
+        assertCercano(s4.getInteres(),   "54.01",    "1493 S4 interes");
+        assertCercano(s4.getAlmacen(),   "28.68",    "1493 S4 almacen");
+    }
+
+    @Test
+    void calcularAmortizacion_columnasMonotonas_crecenFilaAFila() {
+        // D-05: cada columna (interes, almacen, totalInteres, iva, desempeno) debe crecer o
+        // mantenerse entre filas; nunca disminuir. Reproduce el síntoma visual que vio Jorge
+        // (filas extemporáneas con almacén "menor" que la fila anterior) para filas normales.
+        Contrato contrato = fixtureContratoSemanal(new BigDecimal("575.08"));
+        when(repository.findById(99L)).thenReturn(Optional.of(contrato));
+
+        PlazoParametro parametro = new PlazoParametro();
+        parametro.setPorcInteres(new BigDecimal("1.55"));
+        parametro.setPorcAlmacen(new BigDecimal("0.6"));
+        parametro.setPorcGastosAdmin(new BigDecimal("0"));
+        parametro.setPorcSancionSemanal(new BigDecimal("2"));
+        parametro.setAplicarSancionPorPeriodo(true);
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(6L, 4, 1))
+                .thenReturn(Optional.of(parametro));
+
+        List<VencimientoResponse> filas = contratoService.calcularAmortizacion(99L);
+        for (int i = 1; i < filas.size(); i++) {
+            VencimientoResponse prev = filas.get(i - 1);
+            VencimientoResponse cur  = filas.get(i);
+            assertThat(cur.getInteres())
+                    .as("Fila %d interes >= fila %d", i + 1, i).isGreaterThanOrEqualTo(prev.getInteres());
+            assertThat(cur.getAlmacen())
+                    .as("Fila %d almacen >= fila %d", i + 1, i).isGreaterThanOrEqualTo(prev.getAlmacen());
+            assertThat(cur.getTotalInteres())
+                    .as("Fila %d totalInteres >= fila %d", i + 1, i).isGreaterThanOrEqualTo(prev.getTotalInteres());
+            assertThat(cur.getIva())
+                    .as("Fila %d iva >= fila %d", i + 1, i).isGreaterThanOrEqualTo(prev.getIva());
+            assertThat(cur.getDesempeno())
+                    .as("Fila %d desempeno >= fila %d", i + 1, i).isGreaterThanOrEqualTo(prev.getDesempeno());
+        }
+    }
+
+    // =========================================================================
+    // D-06: Recalculo server-side al cambiar de plazo y validacion de las tres
+    // invariantes (prestamo<=max, avaluoContrato=prestamo*(1+inc), avaluoContrato<=avaluoReal).
+    // =========================================================================
+
+    /** Parametro para ALHAJA con % de prestamo s/avaluo y % incremento sobre avaluo (real). */
+    private PlazoParametro buildParametroAlhaja(BigDecimal porcPrestamoSAvaluo,
+                                                 BigDecimal porcPrestamoSAvaluoReal) {
+        PlazoParametro p = new PlazoParametro();
+        p.setPorcPrestamoSAvaluo(porcPrestamoSAvaluo);
+        p.setUsaAvaluoReal(porcPrestamoSAvaluoReal != null
+                && porcPrestamoSAvaluoReal.compareTo(BigDecimal.ZERO) > 0);
+        p.setPorcPrestamoSAvaluoReal(porcPrestamoSAvaluoReal);
+        return p;
+    }
+
+    private void stubPlazo(Long idPlazo, int diasPorPeriodo, int numeroPeriodos) {
+        Plazo plazo = new Plazo();
+        plazo.setId(idPlazo);
+        plazo.setDiasPorPeriodo(diasPorPeriodo);
+        plazo.setNumeroPeriodos(numeroPeriodos);
+        lenient().when(plazoRepository.findById(idPlazo)).thenReturn(Optional.of(plazo));
+    }
+
+    /** Celda 18K/N: plazo A (4 sem) con precioPrestamo P1; plazo B (3 quincenas) con precioPrestamo P2. */
+    private void stubTablaAlhaja18K(Integer plazoId, String precioPrestamo) {
+        PlazoHechuraAlhaja tabla = new PlazoHechuraAlhaja();
+        tabla.setId(new PlazoHechuraAlhajaId(plazoId, 1, 18, "N"));
+        tabla.setPrecioPrestamo(new BigDecimal(precioPrestamo));
+        lenient().when(plazoHechuraAlhajaRepository.findById(new PlazoHechuraAlhajaId(plazoId, 1, 18, "N")))
+                .thenReturn(Optional.of(tabla));
+    }
+
+    @Test
+    void recalcularPartidas_cambioDePlazoDe4SemanasA3Quincenas_unaPartida_recalculaTodosLosValores() {
+        // Given: cadena 18K, 5 g netos, hechura N.
+        //   Plazo A (4 sem, id=1): precio préstamo = 1,000/g, %Prestamo s/Avaluo = 70, inc = 25
+        //     -> avaluoReal = 5,000, prestamoMax = 3,500, prestamo pedido = 3,500, avaluoContrato = 4,375
+        //   Plazo B (3 quincenas, id=2): precio préstamo = 900/g, %Prestamo s/Avaluo = 60, inc = 10
+        //     -> avaluoReal = 4,500, prestamoMax = 2,700, prestamo CLAMPED a 2,700, avaluoContrato = 2,970
+        // El valor pegado del plazo anterior (3,500) debe ajustarse hacia abajo.
+        stubPlazo(2L, 15, 3);
+        stubTablaAlhaja18K(2, "900.0000");
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(2L, 1, 1))
+                .thenReturn(Optional.of(buildParametroAlhaja(new BigDecimal("60"), new BigDecimal("10"))));
+        when(plazoService.calcularAvaluoContrato(any(BigDecimal.class), any(PlazoParametro.class)))
+                .thenAnswer(inv -> {
+                    BigDecimal prestamo = inv.getArgument(0);
+                    PlazoParametro p = inv.getArgument(1);
+                    if (!Boolean.TRUE.equals(p.getUsaAvaluoReal())
+                            || p.getPorcPrestamoSAvaluoReal() == null
+                            || p.getPorcPrestamoSAvaluoReal().signum() == 0) {
+                        return prestamo;
+                    }
+                    return prestamo.multiply(BigDecimal.ONE.add(
+                            p.getPorcPrestamoSAvaluoReal().divide(new BigDecimal("100"), 6, java.math.RoundingMode.HALF_UP)))
+                            .setScale(2, java.math.RoundingMode.HALF_UP);
+                });
+
+        RecalcularPartidasRequest req = new RecalcularPartidasRequest();
+        req.setIdPlazo(2L);
+        PartidaContratoRequest pr = buildPartidaAlhaja(
+                new BigDecimal("5000.00"), 18, "N",
+                new BigDecimal("5.0000"), new BigDecimal("3500.00"));  // valor stale del plazo A
+        req.setPartidas(List.of(pr));
+
+        List<PartidaRecalculadaResponse> out = contratoService.recalcularPartidas(req);
+
+        assertThat(out).hasSize(1);
+        PartidaRecalculadaResponse row = out.get(0);
+        assertThat(row.getAvaluoReal()).isEqualByComparingTo("4500.00");       // 5 x 900
+        assertThat(row.getPrestamoMaximo()).isEqualByComparingTo("2700.00");   // 4500 x 60%
+        // Clamp hacia abajo + redondeo a $5
+        assertThat(row.getMontoPrestamo()).isEqualByComparingTo("2700.00");
+        assertThat(row.getAvaluoContrato()).isEqualByComparingTo("2970.00");   // 2700 x 1.10
+    }
+
+    @Test
+    void recalcularPartidas_cambioDePlazoDe4SemanasA3Quincenas_dosPartidas_redondeoAUltimaAlhaja() {
+        // Given: dos cadenas 18K, 5g y 3g netos. Plazo B: 900/g, 60% s/avaluo.
+        //   Partida 1: avaluoReal=4500, max=2700, prestamo pedido=2700 -> stays 2700
+        //   Partida 2: avaluoReal=2700, max=1620, prestamo pedido=1620 -> stays 1620 (clamp si piden mas)
+        //   Total alhajas = 4320, redondeado a $5 = 4320 (ya es múltiplo); forzar un no-múltiplo:
+        //   Pedir p2=1622: clamp a max=1620 => total 4320 (múltiplo). Para probar el redondeo
+        //   usamos un max que no caiga en múltiplo de 5. Precio 902/g -> max p1 = 2706, p2 = 1623.6->1623.60.
+        //   Total 2706 + 1623.60 = 4329.60; redondeado a 4325; diferencia 4.60 se descuenta de p2.
+        stubPlazo(2L, 15, 3);
+        PlazoHechuraAlhaja tabla = new PlazoHechuraAlhaja();
+        tabla.setPrecioPrestamo(new BigDecimal("902.0000"));
+        when(plazoHechuraAlhajaRepository.findById(new PlazoHechuraAlhajaId(2, 1, 18, "N")))
+                .thenReturn(Optional.of(tabla));
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(2L, 1, 1))
+                .thenReturn(Optional.of(buildParametroAlhaja(new BigDecimal("60"), BigDecimal.ZERO)));
+
+        RecalcularPartidasRequest req = new RecalcularPartidasRequest();
+        req.setIdPlazo(2L);
+        // Préstamos "stale" del plazo anterior, muy por encima de los nuevos máximos.
+        PartidaContratoRequest p1 = buildPartidaAlhaja(
+                new BigDecimal("1.00"), 18, "N",
+                new BigDecimal("5.0000"), new BigDecimal("9999.00"));
+        PartidaContratoRequest p2 = buildPartidaAlhaja(
+                new BigDecimal("1.00"), 18, "N",
+                new BigDecimal("3.0000"), new BigDecimal("9999.00"));
+        req.setPartidas(List.of(p1, p2));
+
+        List<PartidaRecalculadaResponse> out = contratoService.recalcularPartidas(req);
+
+        assertThat(out).hasSize(2);
+        // Clamp a max de cada partida y luego redondeo del total a múltiplo de $5
+        // p1 max = 5 x 902 x 60% = 2706.00
+        // p2 max = 3 x 902 x 60% = 1623.60
+        // total = 4329.60 -> redondeado 4325.00 -> diferencia 4.60 se resta de p2
+        assertThat(out.get(0).getMontoPrestamo()).isEqualByComparingTo("2706.00");
+        assertThat(out.get(1).getMontoPrestamo()).isEqualByComparingTo("1619.00");
+        BigDecimal total = out.get(0).getMontoPrestamo().add(out.get(1).getMontoPrestamo());
+        assertThat(total.remainder(new BigDecimal("5"))).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void crearContrato_plazo3Quincenas_oro_generaContratoYAmortizacionDe3Filas() {
+        // Given: Plazo 3 quincenas = 15 x 3; 18K/N 5g, precio 900/g -> avaluoReal 4500,
+        // porc_prestamo_s_avaluo = 0 (sin tope extra, mismo semántica que plazo Principal),
+        // prestamo = 2700 (múltiplo de 5), inc 10% -> avaluoContrato = 2970.
+        stubPlazo(2L, 15, 3);
+        PlazoHechuraAlhaja tabla = new PlazoHechuraAlhaja();
+        tabla.setPrecioPrestamo(new BigDecimal("900.0000"));
+        when(plazoHechuraAlhajaRepository.findById(new PlazoHechuraAlhajaId(2, 1, 18, "N")))
+                .thenReturn(Optional.of(tabla));
+        PlazoParametro param = buildParametroAlhaja(BigDecimal.ZERO, new BigDecimal("10"));
+        param.setPorcInteres(new BigDecimal("1.00"));
+        param.setPorcAlmacen(new BigDecimal("0.6"));
+        param.setPorcGastosAdmin(new BigDecimal("18"));
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(2L, 1, 1))
+                .thenReturn(Optional.of(param));
+        when(plazoService.calcularAvaluoContrato(any(BigDecimal.class), any(PlazoParametro.class)))
+                .thenReturn(new BigDecimal("2970.00"));
+        stubPersistencia();
+
+        ContratoRequest req = buildRequestBase();
+        req.setIdPlazo(2L);
+        req.getPartidas().add(buildPartidaAlhaja(
+                new BigDecimal("4500.00"), 18, "N",
+                new BigDecimal("5.0000"), new BigDecimal("2700.00")));
+
+        contratoService.crearContrato(req, "cajero1");
+
+        PartidaContrato guardada = capturarPartidaGuardada();
+        assertThat(guardada.getAvaluoReal()).isEqualByComparingTo("4500.00");
+        assertThat(guardada.getMontoPrestamo()).isEqualByComparingTo("2700.00");
+        assertThat(guardada.getAvaluoContrato()).isEqualByComparingTo("2970.00");
+    }
+
+    @Test
+    void calcularAmortizacion_plazo3Quincenas_devuelve3FilasEnDias15_30_45() {
+        // Verifica que la amortización respeta diasPorPeriodo del plazo (NO hardcodea 7).
+        TipoPrenda alhaja = new TipoPrenda();
+        alhaja.setId(1);
+        alhaja.setTipo("ALHAJA");
+        PartidaContrato partida = new PartidaContrato();
+        partida.setTipoPrenda(alhaja);
+
+        Plazo plazoQuincenal = new Plazo();
+        plazoQuincenal.setId(8L);
+        plazoQuincenal.setDiasPorPeriodo(15);
+        plazoQuincenal.setNumeroPeriodos(3);
+
+        Contrato contrato = new Contrato();
+        contrato.setId(500L);
+        contrato.setMontoPrestamo(new BigDecimal("2700.00"));
+        contrato.setFechaApertura(LocalDateTime.of(2026, 10, 8, 0, 0));
+        contrato.setSucursalId(1);
+        contrato.setPlazo(plazoQuincenal);
+        List<PartidaContrato> partidas = new ArrayList<>();
+        partidas.add(partida);
+        contrato.setPartidas(partidas);
+        when(repository.findById(500L)).thenReturn(Optional.of(contrato));
+
+        PlazoParametro param = new PlazoParametro();
+        param.setPorcInteres(new BigDecimal("1.00"));
+        param.setPorcAlmacen(new BigDecimal("0.6"));
+        param.setPorcGastosAdmin(new BigDecimal("0"));
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(8L, 1, 1))
+                .thenReturn(Optional.of(param));
+
+        List<VencimientoResponse> filas = contratoService.calcularAmortizacion(500L);
+
+        assertThat(filas).hasSize(3);
+        assertThat(filas.get(0).getFecha()).isEqualTo(java.time.LocalDate.of(2026, 10, 23)); // +15
+        assertThat(filas.get(1).getFecha()).isEqualTo(java.time.LocalDate.of(2026, 11, 7));  // +30
+        assertThat(filas.get(2).getFecha()).isEqualTo(java.time.LocalDate.of(2026, 11, 22)); // +45
+    }
+
+    @Test
+    void crearContrato_invariante1_prestamoSuperaMaximo_rechazaConMensajeDeInvarianteYPartida() {
+        // Given: alhaja 18K, 5g, precio préstamo 100/g -> avaluoReal 500, %Prestamo s/Avaluo = 60 ->
+        // prestamoMaximo = 300. Cliente pide 400 (como si viniera del plazo anterior).
+        // El plazo del setUp es id=1, sin nombre: el mensaje usa "id=1" como fallback.
+        Plazo plazoNombrado = new Plazo();
+        plazoNombrado.setId(1L);
+        plazoNombrado.setNombre("Quincenal - Alahas");
+        plazoNombrado.setDiasPorPeriodo(15);
+        plazoNombrado.setNumeroPeriodos(3);
+        when(plazoRepository.findById(1L)).thenReturn(Optional.of(plazoNombrado));
+
+        PlazoHechuraAlhaja tabla = new PlazoHechuraAlhaja();
+        tabla.setPrecioPrestamo(new BigDecimal("100.0000"));
+        when(plazoHechuraAlhajaRepository.findById(new PlazoHechuraAlhajaId(1, 1, 18, "N")))
+                .thenReturn(Optional.of(tabla));
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(1L, 1, 1))
+                .thenReturn(Optional.of(buildParametroAlhaja(new BigDecimal("60"), BigDecimal.ZERO)));
+
+        ContratoRequest req = buildRequestBase();
+        req.getPartidas().add(buildPartidaAlhaja(
+                new BigDecimal("500.00"), 18, "N",
+                new BigDecimal("5.0000"), new BigDecimal("400.00")));
+
+        BadRequestException ex = assertThrows(BadRequestException.class,
+                () -> contratoService.crearContrato(req, "cajero1"));
+        // El mensaje D-07 debe incluir: partida, prenda, préstamo, máximo, avalúo real, %, plazo.
+        assertThat(ex.getMessage()).contains("Partida 1");
+        assertThat(ex.getMessage()).contains("ALHAJA");
+        assertThat(ex.getMessage()).contains("$400");           // préstamo
+        assertThat(ex.getMessage()).contains("$300");           // máximo
+        assertThat(ex.getMessage()).contains("$500");           // avalúo real
+        assertThat(ex.getMessage()).contains("60%");            // porcentaje
+        assertThat(ex.getMessage()).contains("Quincenal");      // nombre del plazo
+    }
+
+    @Test
+    void crearContrato_invariante2_avaluoContratoNoCoincideConEsperado_rechaza() {
+        // Given: alhaja 18K, 5g, precio préstamo 100/g, %Prestamo s/Avaluo = 50, inc = 10.
+        // prestamoMaximo = 250, prestamo pedido = 250 ok. avaluoContrato esperado = 275.
+        // El cliente envia avaluoContrato = 312.50 (del plazo anterior con inc = 25).
+        PlazoHechuraAlhaja tabla = new PlazoHechuraAlhaja();
+        tabla.setPrecioPrestamo(new BigDecimal("100.0000"));
+        when(plazoHechuraAlhajaRepository.findById(new PlazoHechuraAlhajaId(1, 1, 18, "N")))
+                .thenReturn(Optional.of(tabla));
+        PlazoParametro param = buildParametroAlhaja(new BigDecimal("50"), new BigDecimal("10"));
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(1L, 1, 1))
+                .thenReturn(Optional.of(param));
+        when(plazoService.calcularAvaluoContrato(any(BigDecimal.class), any(PlazoParametro.class)))
+                .thenReturn(new BigDecimal("275.00"));
+
+        ContratoRequest req = buildRequestBase();
+        PartidaContratoRequest pr = buildPartidaAlhaja(
+                new BigDecimal("500.00"), 18, "N",
+                new BigDecimal("5.0000"), new BigDecimal("250.00"));
+        pr.setAvaluoContrato(new BigDecimal("312.50"));  // stale del plazo anterior
+        req.getPartidas().add(pr);
+
+        BadRequestException ex = assertThrows(BadRequestException.class,
+                () -> contratoService.crearContrato(req, "cajero1"));
+        assertThat(ex.getMessage()).contains("Partida 1");
+        assertThat(ex.getMessage()).contains("avalúo de contrato");
+        assertThat(ex.getMessage()).contains("312.50");  // enviado
+        assertThat(ex.getMessage()).contains("275.00");  // esperado
+    }
+
+    @Test
+    void crearContrato_invariante3_avaluoContratoSuperaAvaluoReal_rechaza() {
+        // Given: alhaja 18K, 5g, precio préstamo 100/g -> avaluoReal = 500. Config inconsistente:
+        // %Prestamo s/Avaluo = 90, inc = 25 -> prestamoMax = 450, avaluoContrato = 450 x 1.25 = 562.50
+        // que supera el avaluoReal 500. prestamo pedido = 450 (dentro del max), pero invariante 3 falla.
+        PlazoHechuraAlhaja tabla = new PlazoHechuraAlhaja();
+        tabla.setPrecioPrestamo(new BigDecimal("100.0000"));
+        when(plazoHechuraAlhajaRepository.findById(new PlazoHechuraAlhajaId(1, 1, 18, "N")))
+                .thenReturn(Optional.of(tabla));
+        PlazoParametro param = buildParametroAlhaja(new BigDecimal("90"), new BigDecimal("25"));
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(1L, 1, 1))
+                .thenReturn(Optional.of(param));
+        when(plazoService.calcularAvaluoContrato(any(BigDecimal.class), any(PlazoParametro.class)))
+                .thenReturn(new BigDecimal("562.50"));
+
+        ContratoRequest req = buildRequestBase();
+        req.getPartidas().add(buildPartidaAlhaja(
+                new BigDecimal("500.00"), 18, "N",
+                new BigDecimal("5.0000"), new BigDecimal("450.00")));
+
+        BadRequestException ex = assertThrows(BadRequestException.class,
+                () -> contratoService.crearContrato(req, "cajero1"));
+        assertThat(ex.getMessage()).contains("Partida 1");
+        assertThat(ex.getMessage()).contains("avalúo de contrato");
+        assertThat(ex.getMessage()).contains("supera el avalúo real");
+        assertThat(ex.getMessage()).contains("562.50");  // avaluoContrato
+        assertThat(ex.getMessage()).contains("500");     // avaluoReal
+    }
+
+    @Test
+    void crearContrato_alhaja_avaluoRealEsValorDelOro_prestamoDeTablaMasIncrementoPasa() {
+        // Caso del 08-oct: Quincenal ALHAJA con % Préstamo s/Avalúo = 0 (= 100%) e incremento 10%.
+        // 10K/N, 10 g, precio préstamo 386.58/g -> préstamo de tabla 3,865.80. El valor del oro es
+        // 582.31/g (precio base 364.70 / %Préstamo 62.63%) -> avalúo real 5,823.10. Avalúo de
+        // contrato = 3,865 × 1.10 = 4,251.50 ≤ 5,823.10: se crea. Antes el avalúo real era el
+        // préstamo de tabla (3,865.80) y la invariante 3 lo rechazaba.
+        PlazoHechuraAlhaja tabla = new PlazoHechuraAlhaja();
+        tabla.setPrecioPrestamo(new BigDecimal("386.5800"));
+        when(plazoHechuraAlhajaRepository.findById(new PlazoHechuraAlhajaId(1, 1, 10, "N")))
+                .thenReturn(Optional.of(tabla));
+        when(plazoService.calcularPrecioAvaluoGramo(tabla)).thenReturn(new BigDecimal("582.3100"));
+        PlazoParametro param = buildParametroAlhaja(BigDecimal.ZERO, new BigDecimal("10"));
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(1L, 1, 1))
+                .thenReturn(Optional.of(param));
+        when(plazoService.calcularAvaluoContrato(any(BigDecimal.class), any(PlazoParametro.class)))
+                .thenReturn(new BigDecimal("4251.50"));
+        stubPersistencia();
+
+        ContratoRequest req = buildRequestBase();
+        req.getPartidas().add(buildPartidaAlhaja(
+                new BigDecimal("3865.80"), 10, "N",
+                new BigDecimal("10.0000"), new BigDecimal("3865.00")));
+
+        contratoService.crearContrato(req, "cajero1");
+
+        PartidaContrato guardada = capturarPartidaGuardada();
+        assertThat(guardada.getAvaluoReal()).isEqualByComparingTo("5823.10");
+        assertThat(guardada.getMontoPrestamo()).isEqualByComparingTo("3865.00");
+        assertThat(guardada.getAvaluoContrato()).isEqualByComparingTo("4251.50");
+    }
+
+    @Test
+    void crearContrato_alhaja_prestamoMaximoSaleDeLaTabla_noDelValorDelOro() {
+        // El avalúo real (valor del oro, 5,823.10) es mayor que el préstamo de tabla (3,865.80);
+        // el tope del préstamo sigue siendo la tabla, no el valor del oro.
+        PlazoHechuraAlhaja tabla = new PlazoHechuraAlhaja();
+        tabla.setPrecioPrestamo(new BigDecimal("386.5800"));
+        when(plazoHechuraAlhajaRepository.findById(new PlazoHechuraAlhajaId(1, 1, 10, "N")))
+                .thenReturn(Optional.of(tabla));
+        when(plazoService.calcularPrecioAvaluoGramo(tabla)).thenReturn(new BigDecimal("582.3100"));
+        PlazoParametro param = buildParametroAlhaja(BigDecimal.ZERO, new BigDecimal("10"));
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(1L, 1, 1))
+                .thenReturn(Optional.of(param));
+
+        ContratoRequest req = buildRequestBase();
+        req.getPartidas().add(buildPartidaAlhaja(
+                new BigDecimal("5823.10"), 10, "N",
+                new BigDecimal("10.0000"), new BigDecimal("4000.00")));
+
+        BadRequestException ex = assertThrows(BadRequestException.class,
+                () -> contratoService.crearContrato(req, "cajero1"));
+        assertThat(ex.getMessage()).contains("supera el máximo autorizado $3865.80");
+        assertThat(ex.getMessage()).contains("préstamo de tabla $3865.80");
+    }
+
+    @Test
+    void crearContrato_plata_conIncremento_noAplicaInvariante3() {
+        // PLATA: el "avalúo real" es peso × precio de PRÉSTAMO por gramo (10 g × 6.5 = 65.00), así que
+        // préstamo 65.00 con incremento 10% -> avalúo de contrato 71.50 > 65.00. No se rechaza.
+        ContratoRequest request = buildRequestBase();
+        request.getPartidas().add(buildPartidaPlata(
+                new BigDecimal("65.00"), new BigDecimal("925"),
+                new BigDecimal("10.0000"), new BigDecimal("65.00")));
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(1L, 4, 1))
+                .thenReturn(Optional.of(buildParametroPlata(
+                        new BigDecimal("6.5"), new BigDecimal("5.0"), BigDecimal.ZERO)));
+        when(plazoService.calcularAvaluoContrato(any(BigDecimal.class), any(PlazoParametro.class)))
+                .thenReturn(new BigDecimal("71.50"));
+        stubPersistencia();
+
+        contratoService.crearContrato(request, "cajero1");
+
+        PartidaContrato partida = capturarPartidaGuardada();
+        assertThat(partida.getAvaluoReal()).isEqualByComparingTo("65.00");
+        assertThat(partida.getAvaluoContrato()).isEqualByComparingTo("71.50");
     }
 }

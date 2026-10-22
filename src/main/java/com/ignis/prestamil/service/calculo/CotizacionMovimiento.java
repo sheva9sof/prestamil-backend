@@ -19,6 +19,10 @@ import java.util.List;
  * @param situacion                      periodos transcurridos y atraso en la fecha de operación
  * @param periodosMaximos                máximo que se puede pagar: transcurridos − 1 en parcial,
  *                                       transcurridos en las demás operaciones
+ * @param periodosMinimos                mínimo que se puede pagar: 1 en VIGENTE/EN_GRACIA,
+ *                                       extemporáneos + 1 en VENCIDO/EN_VENTA (D-03, RN-31). En
+ *                                       operaciones distintas al parcial se devuelve
+ *                                       {@code periodosAplicados}
  * @param periodosAplicados              periodos que se cobran (en parcial, ya ajustados al máximo)
  * @param periodosNormalesAplicados      de los aplicados, cuántos son normales
  * @param periodosExtemporaneosAplicados de los aplicados, cuántos son extemporáneos (se cubren primero)
@@ -41,6 +45,7 @@ public record CotizacionMovimiento(
         ParametrosCalculo parametros,
         SituacionPeriodos situacion,
         int periodosMaximos,
+        int periodosMinimos,
         int periodosAplicados,
         int periodosNormalesAplicados,
         int periodosExtemporaneosAplicados,

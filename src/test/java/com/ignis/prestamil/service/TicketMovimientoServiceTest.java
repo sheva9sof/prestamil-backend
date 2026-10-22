@@ -162,6 +162,9 @@ class TicketMovimientoServiceTest {
         m.setPeriodosNormales(4);
         m.setSemanasVencidas(0);
         m.setSaldoNuevo(new BigDecimal("1195.00"));
+        m.setFechaContratoAnterior(LocalDate.of(2026, 7, 16));
+        m.setFechaContratoNueva(LocalDate.of(2026, 8, 13));
+        m.setFechaVencAnterior(LocalDate.of(2026, 8, 13));
         m.setFechaVencNueva(LocalDate.of(2026, 9, 10));
         m.setImporteEfectivo(new BigDecimal("50.00"));
         m.setImporteTarjeta(new BigDecimal("45.92"));
@@ -210,7 +213,9 @@ class TicketMovimientoServiceTest {
         // no en el bloque P_MOVIMIENTO. "Comercialización" se queda con fuente normal.
         assertThat(renglones(params, "P_MOVIMIENTO"))
                 .extracting(LineaTicketRow::getEtiqueta, LineaTicketRow::getValor)
-                .containsExactly(tuple("Periodos pagados", "4 normales / 0 extemp."),
+                .containsExactly(tuple("Periodos pagados", "4 (normales 4, extemporáneos 0)"),
+                        tuple("Fecha de contrato anterior → nueva", "16/07/2026 → 13/08/2026"),
+                        tuple("Vencimiento anterior → nuevo", "13/08/2026 → 10/09/2026"),
                         tuple("Comercialización", "25/09/2026"));
         assertThat(params.get("P_NUEVO_VENCIMIENTO")).isEqualTo("10/septiembre/2026");
         assertThat(renglones(params, "P_TOTALES"))
@@ -238,7 +243,8 @@ class TicketMovimientoServiceTest {
                 .extracting(LineaTicketRow::getEtiqueta, LineaTicketRow::getValor)
                 .contains(tuple("Capital", "$1,195.00"));
         assertThat(renglones(params, "P_MOVIMIENTO")).extracting(LineaTicketRow::getEtiqueta)
-                .doesNotContain("Nuevo vencimiento", "Comercialización");
+                .doesNotContain("Nuevo vencimiento", "Comercialización",
+                        "Fecha de contrato anterior → nueva", "Vencimiento anterior → nuevo");
         // Finiquito no imprime la línea grande de nuevo vencimiento (no hay refrendo que extender)
         assertThat(params.get("P_NUEVO_VENCIMIENTO")).isNull();
         assertThat(params.get("P_TOTAL_LETRA")).isEqualTo("*** MIL DOSCIENTOS NOVENTA PESOS 92/100 M.N. ***");

@@ -1,6 +1,7 @@
 package com.ignis.prestamil.service;
 
 import com.ignis.prestamil.exception.BadRequestException;
+import com.ignis.prestamil.exception.ConflictException;
 import com.ignis.prestamil.exception.ForbiddenException;
 import com.ignis.prestamil.exception.ResourceNotFoundException;
 import com.ignis.prestamil.model.AccionContrato;
@@ -946,14 +947,40 @@ class MovimientoContratoServiceTest {
         }
 
         @Test
-        void importeDistintoAlCotizado_400_paraVolverACotizar() {
+        void importeDistintoAlCotizado_409_paraVolverACotizar() {
+            // D-01: distinguir del 400 ("mal payload") del 409 ("estado del contrato cambió").
             contratoC2();
             MovimientoRequest req = request(TipoOperacion.REFRENDO, efectivo("100.00"));
             req.setTotalCotizado(new BigDecimal("90.00"));
 
             assertThatThrownBy(() -> service.registrar(req, "cajero1"))
-                    .isInstanceOf(BadRequestException.class)
+                    .isInstanceOf(ConflictException.class)
                     .hasMessageContaining("Vuelva a cotizar");
+            verify(movimientoRepository, never()).save(any());
+        }
+
+        @Test
+        void refrendoParcialConPeriodosDistintosAlCotizado_409() {
+            // D-01: si el usuario envía 10 periodos pero el motor los recorta a 2 (max transcurridos − 1),
+            // devolver 409 en lugar de aplicar el valor en silencio.
+            service = servicioEn(LocalDate.of(2026, 9, 21));
+            PlazoParametro pp = paramAlhajas();
+            pp.setPorcInteres(new BigDecimal("0.9100"));
+            contrato1493(LocalDate.of(2026, 9, 3), LocalDate.of(2026, 10, 1), pp);
+
+            MovimientoRequest r = new MovimientoRequest();
+            r.setContratoId(42L);
+            r.setTipoOperacion(TipoOperacion.REFRENDO_PARCIAL);
+            r.setPeriodos(10);
+            r.setRequestId("req-conflict");
+            r.setPago(efectivo("200.00"));
+            // El usuario cotizó algo distinto a lo que el motor habría aplicado hoy
+            r.setTotalCotizado(new BigDecimal("200.00"));
+
+            assertThatThrownBy(() -> service.registrar(r, "cajero1"))
+                    .isInstanceOf(ConflictException.class)
+                    .hasMessageContaining("10")
+                    .hasMessageContaining("2");
             verify(movimientoRepository, never()).save(any());
         }
 
@@ -1414,16 +1441,25 @@ class MovimientoContratoServiceTest {
         }
 
         @Test
-        void plazoSinReposicionHabilitada_400_yNoTocaNada() {
+        void d15_plazoSinReposicionHabilitada_registraReEn0ConObservacionYPermiteReimpresion() {
+            // D-15: antes esto respondía 400 "El plazo no tiene habilitado el cobro de reposición".
+            // Ahora el servicio registra un RE en $0 con la observación "sin cobro de reposición
+            // configurado" para que el flujo de C-02 pueda emitir el PDF del contrato igual
+            // (COCAE tenía la reposición "inhabilitada en cero" y aun así reimprimía).
             usuarioConRol("cajero1", ROL_CAJERO);
             PlazoParametro sinCobro = paramAlhajas();
             sinCobro.setCobrarReposicionContrato(false);
             contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13), sinCobro);
 
-            assertThatThrownBy(() -> service.cobrarReposicion(42L, request(efectivo("0.00")), "cajero1"))
-                    .isInstanceOf(BadRequestException.class)
-                    .hasMessageContaining("reposición");
-            verify(movimientoRepository, never()).save(any());
+            service.cobrarReposicion(42L, request(efectivo("0.00")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RE);
+            assertThat(mov.getMonto()).isEqualByComparingTo("0.00");
+            assertThat(mov.getIva()).isEqualByComparingTo("0.00");
+            assertThat(mov.getObservaciones()).contains("sin cobro de reposición configurado");
+            // RE en $0 no mueve caja, pero sí persiste y emite folio para el ticket.
+            assertThat(mov.getFolioNota()).isEqualTo(27323);
         }
 
         @Test
@@ -1436,6 +1472,97 @@ class MovimientoContratoServiceTest {
                     .isInstanceOf(BadRequestException.class)
                     .hasMessageContaining("turno activo");
             verify(movimientoRepository, never()).save(any());
+        }
+
+        // D-08: casos explícitos del plan.
+
+        @Test
+        void d08_cobrarReposicion40Fijo_cobraYRegistraMovimientoRE() {
+            // Plan D-08: "capturamos reposición de $40 fijo y queremos verla cobrarse".
+            // $40 incluye IVA (default): subtotal 34.48 + IVA 5.52 = 40.00.
+            usuarioConRol("cajero1", ROL_CAJERO);
+            contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13), reposicionPorMontoFijo("40.00"));
+
+            service.cobrarReposicion(42L, request(efectivo("40.00")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RE);
+            assertThat(mov.getMonto()).isEqualByComparingTo("40.00");
+            assertThat(mov.getIva()).isEqualByComparingTo("5.52");
+            assertThat(mov.getImporteEfectivo()).isEqualByComparingTo("40.00");
+            assertThat(mov.getFolioNota()).isEqualTo(27323);
+        }
+
+        @Test
+        void d15_contratoEN_VENTA_sinConfigReposicion_registraReEn0() {
+            // D-15: contrato EN_VENTA sin reposición configurada en el plazo → RE en $0 con
+            // observación específica, para que la reimpresión del contrato siga disponible.
+            usuarioConRol("cajero1", ROL_CAJERO);
+            PlazoParametro sinCobro = paramAlhajas();
+            sinCobro.setCobrarReposicionContrato(false);
+            Contrato c = contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13), sinCobro);
+            c.setEstatus(EstatusContrato.EN_VENTA);
+            c.getPartidas().forEach(p -> p.setEstatus(EstatusPartida.OP));
+
+            service.cobrarReposicion(42L, request(efectivo("0.00")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RE);
+            assertThat(mov.getMonto()).isEqualByComparingTo("0.00");
+            assertThat(mov.getObservaciones()).contains("sin cobro de reposición configurado");
+        }
+
+        @Test
+        void d15_contratoEN_VENTA_conPartidaApartada_rechazaConMotivoReal() {
+            // D-15: una prenda APA desvía el estatus derivado a APARTADO (RN-17). El mensaje
+            // debe decir el motivo real, no el genérico "plazo no tiene reposición".
+            usuarioConRol("cajero1", ROL_CAJERO);
+            Contrato c = contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13),
+                    reposicionPorMontoFijo("40.00"));
+            c.setEstatus(EstatusContrato.EN_VENTA);
+            c.getPartidas().get(0).setEstatus(EstatusPartida.APA);
+
+            assertThatThrownBy(() -> service.cobrarReposicion(42L, request(efectivo("40.00")), "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("apartada");
+            verify(movimientoRepository, never()).save(any());
+        }
+
+        @Test
+        void d15_contratoFINIQUITADO_rechazaConMotivoReal() {
+            // D-15: finiquitado no permite reimprimir (solo consulta y reimpresión del último ticket).
+            usuarioConRol("cajero1", ROL_CAJERO);
+            Contrato c = contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13),
+                    reposicionPorMontoFijo("40.00"));
+            c.setEstatus(EstatusContrato.FINIQUITADO);
+
+            assertThatThrownBy(() -> service.cobrarReposicion(42L, request(efectivo("40.00")), "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("finiquitado");
+            verify(movimientoRepository, never()).save(any());
+        }
+
+        @Test
+        void d08_contratoEN_VENTA_sinPartidasVendidasOApartadas_permiteReposicion() {
+            // D-08 + RN-16: la reposición también se permite con el contrato en venta,
+            // siempre que ninguna prenda esté vendida o apartada. El servicio lee el PlazoParametro
+            // del plazo + tipoPrenda de la primera partida del contrato (obtenerParametro).
+            usuarioConRol("cajero1", ROL_CAJERO);
+            Contrato c = contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13),
+                    reposicionPorMontoFijo("40.00"));
+            c.setEstatus(EstatusContrato.EN_VENTA);
+            // Partidas en operación (NO vendidas ni apartadas): el EstatusContratoResolver
+            // resolveria el contrato a EN_VENTA (no VENDIDO/APARTADO), que es la precondicion.
+            c.getPartidas().forEach(p -> p.setEstatus(EstatusPartida.OP));
+
+            service.cobrarReposicion(42L, request(efectivo("40.00")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RE);
+            assertThat(mov.getMonto()).isEqualByComparingTo("40.00");
+            // El movimiento NO cambia el estatus del contrato (reposición solo imprime).
+            assertThat(mov.getEstatusAnterior()).isEqualTo(EstatusContrato.EN_VENTA);
+            assertThat(mov.getEstatusNuevo()).isEqualTo(EstatusContrato.EN_VENTA);
         }
     }
 
@@ -2090,6 +2217,261 @@ class MovimientoContratoServiceTest {
             assertThatThrownBy(() -> service.cancelar(208L, motivo("Error"), "gerente1"))
                     .isInstanceOf(BadRequestException.class)
                     .hasMessageContaining("motivo");
+        }
+
+        // ------------------------------------------------------------------
+        // D-11: cancelación de contrato por POST /api/contratos/{id}/cancelar
+        // ------------------------------------------------------------------
+
+        /** Devuelve la lista de movimientos del contrato ordenada cronológicamente para `cancelarContrato`. */
+        private void listarMovimientos(Long contratoId, MovimientoContrato... movs) {
+            lenient().when(movimientoRepository.findByContratoIdOrderByFechaAsc(contratoId))
+                    .thenReturn(List.of(movs));
+        }
+
+        /** Test 1 de D-11: contrato creado hoy → cancelado, partidas CAN, EMP marcado, ENTRADA de caja. */
+        @Test
+        void cancelarContratoDelDia_contratoCANCELADO_partidasCAN_entradaDeCajaIgualAlPrestamo() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato emp = empDeHoy(501L, c);
+            emp.setMonto(new BigDecimal("1195.00"));
+            listarMovimientos(42L, emp);
+            lenient().when(movimientoRepository
+                    .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(42L, TipoMovimiento.RE))
+                    .thenReturn(Optional.of(emp));
+
+            MovimientoResponse resp = service.cancelarContrato(
+                    42L, motivo("El cliente se arrepintió del empeño"), "gerente1");
+
+            // Contrato cerrado y sin saldo
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.CANCELADO);
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("0");
+            // Partidas devueltas al cliente
+            assertThat(c.getPartidas()).allSatisfy(
+                    p -> assertThat(p.getEstatus()).isEqualTo(EstatusPartida.CAN));
+            // EMP marcado (no borrado) con usuario, fecha y motivo
+            assertThat(emp.getCancelado()).isTrue();
+            assertThat(emp.getMotivoCancelacion()).isEqualTo("El cliente se arrepintió del empeño");
+            assertThat(emp.getUsuarioCancela().getNombreUsuario()).isEqualTo("gerente1");
+            assertThat(emp.getFechaCancelacion()).isEqualTo(LocalDateTime.of(2026, 8, 11, 12, 30));
+            // ENTRADA de caja por el monto del préstamo, ligada al EMP → el saldo del turno queda
+            // compensado respecto a la SALIDA de la creación (préstamo entregado): neto = 0.
+            verify(movimientoCajaService).registrar(any(Turno.class), eq(1),
+                    eq(com.ignis.prestamil.model.TipoMovimientoCaja.ENTRADA),
+                    org.mockito.ArgumentMatchers.contains("CANCELACIÓN DE CONTRATO 1493"),
+                    org.mockito.ArgumentMatchers.argThat(
+                            (BigDecimal m) -> m != null && m.compareTo(new BigDecimal("1195.00")) == 0),
+                    any(Usuario.class), eq(emp));
+            // Bitácora obligatoria
+            verify(bitacoraRepository).save(any(Bitacora.class));
+            // El id devuelto es el EMP cancelado — el frontend lo usa para pedir el ticket
+            assertThat(resp.getId()).isEqualTo(501L);
+            assertThat(resp.getCancelado()).isTrue();
+        }
+
+        /**
+         * Test 2 de D-11: con una reposición del día previa, se cancela el contrato y el RE sigue
+         * vigente. Solo se registra la ENTRADA de la cancelación — los $40 de la reposición no se
+         * tocan en caja.
+         */
+        @Test
+        void cancelarContratoConReposicionDelDia_cancelaContrato_reVigente_cajaConservaReposicion() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato emp = empDeHoy(502L, c);
+            emp.setMonto(new BigDecimal("1195.00"));
+            MovimientoContrato re = reposicionDeHoy(503L, c);
+            re.setMonto(new BigDecimal("40.00"));
+            listarMovimientos(42L, emp, re);
+            // El repositorio excluye los RE: el "último cancelable" es el EMP
+            lenient().when(movimientoRepository
+                    .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(42L, TipoMovimiento.RE))
+                    .thenReturn(Optional.of(emp));
+
+            service.cancelarContrato(42L, motivo("Cliente se arrepintió, el RE no se revierte"), "gerente1");
+
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.CANCELADO);
+            assertThat(emp.getCancelado()).isTrue();
+            // RE sigue vigente (C-03): no se cancela ni se devuelve
+            assertThat(re.getCancelado()).isFalse();
+            // Caja: solo la ENTRADA de la cancelación por los $1195; los $40 del RE se quedan
+            verify(movimientoCajaService, times(1)).registrar(any(Turno.class), eq(1),
+                    eq(com.ignis.prestamil.model.TipoMovimientoCaja.ENTRADA),
+                    org.mockito.ArgumentMatchers.contains("CANCELACIÓN DE CONTRATO"),
+                    org.mockito.ArgumentMatchers.argThat(
+                            (BigDecimal m) -> m != null && m.compareTo(new BigDecimal("1195.00")) == 0),
+                    any(Usuario.class), eq(emp));
+            // Y no hay ninguna salida ligada al RE
+            verify(movimientoCajaService, never()).registrar(any(), any(),
+                    eq(com.ignis.prestamil.model.TipoMovimientoCaja.SALIDA),
+                    any(), any(), any(), any());
+        }
+
+        /** Test 3 de D-11: con un refrendo del día vigente → 400 "cancele primero el último". */
+        @Test
+        void cancelarContratoConCobroVigente_400_sinTocarEstado() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato emp = empDeHoy(504L, c);
+            // Un refrendo posterior al EMP, vigente
+            MovimientoContrato rf = new MovimientoContrato();
+            rf.setId(505L);
+            rf.setContrato(c);
+            rf.setTipo(TipoMovimiento.RF);
+            rf.setFecha(LocalDateTime.of(HOY, java.time.LocalTime.of(13, 0)));
+            rf.setCancelado(false);
+            rf.setTurno(turno);
+            listarMovimientos(42L, emp, rf);
+            lenient().when(movimientoRepository
+                    .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(42L, TipoMovimiento.RE))
+                    .thenReturn(Optional.of(rf));
+
+            assertThatThrownBy(() -> service.cancelarContrato(
+                    42L, motivo("Intento con cobro posterior"), "gerente1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("cancele primero el último");
+
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
+            assertThat(emp.getCancelado()).isFalse();
+            verify(movimientoCajaService, never()).registrar(any(), any(), any(), any(), any(), any(), any());
+            verify(bitacoraRepository, never()).save(any(Bitacora.class));
+        }
+
+        /** Test 4 de D-11: contrato de ayer → 400 "Solo se pueden cancelar contratos del día". */
+        @Test
+        void cancelarContratoDeAyer_400_sinTocarEstado() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato emp = empDeHoy(506L, c);
+            emp.setFecha(LocalDateTime.of(2026, 8, 10, 12, 0));
+            listarMovimientos(42L, emp);
+            lenient().when(movimientoRepository
+                    .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(42L, TipoMovimiento.RE))
+                    .thenReturn(Optional.of(emp));
+
+            assertThatThrownBy(() -> service.cancelarContrato(
+                    42L, motivo("Cancelación tardía"), "gerente1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("día");
+
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
+            assertThat(emp.getCancelado()).isFalse();
+            verify(movimientoCajaService, never()).registrar(any(), any(), any(), any(), any(), any(), any());
+        }
+
+        /** Test 5 de D-11: cajero → 403 (rol no permitido para cancelar). */
+        @Test
+        void cancelarContratoConCajero_403_sinTocarEstado() {
+            Contrato c = contratoC2();
+            configuracionRolesCancelar("5");
+            usuarioConRol("cajero1", ROL_CAJERO);
+            MovimientoContrato emp = empDeHoy(507L, c);
+            listarMovimientos(42L, emp);
+
+            assertThatThrownBy(() -> service.cancelarContrato(
+                    42L, motivo("Cajero intenta cancelar"), "cajero1"))
+                    .isInstanceOf(ForbiddenException.class);
+
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
+            assertThat(emp.getCancelado()).isFalse();
+            verify(movimientoCajaService, never()).registrar(any(), any(), any(), any(), any(), any(), any());
+        }
+
+        /** Test 6 de D-11: sin motivo → 400 "motivo obligatorio…" (texto libre, mínimo 10 caracteres). */
+        @Test
+        void cancelarContratoSinMotivo_400_sinTocarEstado() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato emp = empDeHoy(508L, c);
+            listarMovimientos(42L, emp);
+
+            assertThatThrownBy(() -> service.cancelarContrato(42L, motivo(""), "gerente1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("motivo");
+
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
+            assertThat(emp.getCancelado()).isFalse();
+        }
+
+        /** Test 7 de D-11: cancelar dos veces → 400 "ya está cancelado" en la segunda llamada. */
+        @Test
+        void cancelarContratoDosVeces_segundaLlamadaDa400YaEstaCancelado() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato emp = empDeHoy(509L, c);
+            emp.setMonto(new BigDecimal("1195.00"));
+            listarMovimientos(42L, emp);
+            lenient().when(movimientoRepository
+                    .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(42L, TipoMovimiento.RE))
+                    .thenReturn(Optional.of(emp));
+
+            service.cancelarContrato(42L, motivo("Primer intento de cancelación"), "gerente1");
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.CANCELADO);
+
+            // Segunda llamada: el contrato ya está CANCELADO — mensaje específico
+            assertThatThrownBy(() -> service.cancelarContrato(
+                    42L, motivo("Intento duplicado de cancelación"), "gerente1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("ya está cancelado");
+
+            // La ENTRADA de caja se registró una sola vez
+            verify(movimientoCajaService, times(1)).registrar(any(), any(),
+                    eq(com.ignis.prestamil.model.TipoMovimientoCaja.ENTRADA),
+                    any(), any(), any(), any());
+        }
+
+        /** Test 8 de D-11: contrato sin EMP → mensaje específico "contacte a Sistemas". */
+        @Test
+        void cancelarContratoSinEmp_400ConMensajeEspecificoDeSistemas() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            // Lista de movimientos vacía: contrato pre-F0 sin EMP
+            listarMovimientos(42L);
+
+            assertThatThrownBy(() -> service.cancelarContrato(
+                    42L, motivo("Cliente pide cancelar sin EMP"), "gerente1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("EMP")
+                    .hasMessageContaining("Sistemas");
+
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
+            verify(movimientoCajaService, never()).registrar(any(), any(), any(), any(), any(), any(), any());
+            verify(bitacoraRepository, never()).save(any(Bitacora.class));
+        }
+
+        /**
+         * Test 9 de D-11: fallo a mitad del proceso → nada cambia. Las validaciones corren antes de
+         * tocar partidas/EMP/caja/bitácora; una validación que rechaza (aquí: turno cerrado del EMP)
+         * no deja efectos secundarios. En producción `@Transactional` extiende esta garantía a los
+         * fallos tardíos (BD caída, etc.): el rollback revierte las entidades modificadas en memoria
+         * y la ENTRADA de caja no se escribe porque va en la misma transacción.
+         */
+        @Test
+        void cancelarContratoFallaMitadProceso_nadaCambia() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato emp = empDeHoy(510L, c);
+            // Turno del EMP ya cerrado — la validación falla a mitad del proceso
+            emp.getTurno().setActivo(false);
+            listarMovimientos(42L, emp);
+            lenient().when(movimientoRepository
+                    .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(42L, TipoMovimiento.RE))
+                    .thenReturn(Optional.of(emp));
+
+            assertThatThrownBy(() -> service.cancelarContrato(
+                    42L, motivo("Intento con turno ya cerrado"), "gerente1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("turno");
+
+            // Nada cambió
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("1195.00");
+            assertThat(c.getPartidas()).allSatisfy(
+                    p -> assertThat(p.getEstatus()).isEqualTo(EstatusPartida.OP));
+            assertThat(emp.getCancelado()).isFalse();
+            verify(movimientoCajaService, never()).registrar(any(), any(), any(), any(), any(), any(), any());
+            verify(bitacoraRepository, never()).save(any(Bitacora.class));
         }
 
         @Test

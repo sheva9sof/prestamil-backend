@@ -14,6 +14,7 @@ import com.ignis.prestamil.service.TipoPrendaService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -91,37 +92,41 @@ public class PrendaController {
     }
 
     /**
-     * Crea un valor seleccionable dentro del catálogo de prendas.
+     * Crea un valor seleccionable dentro del catálogo de prendas. Solo Sistemas (403 al resto).
      * POST /api/prendas/valores
      */
     @PostMapping("/valores")
     public ResponseEntity<CatValorPrendaResponse> createValorPrenda(
-            @Valid @RequestBody CatValorPrendaRequest request) {
-        CatValorPrenda saved = catValorPrendaService.create(request);
+            @Valid @RequestBody CatValorPrendaRequest request,
+            Authentication authentication) {
+        CatValorPrenda saved = catValorPrendaService.create(request, authentication.getName());
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(prendaMapper.toCatValorPrendaResponse(saved));
     }
 
     /**
-     * Actualiza los datos editables de un valor del catálogo de prendas.
+     * Actualiza los datos editables de un valor del catálogo de prendas. Solo Sistemas (403 al resto).
      * PUT /api/prendas/valores/{idValorAtributo}
      */
     @PutMapping("/valores/{idValorAtributo}")
     public ResponseEntity<CatValorPrendaResponse> updateValorPrenda(
             @PathVariable Integer idValorAtributo,
-            @Valid @RequestBody CatValorPrendaRequest request) {
-        CatValorPrenda updated = catValorPrendaService.update(idValorAtributo, request);
+            @Valid @RequestBody CatValorPrendaRequest request,
+            Authentication authentication) {
+        CatValorPrenda updated = catValorPrendaService.update(
+                idValorAtributo, request, authentication.getName());
         return ResponseEntity.ok(prendaMapper.toCatValorPrendaResponse(updated));
     }
 
     /**
      * Elimina físicamente un valor del catálogo de prendas.
-     * Rechaza con 400 si el valor ya fue usado en alguna partida de contrato.
+     * Rechaza con 400 si el valor ya fue usado en alguna partida de contrato. Solo Sistemas (403 al resto).
      * DELETE /api/prendas/valores/{idValorAtributo}
      */
     @DeleteMapping("/valores/{idValorAtributo}")
-    public ResponseEntity<Void> deleteValorPrenda(@PathVariable Integer idValorAtributo) {
-        catValorPrendaService.deleteValor(idValorAtributo);
+    public ResponseEntity<Void> deleteValorPrenda(@PathVariable Integer idValorAtributo,
+                                                  Authentication authentication) {
+        catValorPrendaService.deleteValor(idValorAtributo, authentication.getName());
         return ResponseEntity.noContent().build();
     }
 

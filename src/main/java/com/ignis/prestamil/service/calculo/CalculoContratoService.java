@@ -184,19 +184,32 @@ public class CalculoContratoService {
 
         // Periodos a cobrar: todos los transcurridos, salvo en el parcial (RN-14)
         int maximos = s.periodosTranscurridos();
+        int minimos = s.periodosTranscurridos();
         int aplicados = s.periodosTranscurridos();
         if (operacion == TipoOperacion.REFRENDO_PARCIAL) {
             maximos = s.periodosTranscurridos() - 1;
-            if (maximos < 1) {
+            // D-03 (RN-31): en VENCIDO/EN_VENTA (TODO Q2 confirmar VENCIDO) el parcial exige cubrir
+            // todos los extemporáneos + 1 para regresar al contrato con al menos una semana de
+            // vigencia; en VIGENTE/EN_GRACIA basta un periodo.
+            minimos = s.extemporaneo() ? s.periodosExtemporaneos() + 1 : 1;
+            if (maximos < minimos) {
                 throw new BadRequestException(
-                        "El refrendo parcial requiere al menos 2 periodos transcurridos; use Refrendar");
+                        "El refrendo parcial no está disponible: con "
+                                + s.periodosTranscurridos() + " periodo(s) transcurridos y "
+                                + s.periodosExtemporaneos()
+                                + " extemporáneo(s) no se puede cubrir el mínimo requerido");
             }
             if (periodosSolicitados == null || periodosSolicitados < 1) {
-                throw new BadRequestException("Indique cuántos periodos va a cubrir (mínimo 1)");
+                throw new BadRequestException("Indique cuántos periodos va a cubrir (mínimo "
+                        + minimos + ")");
             }
-            // Si pide de más se ajusta al máximo en vez de rechazar
-            aplicados = Math.min(periodosSolicitados, maximos);
-            if (aplicados < periodosSolicitados) {
+            // Si pide de más se ajusta al máximo; si pide de menos se ajusta al mínimo (D-03)
+            aplicados = Math.min(Math.max(periodosSolicitados, minimos), maximos);
+            if (aplicados > periodosSolicitados) {
+                advertencias.add(String.format(
+                        "Se ajustó de %d a %d periodos: para salir de venta debe cubrir al menos %d (todos los extemporáneos + 1)",
+                        periodosSolicitados, aplicados, minimos));
+            } else if (aplicados < periodosSolicitados) {
                 advertencias.add(String.format(
                         "Se ajustó de %d a %d periodos: en refrendo parcial el máximo es uno menos de los transcurridos",
                         periodosSolicitados, aplicados));
@@ -239,7 +252,7 @@ public class CalculoContratoService {
                 operacion,
                 tipoMovimiento(operacion, s, extemporaneosAplicados),
                 p, s,
-                maximos, aplicados, normalesAplicados, extemporaneosAplicados,
+                maximos, minimos, aplicados, normalesAplicados, extemporaneosAplicados,
                 interesPorPeriodo(saldo, p),
                 desglose,
                 desglose.descuento(),
@@ -308,9 +321,17 @@ public class CalculoContratoService {
         return interesTotal.multiply(p.porcDescuentoInteres()).divide(CIEN, 2, RoundingMode.HALF_UP);
     }
 
-    /** La gracia solo perdona el atraso si se paga dentro de ella; rebasada, cuenta todo el atraso. */
+    /**
+     * La gracia solo perdona el atraso si se paga dentro de ella; rebasada, cuenta todo el atraso.
+     *
+     * <p>D-14 (2026-10-08): se eliminó la dependencia del toggle {@code aplicarSancion} —
+     * la sanción se aplica siempre con el porcentaje configurado. Si el negocio quiere "sin
+     * sanción", se configura {@code porcSancionSemanal=0}. El campo {@code aplicarSancion}
+     * sigue en {@link ParametrosCalculo} y en la columna {@code aplicar_sancion_por_periodo}
+     * por compatibilidad, pero ya no influye en el cálculo.</p>
+     */
     private int semanasSancion(int diasAtraso, ParametrosCalculo p) {
-        if (!p.aplicarSancion() || diasAtraso <= p.diasGraciaSancion()) {
+        if (diasAtraso <= p.diasGraciaSancion()) {
             return 0;
         }
         return Math.ceilDiv(diasAtraso, DIAS_SEMANA);

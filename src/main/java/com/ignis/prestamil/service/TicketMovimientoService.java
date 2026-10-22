@@ -174,7 +174,9 @@ public class TicketMovimientoService {
                 // El seguro no se cobra (GAP-09); se imprime como en COCAE
                 linea("% Seguro", porcentaje(BigDecimal.ZERO)),
                 linea("G.Oper. x Vta.", porcentaje(parametro != null ? parametro.getComisionPorVentaPrenda() : null)),
-                linea("Moratorios %", porcentaje(p.aplicarSancion() ? p.porcSancionSemanal() : BigDecimal.ZERO)),
+                // D-14: ticket imprime el % configurado (SIN gate aplicarSancion). Si se quiere "sin
+                // sanción", se configura el porcentaje en 0 — pero no se oculta el % divulgado.
+                linea("Moratorios %", porcentaje(p.porcSancionSemanal())),
                 linea("Desc. s/interés", porcentaje(mov.getPorcDescuentoInteres()) + "  "
                         + FormatoDocumento.money(descuento)),
                 linea("% IVA", porcentaje(p.porcIva()))));
@@ -185,9 +187,25 @@ public class TicketMovimientoService {
         if (mov.getTipo() == TipoMovimiento.RE) {
             movimiento.add(linea("REPOSICIÓN CONTRATO", nz(contrato.getFolio())));
         }
+        // D-02: "Periodos pagados: n (normales x, extemporáneos y)" para dejar en claro qué se cobró
         if (mov.getPeriodosNormales() != null && mov.getTipo() != TipoMovimiento.RE) {
-            movimiento.add(linea("Periodos pagados", mov.getPeriodosNormales() + " normales / "
-                    + mov.getSemanasVencidas() + " extemp."));
+            int normales = mov.getPeriodosNormales();
+            int extemp = mov.getSemanasVencidas() != null ? mov.getSemanasVencidas() : 0;
+            movimiento.add(linea("Periodos pagados",
+                    (normales + extemp) + " (normales " + normales + ", extemporáneos " + extemp + ")"));
+        }
+        // D-02: fechas antes → después tomadas de las columnas *_anterior / *_nueva del movimiento
+        if (esRefrendo(mov.getTipo())
+                && mov.getFechaContratoAnterior() != null && mov.getFechaContratoNueva() != null) {
+            movimiento.add(linea("Fecha de contrato anterior → nueva",
+                    mov.getFechaContratoAnterior().format(FECHA) + " → "
+                            + mov.getFechaContratoNueva().format(FECHA)));
+        }
+        if (esRefrendo(mov.getTipo())
+                && mov.getFechaVencAnterior() != null && mov.getFechaVencNueva() != null) {
+            movimiento.add(linea("Vencimiento anterior → nuevo",
+                    mov.getFechaVencAnterior().format(FECHA) + " → "
+                            + mov.getFechaVencNueva().format(FECHA)));
         }
         if (mov.getDiasGraciaUsados() != null && mov.getDiasGraciaUsados() > 0) {
             movimiento.add(linea("Días de gracia usados", String.valueOf(mov.getDiasGraciaUsados())));
@@ -501,9 +519,7 @@ public class TicketMovimientoService {
     private List<PartidaTicketRow> buildPartidas(List<PartidaContrato> partidas) {
         List<PartidaTicketRow> filas = new ArrayList<>();
         for (PartidaContrato p : partidas) {
-            String descripcion = Stream.of(p.getClavePrenda(), p.getDescripcion())
-                    .filter(parte -> parte != null && !parte.isBlank())
-                    .collect(Collectors.joining(" "));
+            String descripcion = FormatoDocumento.descripcionPartida(p);
             String kilatajeHechura = Stream.of(p.getKilataje() != null ? p.getKilataje() + "K" : null, p.getHechura())
                     .filter(parte -> parte != null && !parte.isBlank())
                     .collect(Collectors.joining(" / "));

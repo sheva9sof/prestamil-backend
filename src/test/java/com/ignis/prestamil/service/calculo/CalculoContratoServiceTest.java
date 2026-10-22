@@ -132,18 +132,36 @@ class CalculoContratoServiceTest {
     }
 
     // =========================================================================
-    // B. Toggle aplicarSancion
+    // B. Toggle aplicarSancion — D-14 removio el gate
     // =========================================================================
 
     @Test
-    void toggleApagadoConAtrasoGrande_sancion0() {
+    void toggleApagadoConAtrasoGrande_siguenCobrandoSancion() {
+        // D-14 (2026-10-08): el toggle aplicarSancion ya no influye en el calculo. La unica
+        // forma de "apagar" la sancion es configurar porcSancionSemanal=0. Un contrato con
+        // aplicarSancion=false pero porcSancionSemanal=2 debe cobrar la misma sancion que si
+        // tuviera el gate en true: 1000 x 2% x ceil(30/7) = 1000 x 0.02 x 5 = 100.00.
         LocalDate vencimiento = LocalDate.of(2026, 9, 1);
         LocalDate pago = vencimiento.plusDays(30);
         DesgloseSancion d = motor.calcularSancion(
                 new BigDecimal("1000.00"), paramsBase(2, false), vencimiento, pago);
-        // El motor computa semanas y dias como metadatos, pero el monto queda en 0 por el toggle
+        assertThat(d.diasAtraso()).isEqualTo(30);
+        assertThat(d.semanasVencidas()).isEqualTo(5);
+        assertThat(d.monto()).isEqualByComparingTo("100.00");
+    }
+
+    @Test
+    void porcSancionCero_desactivaCobro_independienteDelToggle() {
+        // D-14: "sin sancion" se expresa configurando porcSancionSemanal=0.
+        LocalDate vencimiento = LocalDate.of(2026, 9, 1);
+        LocalDate pago = vencimiento.plusDays(30);
+        ParametrosCalculo pSinSancion = new ParametrosCalculo(
+                new BigDecimal("3.0000"), new BigDecimal("2.0000"),
+                new BigDecimal("1.0000"), BigDecimal.ZERO,  // porcSancionSemanal = 0
+                2, true, new BigDecimal("16.00"), BigDecimal.ZERO);
+        DesgloseSancion d = motor.calcularSancion(
+                new BigDecimal("1000.00"), pSinSancion, vencimiento, pago);
         assertThat(d.monto()).isEqualByComparingTo("0.00");
-        assertThat(d.semanasVencidas()).isZero();
     }
 
     // =========================================================================

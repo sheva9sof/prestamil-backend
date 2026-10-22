@@ -16,6 +16,7 @@ public class ContratoMapper {
         ContratoResponse r = new ContratoResponse();
         r.setId(contrato.getId());
         r.setFolio(contrato.getFolio());
+        r.setNumBolsa(contrato.getNumBolsa());
 
         if (contrato.getCliente() != null) {
             Cliente c = contrato.getCliente();
@@ -57,6 +58,7 @@ public class ContratoMapper {
         PartidaContratoResponse r = new PartidaContratoResponse();
         r.setId(p.getId());
         r.setNumPartida(p.getNumPartida());
+        r.setCodigoBarras(p.getCodigoBarras());
 
         if (p.getTipoPrenda() != null) {
             r.setIdTipoPrenda(p.getTipoPrenda().getId());
@@ -68,6 +70,7 @@ public class ContratoMapper {
         }
 
         r.setClavePrenda(p.getClavePrenda());
+        r.setDescripcionGeneral(p.getDescripcionGeneral());
         r.setDescripcion(p.getDescripcion());
         r.setCantidad(p.getCantidad());
         r.setPesoNeto(p.getPesoNeto());

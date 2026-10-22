@@ -26,6 +26,13 @@ public class Contrato {
     @Column(name = "folio", length = 20, unique = true)
     private String folio;
 
+    /**
+     * Número de la bolsa donde se guardan las prendas (D-10). Consecutivo por sucursal e independiente
+     * del folio: se asigna al crear el contrato y no se reutiliza aunque el contrato se cancele.
+     */
+    @Column(name = "num_bolsa")
+    private Integer numBolsa;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "id_cliente", nullable = false)
     private Cliente cliente;

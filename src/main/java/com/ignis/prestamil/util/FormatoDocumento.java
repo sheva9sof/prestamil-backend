@@ -3,7 +3,9 @@ package com.ignis.prestamil.util;
 import com.ignis.prestamil.model.Cliente;
 import com.ignis.prestamil.model.Direccion;
 import com.ignis.prestamil.model.Empresa;
+import com.ignis.prestamil.model.PartidaContrato;
 import com.ignis.prestamil.model.Sucursal;
+import com.ignis.prestamil.model.Usuario;
 
 import java.math.BigDecimal;
 import java.text.DecimalFormat;
@@ -15,7 +17,7 @@ import java.util.stream.Stream;
 
 /**
  * Formatos de texto comunes a los documentos impresos (contrato y ticket de movimiento): nombres,
- * domicilios e importes.
+ * domicilios, importes y descripción de partidas.
  */
 public final class FormatoDocumento {
 
@@ -32,6 +34,16 @@ public final class FormatoDocumento {
     public static String nombreCompleto(Cliente c) {
         if (c == null) return "";
         return (nz(c.getNombre()) + " " + nz(c.getApellidoPaterno()) + " " + nz(c.getApellidoMaterno())).trim();
+    }
+
+    /** Nombre del usuario en mayúsculas ("SOPORTE TECNICO SISTEMAS"); sin nombre capturado, su usuario. */
+    public static String nombreUsuario(Usuario u) {
+        if (u == null) return "";
+        String nombre = Stream.of(u.getNombre(), u.getApellidos())
+                .filter(parte -> parte != null && !parte.isBlank())
+                .map(String::trim)
+                .collect(Collectors.joining(" "));
+        return (nombre.isEmpty() ? nz(u.getNombreUsuario()) : nombre).toUpperCase();
     }
 
     public static String domicilio(Direccion d) {
@@ -60,6 +72,23 @@ public final class FormatoDocumento {
                 .filter(Objects::nonNull)
                 .filter(parte -> !parte.isBlank())
                 .collect(Collectors.joining(", "));
+    }
+
+    /**
+     * Descripción de una partida para documentos impresos (D-09): primer renglón
+     * "CLAVE - Descripción general" del catálogo y segundo renglón la descripción específica
+     * de la pieza. Omite lo que falte (partidas sin catálogo o históricas sin snapshot).
+     */
+    public static String descripcionPartida(PartidaContrato p) {
+        if (p == null) return "";
+        String general = Stream.of(p.getClavePrenda(), p.getDescripcionGeneral())
+                .filter(parte -> parte != null && !parte.isBlank())
+                .map(String::trim)
+                .collect(Collectors.joining(" - "));
+        return Stream.of(general, p.getDescripcion())
+                .filter(parte -> parte != null && !parte.isBlank())
+                .map(String::trim)
+                .collect(Collectors.joining("\n"));
     }
 
     private static String nz(String s) {

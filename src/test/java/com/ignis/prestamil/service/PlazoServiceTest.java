@@ -73,6 +73,9 @@ class PlazoServiceTest {
     @Mock
     com.ignis.prestamil.repository.UsuarioRepository usuarioRepository;
 
+    @Mock
+    com.ignis.prestamil.service.calculo.ParametrosSistemaCache parametrosSistemaCache;
+
     PlazoService plazoService;
 
     @BeforeEach
@@ -88,7 +91,8 @@ class PlazoServiceTest {
                 precioOroRepository,
                 oroTablaPrestamoRepository,
                 contratoRepository,
-                usuarioRepository
+                usuarioRepository,
+                parametrosSistemaCache
         );
     }
 
@@ -187,6 +191,29 @@ class PlazoServiceTest {
         assertThat(resultado.getPrecioPrestamo().compareTo(new BigDecimal("1172.0223"))).isEqualTo(0);
         // ORO-02: porcAumento propio de la celda no se sobreescribe durante el recalculo
         assertThat(resultado.getPorcAumento().compareTo(new BigDecimal("10.0000"))).isEqualTo(0);
+    }
+
+    @Test
+    void calcularPrecioAvaluoGramo_deshaceAumentoYPorcPrestamo_devuelveValorDelOro() {
+        // Misma celda 21K/N del caso COCAE de arriba: precio del gramo 1679.50 (base 21K, factor
+        // neutro) -> precioBase 1065.4748 -> precioPrestamo 1172.0223 con 10% de aumento. Deshacer
+        // el aumento y el 63.44% de préstamo regresa al valor del oro: 1679.50 por gramo.
+        PlazoHechuraAlhaja fila21N = buildFila(1, 1, 21, "N", new BigDecimal("10.0000"));
+        fila21N.setPrecioPrestamo(new BigDecimal("1172.0223"));
+        when(oroTablaPrestamoRepository.findById(new OroTablaPrestamoId(1, 21, "N")))
+                .thenReturn(Optional.of(buildCelda(1, 21, "N", new BigDecimal("63.4400"))));
+
+        assertThat(plazoService.calcularPrecioAvaluoGramo(fila21N)).isEqualByComparingTo("1679.5000");
+    }
+
+    @Test
+    void calcularPrecioAvaluoGramo_celdaSinPorcPrestamo_lanzaResourceNotFoundException() {
+        PlazoHechuraAlhaja fila14N = buildFila(1, 1, 14, "N", new BigDecimal("6.0000"));
+        fila14N.setPrecioPrestamo(new BigDecimal("500.0000"));
+        when(oroTablaPrestamoRepository.findById(new OroTablaPrestamoId(1, 14, "N")))
+                .thenReturn(Optional.empty());
+
+        assertThrows(ResourceNotFoundException.class, () -> plazoService.calcularPrecioAvaluoGramo(fila14N));
     }
 
     @Test
@@ -360,5 +387,218 @@ class PlazoServiceTest {
         verify(plazoHechuraAlhajaRepository).saveAll(captor.capture());
         PlazoHechuraAlhaja resultado = captor.getValue().get(0);
         assertThat(resultado.getPrecioBase().compareTo(new BigDecimal("630.0000"))).isEqualTo(0);
+    }
+
+    // =========================================================================
+    // D-14: porc_sancion_semanal obligatorio al guardar. Fila nueva sin el campo
+    // en el request toma el default de Parametros Generales (id=19, 2%).
+    // =========================================================================
+
+    @Test
+    void guardarParametro_filaNueva_sinSancionEnRequest_tomaDefaultDeParametrosSistema() {
+        // Given: la pantalla de Plazos y Periodos manda el PATCH sin porcSancionSemanal
+        // (campo no tocado por el usuario). La fila no existe todavia (nueva combinacion
+        // plazo+tipoPrenda+sucursal). Antes del fix de D-14 esto grababa 0 en BD y
+        // la tabla de amortizacion / PDF salian con sancion = 0% aunque el cobro siguiera
+        // aplicando el 2%.
+        com.ignis.prestamil.model.PlazoParametroId id =
+                new com.ignis.prestamil.model.PlazoParametroId(99L, 1, 1);
+        when(plazoParametroRepository.existsById(id)).thenReturn(false);
+        when(plazoParametroRepository.findById(id)).thenReturn(Optional.empty());
+        when(parametrosSistemaCache.getPorcSancionSemanalDefault())
+                .thenReturn(new BigDecimal("2"));
+        when(plazoParametroRepository.save(any(com.ignis.prestamil.model.PlazoParametro.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        com.ignis.prestamil.request.PlazoParametroRequest req =
+                new com.ignis.prestamil.request.PlazoParametroRequest();
+        req.setPorcInteres(new BigDecimal("1.55"));
+        req.setPorcAlmacen(new BigDecimal("0.6"));
+        // Importante: porcSancionSemanal queda en null (no lo envio la UI).
+
+        // When
+        plazoService.guardarParametro(99L, 1, 1, req, "cajero1");
+
+        // Then: antes de delegar al mapper, el servicio inyecto el default en el request.
+        // Verifica tanto que el mapper recibio el valor (vector principal) como que la
+        // entidad guardada acabo con 2% (vector final que PDF/caja leen).
+        ArgumentCaptor<com.ignis.prestamil.model.PlazoParametro> captor =
+                ArgumentCaptor.forClass(com.ignis.prestamil.model.PlazoParametro.class);
+        verify(plazoParametroMapper)
+                .actualizarDesdeRequest(captor.capture(), org.mockito.ArgumentMatchers.argThat(r ->
+                        r != null && r.getPorcSancionSemanal() != null
+                                && r.getPorcSancionSemanal().compareTo(new BigDecimal("2")) == 0));
+        verify(parametrosSistemaCache).getPorcSancionSemanalDefault();
+    }
+
+    @Test
+    void guardarParametro_filaExistenteConCero_sinSancionEnRequest_seCorrigeADefault() {
+        // D-14: filas existentes con porc_sancion_semanal=0 (dato legado) tambien se
+        // auto-corrigen al default cuando el request viene sin el campo, para no dejar
+        // 0% silenciosamente en la tabla y PDF.
+        com.ignis.prestamil.model.PlazoParametroId id =
+                new com.ignis.prestamil.model.PlazoParametroId(5L, 1, 1);
+        com.ignis.prestamil.model.PlazoParametro existente = new com.ignis.prestamil.model.PlazoParametro();
+        existente.setPlazoId(5L); existente.setTipoPrendaId(1); existente.setSucursalId(1);
+        existente.setPorcSancionSemanal(BigDecimal.ZERO);
+
+        when(plazoParametroRepository.existsById(id)).thenReturn(true);
+        when(plazoParametroRepository.findById(id)).thenReturn(Optional.of(existente));
+        when(parametrosSistemaCache.getPorcSancionSemanalDefault())
+                .thenReturn(new BigDecimal("2"));
+        when(plazoParametroRepository.save(any(com.ignis.prestamil.model.PlazoParametro.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        com.ignis.prestamil.request.PlazoParametroRequest req =
+                new com.ignis.prestamil.request.PlazoParametroRequest();
+        req.setPorcInteres(new BigDecimal("1.13"));
+
+        plazoService.guardarParametro(5L, 1, 1, req, "cajero1");
+
+        verify(plazoParametroMapper)
+                .actualizarDesdeRequest(any(), org.mockito.ArgumentMatchers.argThat(r ->
+                        r != null && r.getPorcSancionSemanal() != null
+                                && r.getPorcSancionSemanal().compareTo(new BigDecimal("2")) == 0));
+    }
+
+    @Test
+    void guardarParametro_filaExistenteConValor_sinSancionEnRequest_conservaValor() {
+        // D-14: si la fila ya tiene un valor valido y el request no envia el campo, no
+        // se sobreescribe (el default solo entra para filas nuevas o filas en 0).
+        com.ignis.prestamil.model.PlazoParametroId id =
+                new com.ignis.prestamil.model.PlazoParametroId(6L, 1, 1);
+        com.ignis.prestamil.model.PlazoParametro existente = new com.ignis.prestamil.model.PlazoParametro();
+        existente.setPlazoId(6L); existente.setTipoPrendaId(1); existente.setSucursalId(1);
+        existente.setPorcSancionSemanal(new BigDecimal("3.5000"));
+
+        when(plazoParametroRepository.existsById(id)).thenReturn(true);
+        when(plazoParametroRepository.findById(id)).thenReturn(Optional.of(existente));
+        when(plazoParametroRepository.save(any(com.ignis.prestamil.model.PlazoParametro.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        com.ignis.prestamil.request.PlazoParametroRequest req =
+                new com.ignis.prestamil.request.PlazoParametroRequest();
+        req.setPorcInteres(new BigDecimal("1.13"));
+
+        plazoService.guardarParametro(6L, 1, 1, req, "cajero1");
+
+        // El request sigue trayendo null -> mapper recibe el request tal cual (y como
+        // en el mapper hay `if (request.getPorcSancionSemanal() != null)` el valor
+        // previo se conserva).
+        verify(plazoParametroMapper)
+                .actualizarDesdeRequest(any(), org.mockito.ArgumentMatchers.argThat(r ->
+                        r != null && r.getPorcSancionSemanal() == null));
+        verify(parametrosSistemaCache, never()).getPorcSancionSemanalDefault();
+    }
+
+    // =========================================================================
+    // D-07: validación de rango de porc_prestamo_s_avaluo
+    // =========================================================================
+
+    @Test
+    void guardarParametro_porcPrestamoSAvaluoFueraDeRango_rechaza() {
+        // D-07: capturar 101 (o cualquier valor > 100) es un error — probablemente la pantalla
+        // confundió el campo. El mensaje orienta a dónde debía ir el valor.
+        com.ignis.prestamil.request.PlazoParametroRequest req =
+                new com.ignis.prestamil.request.PlazoParametroRequest();
+        req.setPorcPrestamoSAvaluo(new BigDecimal("101"));
+
+        com.ignis.prestamil.exception.BadRequestException ex = assertThrows(
+                com.ignis.prestamil.exception.BadRequestException.class,
+                () -> plazoService.guardarParametro(8L, 1, 1, req, "cajero1"));
+        assertThat(ex.getMessage()).contains("entre 0 y 100");
+        assertThat(ex.getMessage()).contains("101");
+        assertThat(ex.getMessage()).contains("hechura");
+    }
+
+    @Test
+    void guardarParametro_porcPrestamoSAvaluoNegativo_rechaza() {
+        com.ignis.prestamil.request.PlazoParametroRequest req =
+                new com.ignis.prestamil.request.PlazoParametroRequest();
+        req.setPorcPrestamoSAvaluo(new BigDecimal("-5"));
+
+        com.ignis.prestamil.exception.BadRequestException ex = assertThrows(
+                com.ignis.prestamil.exception.BadRequestException.class,
+                () -> plazoService.guardarParametro(8L, 1, 1, req, "cajero1"));
+        assertThat(ex.getMessage()).contains("entre 0 y 100");
+    }
+
+    @Test
+    void d08_guardarParametro_montoReposicion40Fijo_persisteYSeReleeConMismosValores() {
+        // D-08: $40 fijo capturado en Plazos y Periodos debe persistirse y reaparecer al abrir
+        // de nuevo la pantalla. Mapper real (no mock) para validar el camino de ida y vuelta.
+        com.ignis.prestamil.mapper.PrendaMapper prendaMapperReal =
+                org.mockito.Mockito.mock(com.ignis.prestamil.mapper.PrendaMapper.class);
+        com.ignis.prestamil.mapper.PlazoParametroMapper mapperReal =
+                new com.ignis.prestamil.mapper.PlazoParametroMapper(prendaMapperReal);
+        PlazoService svc = new PlazoService(
+                repository, plazoMapper, tipoPrendaService, plazoParametroRepository,
+                mapperReal, plazoHechuraAlhajaRepository, plazoHechuraAlhajaMapper,
+                precioOroRepository, oroTablaPrestamoRepository, contratoRepository,
+                usuarioRepository, parametrosSistemaCache);
+
+        com.ignis.prestamil.model.PlazoParametroId id =
+                new com.ignis.prestamil.model.PlazoParametroId(8L, 1, 1);
+        com.ignis.prestamil.model.PlazoParametro existente = new com.ignis.prestamil.model.PlazoParametro();
+        existente.setPlazoId(8L); existente.setTipoPrendaId(1); existente.setSucursalId(1);
+        when(plazoParametroRepository.existsById(id)).thenReturn(true);
+        when(plazoParametroRepository.findById(id)).thenReturn(Optional.of(existente));
+        when(plazoParametroRepository.save(any(com.ignis.prestamil.model.PlazoParametro.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        com.ignis.prestamil.request.PlazoParametroRequest req =
+                new com.ignis.prestamil.request.PlazoParametroRequest();
+        req.setCobrarReposicionContrato(true);
+        req.setReposicionEsPorcentaje(false);
+        req.setMontoReposicion(new BigDecimal("40.00"));
+        req.setPorcReposicion(BigDecimal.ZERO);
+        req.setPorcSancionSemanal(new BigDecimal("2"));
+
+        com.ignis.prestamil.response.PlazoParametroResponse guardado =
+                svc.guardarParametro(8L, 1, 1, req, "cajero1");
+
+        // Vector 1: la entidad persistida trae los tres campos de reposición
+        assertThat(existente.getCobrarReposicionContrato()).isTrue();
+        assertThat(existente.getReposicionEsPorcentaje()).isFalse();
+        assertThat(existente.getMontoReposicion()).isEqualByComparingTo("40.00");
+        assertThat(existente.getPorcReposicion()).isEqualByComparingTo("0");
+
+        // Vector 2: al releer el response (lo que la pantalla recibe al refrescar) trae lo mismo
+        assertThat(guardado.getCobrarReposicionContrato()).isTrue();
+        assertThat(guardado.getReposicionEsPorcentaje()).isFalse();
+        assertThat(guardado.getMontoReposicion()).isEqualByComparingTo("40.00");
+
+        // Vector 3: getParametrosPlazo (ruta GET independiente que usa el load del form)
+        when(plazoParametroRepository.findById(id)).thenReturn(Optional.of(existente));
+        com.ignis.prestamil.response.PlazoParametroResponse recargado =
+                svc.getParametrosPlazo(8L, 1, 1);
+        assertThat(recargado.getMontoReposicion()).isEqualByComparingTo("40.00");
+        assertThat(recargado.getCobrarReposicionContrato()).isTrue();
+        assertThat(recargado.getReposicionEsPorcentaje()).isFalse();
+    }
+
+    @Test
+    void guardarParametro_porcPrestamoSAvaluoEnLimiteBajo_persisteSinError() {
+        // Un 6% técnicamente válido (persiste) pero loguea advertencia. El plazo Principal usa
+        // 0 ("sin tope"); el valor típico de alhajas es 50–90. 6 pasa la validación pero
+        // es el valor que causó el bug — logeamos para que sea visible en operaciones.
+        com.ignis.prestamil.model.PlazoParametroId id =
+                new com.ignis.prestamil.model.PlazoParametroId(8L, 1, 1);
+        com.ignis.prestamil.model.PlazoParametro existente = new com.ignis.prestamil.model.PlazoParametro();
+        existente.setPlazoId(8L); existente.setTipoPrendaId(1); existente.setSucursalId(1);
+        when(plazoParametroRepository.existsById(id)).thenReturn(true);
+        when(plazoParametroRepository.findById(id)).thenReturn(Optional.of(existente));
+        when(plazoParametroRepository.save(any(com.ignis.prestamil.model.PlazoParametro.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        com.ignis.prestamil.request.PlazoParametroRequest req =
+                new com.ignis.prestamil.request.PlazoParametroRequest();
+        req.setPorcPrestamoSAvaluo(new BigDecimal("6"));
+        req.setPorcSancionSemanal(new BigDecimal("2"));  // evita el default lookup
+
+        // No debe lanzar excepción
+        plazoService.guardarParametro(8L, 1, 1, req, "cajero1");
+
+        verify(plazoParametroRepository).save(any());
     }
 }

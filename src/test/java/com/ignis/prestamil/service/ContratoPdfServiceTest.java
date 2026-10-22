@@ -537,4 +537,293 @@ class ContratoPdfServiceTest {
         v.setTotal(new BigDecimal(desempeno));
         return v;
     }
+
+    // =========================================================================
+    // D-05: mapeo correcto de columnas al jrxml (bug: column5 pintaba
+    // $F{intereses} donde el jrxml espera $F{almacenaje}) y filas extemporáneas
+    // S5/S6 contra C19 con tolerancia ±0.03.
+    // =========================================================================
+
+    private static String money(BigDecimal v) {
+        return "$" + new java.text.DecimalFormat("#,##0.00").format(v);
+    }
+
+    private static void assertCercanoMoney(String actualFormateado, String esperado, String etiqueta) {
+        BigDecimal actual = new BigDecimal(actualFormateado.replace("$", "").replace(",", ""));
+        BigDecimal esp = new BigDecimal(esperado);
+        BigDecimal tol = new BigDecimal("0.03");
+        assertThat(actual.subtract(esp).abs())
+                .as("%s: esperado %s, obtenido %s (±0.03)", etiqueta, esperado, actualFormateado)
+                .isLessThanOrEqualTo(tol);
+    }
+
+    @Test
+    void buildPagos_mapaIntereses_y_almacenaje_a_columnas_distintas() {
+        // Regresión D-05: el jrxml Column5 (almacenaje) tenía expresion $F{intereses} en vez de
+        // $F{almacenaje}. Si vuelve a cambiarse, este test lo detecta: con VencimientoResponse
+        // cuyos valores de interes/almacen son distintos, los campos del PagoRow deben coincidir
+        // con el VencimientoResponse origen, no entre sí.
+        lenient().when(parametrosSistemaCache.getIvaPorcentaje()).thenReturn(new BigDecimal("16.00"));
+        ContratoPdfService svc = construir();
+
+        Contrato c = fixtureContratoSimple();
+        List<VencimientoResponse> amort = amortizacion();   // interes y almacen distintos por fila
+
+        List<com.ignis.prestamil.util.PagoRow> filas = svc.buildPagos(amort, c);
+
+        assertThat(filas).hasSize(amort.size());
+        for (int i = 0; i < amort.size(); i++) {
+            VencimientoResponse v = amort.get(i);
+            com.ignis.prestamil.util.PagoRow r = filas.get(i);
+            assertThat(r.getIntereses()).as("fila %d intereses", i).isEqualTo(money(v.getInteres()));
+            assertThat(r.getAlmacenaje()).as("fila %d almacenaje", i).isEqualTo(money(v.getAlmacen()));
+            // El bug mostraba el interes en la columna almacenaje -> coincidían.
+            assertThat(r.getAlmacenaje()).as("fila %d: almacen != intereses", i)
+                    .isNotEqualTo(r.getIntereses());
+        }
+    }
+
+    @Test
+    void buildPagosExtemporaneos_conAplicarSancionFalse_sigueSumandoLaSancionEnFilasExtemporaneas() {
+        // D-14: la tabla extemporánea del PDF ya NO depende del toggle aplicarSancion. Las
+        // filas S5/S6 deben traer el mismo interes+sancion que cuando el toggle está en true.
+        // Fixture = C19 (préstamo 575.08, i 1.55%, a 0.6%, s 2%), pero con el gate apagado.
+        lenient().when(parametrosSistemaCache.getIvaPorcentaje()).thenReturn(new BigDecimal("16.00"));
+        ContratoPdfService svc = construir();
+
+        TipoPrenda plata = new TipoPrenda(); plata.setId(4); plata.setTipo("PLATAS");
+        Plazo plazo = new Plazo();
+        plazo.setId(6L); plazo.setDiasPorPeriodo(7); plazo.setNumeroPeriodos(4);
+
+        PartidaContrato p = new PartidaContrato();
+        p.setTipoPrenda(plata); p.setMontoPrestamo(new BigDecimal("575.08"));
+        p.setAvaluoContrato(new BigDecimal("600.00"));
+
+        Contrato c = new Contrato();
+        c.setId(1L); c.setPlazo(plazo); c.setSucursalId(1);
+        c.setMontoPrestamo(new BigDecimal("575.08"));
+        c.setFechaApertura(LocalDateTime.of(2026, 8, 15, 0, 0));
+        c.setFechaVencimiento(LocalDate.of(2026, 9, 12));
+        List<PartidaContrato> partidas = new ArrayList<>();
+        partidas.add(p); c.setPartidas(partidas);
+
+        PlazoParametro pp = new PlazoParametro();
+        pp.setPorcInteres(new BigDecimal("1.55"));
+        pp.setPorcAlmacen(new BigDecimal("0.6"));
+        pp.setPorcGastosAdmin(new BigDecimal("0"));
+        pp.setPorcSancionSemanal(new BigDecimal("2"));
+        pp.setDiasGraciaSinInteres(2);
+        pp.setAplicarSancionPorPeriodo(false);   // ← gate apagado
+
+        List<com.ignis.prestamil.util.PagoExtemporaneoRow> ext =
+                svc.buildPagosExtemporaneos(c, pp, plazo, c.getFechaVencimiento());
+
+        assertThat(ext).hasSize(2);
+        // Mismos valores de C19 que el test de aplicarSancion=true: interes+sanción incluida.
+        assertCercanoMoney(ext.get(0).getIntereses(),  "56.07", "S5 interes+sanción (gate=false)");
+        assertCercanoMoney(ext.get(0).getAlmacenaje(), "17.25", "S5 almacenaje (gate=false)");
+        assertCercanoMoney(ext.get(0).getIva(),        "11.73", "S5 iva (gate=false)");
+        assertCercanoMoney(ext.get(1).getIntereses(),  "76.49", "S6 interes+sanción (gate=false)");
+        assertCercanoMoney(ext.get(1).getAlmacenaje(), "20.70", "S6 almacenaje (gate=false)");
+    }
+
+    @Test
+    void buildPagosExtemporaneos_C19_S5_y_S6_cuadranConPlan() {
+        // C19 — préstamo 575.08, i 1.55%, a 0.6%, s 2%, plazo semanal 7×4. Las filas S5 y S6
+        // del bloque extemporáneo deben traer:
+        //   S5: interes+sancion 56.07 / almacen 17.25 / iva 11.73 / refrendo 85.05
+        //   S6: 76.49 / 20.70 / 15.55 / 112.74
+        lenient().when(parametrosSistemaCache.getIvaPorcentaje()).thenReturn(new BigDecimal("16.00"));
+        ContratoPdfService svc = construir();
+
+        TipoPrenda plata = new TipoPrenda(); plata.setId(4); plata.setTipo("PLATAS");
+        Plazo plazo = new Plazo();
+        plazo.setId(6L); plazo.setDiasPorPeriodo(7); plazo.setNumeroPeriodos(4);
+
+        PartidaContrato p = new PartidaContrato();
+        p.setTipoPrenda(plata); p.setDescripcion("pieza");
+        p.setAvaluoContrato(new BigDecimal("600.00")); p.setMontoPrestamo(new BigDecimal("575.08"));
+
+        Contrato c = new Contrato();
+        c.setId(1L); c.setPlazo(plazo); c.setSucursalId(1);
+        c.setMontoPrestamo(new BigDecimal("575.08"));
+        c.setFechaApertura(LocalDateTime.of(2026, 8, 15, 0, 0));
+        c.setFechaVencimiento(LocalDate.of(2026, 9, 12));   // S4 vence (28 días desde apertura)
+        List<PartidaContrato> partidas = new ArrayList<>();
+        partidas.add(p); c.setPartidas(partidas);
+
+        PlazoParametro pp = new PlazoParametro();
+        pp.setPorcInteres(new BigDecimal("1.55"));
+        pp.setPorcAlmacen(new BigDecimal("0.6"));
+        pp.setPorcGastosAdmin(new BigDecimal("0"));
+        pp.setPorcSancionSemanal(new BigDecimal("2"));
+        pp.setDiasGraciaSinInteres(2);
+        pp.setAplicarSancionPorPeriodo(true);
+
+        // baseFecha es la fecha de la última fila normal (S4). Las extemporáneas se calculan a
+        // partir de ahí con atraso = 7, 14 días (atraso > gracia 2 → sanción cuenta).
+        LocalDate baseFecha = c.getFechaVencimiento();
+        List<com.ignis.prestamil.util.PagoExtemporaneoRow> ext =
+                svc.buildPagosExtemporaneos(c, pp, plazo, baseFecha);
+
+        assertThat(ext).hasSize(2);
+        com.ignis.prestamil.util.PagoExtemporaneoRow s5 = ext.get(0);
+        assertCercanoMoney(s5.getIntereses(),  "56.07", "S5 intereses+sanción");
+        assertCercanoMoney(s5.getAlmacenaje(), "17.25", "S5 almacenaje");
+        assertCercanoMoney(s5.getIva(),        "11.73", "S5 iva");
+        assertCercanoMoney(s5.getPorRefrendo(), "85.05", "S5 refrendo");
+
+        com.ignis.prestamil.util.PagoExtemporaneoRow s6 = ext.get(1);
+        assertCercanoMoney(s6.getIntereses(),  "76.49",  "S6 intereses+sanción");
+        assertCercanoMoney(s6.getAlmacenaje(), "20.70",  "S6 almacenaje");
+        assertCercanoMoney(s6.getIva(),        "15.55",  "S6 iva");
+        assertCercanoMoney(s6.getPorRefrendo(), "112.74", "S6 refrendo");
+    }
+
+    @Test
+    void generarPdf_D05_contratoDePruebaPlata575_08_escribeArchivoParaCaptura() throws Exception {
+        // Prompt del plan D-05: "Genera el PDF del contrato de prueba y adjunta captura de la tabla."
+        // Este test deja el PDF en target/contrato-D05-C19.pdf para abrirlo y capturar la tabla
+        // de amortización (filas S1-S4 normales + S5-S6 extemporáneas) con los datos de C19:
+        // préstamo 575.08, i 1.55%, a 0.6%, s 2%, plazo semanal 7×4.
+        lenient().when(parametrosSistemaCache.getIvaPorcentaje()).thenReturn(new BigDecimal("16.00"));
+        ContratoPdfService svc = construir();
+
+        TipoPrenda plata = new TipoPrenda(); plata.setId(4); plata.setTipo("PLATAS");
+        Plazo plazo = new Plazo();
+        plazo.setId(6L); plazo.setNombre("Semanal - Plata");
+        plazo.setDiasPorPeriodo(7); plazo.setNumeroPeriodos(4);
+
+        Direccion dir = new Direccion();
+        dir.setCalle("Benito Juárez"); dir.setNumeroExterior("201"); dir.setColonia("Centro");
+        dir.setCiudad("Pinotepa"); dir.setEstado("Oaxaca"); dir.setCodigoPostal("71600");
+        Cliente cliente = new Cliente();
+        cliente.setNombre("Cliente"); cliente.setApellidoPaterno("D-05"); cliente.setApellidoMaterno("Prueba");
+        cliente.setDireccion(dir);
+
+        PartidaContrato p = new PartidaContrato();
+        p.setTipoPrenda(plata); p.setDescripcion("pulsera plata"); p.setLey(new BigDecimal("925"));
+        p.setHechura("F"); p.setPesoNeto(new BigDecimal("88.47"));
+        p.setAvaluoContrato(new BigDecimal("605.35"));
+        p.setMontoPrestamo(new BigDecimal("575.08"));
+
+        Contrato c = new Contrato();
+        c.setId(1L); c.setFolio("CTR-D05-C19"); c.setCliente(cliente);
+        c.setPlazo(plazo); c.setSucursalId(1);
+        c.setMontoPrestamo(new BigDecimal("575.08"));
+        c.setMontoAvaluo(new BigDecimal("605.35"));
+        c.setFechaApertura(LocalDateTime.of(2026, 8, 15, 10, 0));
+        c.setFechaVencimiento(LocalDate.of(2026, 9, 12));
+        c.setNombreBeneficiario("Beneficiario Prueba");
+        c.setNumIdentificacion("1234567890123");
+        List<PartidaContrato> partidas = new ArrayList<>();
+        partidas.add(p); c.setPartidas(partidas);
+
+        Sucursal sucursal = new Sucursal();
+        sucursal.setId(1); sucursal.setNombre("San Luis Acatlán"); sucursal.setCalle("Morelos");
+        sucursal.setColonia("Centro"); sucursal.setMunicipio("San Luis Acatlán"); sucursal.setEstado("Guerrero");
+        sucursal.setCp("41600"); sucursal.setTelefono("6881896");
+
+        PlazoParametro pp = new PlazoParametro();
+        pp.setPorcInteres(new BigDecimal("1.55"));
+        pp.setPorcAlmacen(new BigDecimal("0.6"));
+        pp.setPorcGastosAdmin(new BigDecimal("0"));
+        pp.setPorcSancionSemanal(new BigDecimal("2"));
+        pp.setDiasGraciaSinInteres(2);
+        pp.setAplicarSancionPorPeriodo(true);
+        pp.setComisionPorVentaPrenda(new BigDecimal("18"));
+
+        when(contratoService.findById(1L)).thenReturn(c);
+        // calcularAmortizacion lo re-emulamos usando el motor con el mismo parámetro.
+        when(contratoService.calcularAmortizacion(1L)).thenAnswer(inv -> {
+            CalculoContratoService motor = new CalculoContratoService(parametrosSistemaCache);
+            com.ignis.prestamil.service.calculo.ParametrosCalculo pc = motor.resolverParametros(c, pp);
+            LocalDate base = c.getFechaApertura().toLocalDate();
+            List<VencimientoResponse> filas = new ArrayList<>();
+            for (int n = 1; n <= plazo.getNumeroPeriodos(); n++) {
+                var d = motor.calcularCobroPeriodo(c.getMontoPrestamo(), pc, base, base, n);
+                VencimientoResponse v = new VencimientoResponse();
+                v.setPeriodo(n);
+                v.setFecha(base.plusDays((long) plazo.getDiasPorPeriodo() * n));
+                v.setInteres(d.interes());
+                v.setAlmacen(d.almacen());
+                v.setTotalInteres(d.interesTotal());
+                v.setIva(d.iva());
+                v.setDesempeno(c.getMontoPrestamo().add(d.interesTotal()).add(d.iva()));
+                v.setTotal(v.getDesempeno());
+                filas.add(v);
+            }
+            return filas;
+        });
+        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(6L, 4, 1))
+                .thenReturn(Optional.of(pp));
+        when(sucursalRepository.findById(1)).thenReturn(Optional.of(sucursal));
+
+        byte[] pdf = svc.generarPdf(1L);
+        assertThat(pdf).isNotEmpty();
+
+        java.nio.file.Path out = java.nio.file.Paths.get("target", "contrato-D05-C19.pdf");
+        java.nio.file.Files.createDirectories(out.getParent());
+        java.nio.file.Files.write(out, pdf);
+        System.out.println("PDF D-05 escrito en: " + out.toAbsolutePath());
+    }
+
+    @Test
+    void buildPagosExtemporaneos_transicionNormalAExtemporaneo_columnasMonotonas() {
+        // D-05: la transición de la última fila normal a la primera extemporánea debe ser
+        // creciente en TODAS las columnas (incluido almacén e IVA). Antes del fix, Jorge
+        // veía que la fila S5 "bajaba" en almacén/IVA — pero era síntoma del bug del jrxml
+        // en las filas normales (pintaba el interés). Validamos que los VALORES calculados
+        // de hecho son monótonos.
+        lenient().when(parametrosSistemaCache.getIvaPorcentaje()).thenReturn(new BigDecimal("16.00"));
+        ContratoPdfService svc = construir();
+
+        TipoPrenda plata = new TipoPrenda(); plata.setId(4); plata.setTipo("PLATAS");
+        Plazo plazo = new Plazo();
+        plazo.setId(6L); plazo.setDiasPorPeriodo(7); plazo.setNumeroPeriodos(4);
+
+        PartidaContrato p = new PartidaContrato();
+        p.setTipoPrenda(plata); p.setMontoPrestamo(new BigDecimal("575.08"));
+        p.setAvaluoContrato(new BigDecimal("600.00"));
+
+        Contrato c = new Contrato();
+        c.setId(1L); c.setPlazo(plazo); c.setSucursalId(1);
+        c.setMontoPrestamo(new BigDecimal("575.08"));
+        c.setFechaApertura(LocalDateTime.of(2026, 8, 15, 0, 0));
+        c.setFechaVencimiento(LocalDate.of(2026, 9, 12));
+        List<PartidaContrato> partidas = new ArrayList<>();
+        partidas.add(p); c.setPartidas(partidas);
+
+        PlazoParametro pp = new PlazoParametro();
+        pp.setPorcInteres(new BigDecimal("1.55"));
+        pp.setPorcAlmacen(new BigDecimal("0.6"));
+        pp.setPorcGastosAdmin(new BigDecimal("0"));
+        pp.setPorcSancionSemanal(new BigDecimal("2"));
+        pp.setDiasGraciaSinInteres(2);
+        pp.setAplicarSancionPorPeriodo(true);
+
+        // Valores de S4 esperados (575.08 × 1.55% × 4 = 35.65 interes; × 0.6% × 4 = 13.80 almacen)
+        BigDecimal s4Interes  = new BigDecimal("35.65");
+        BigDecimal s4Almacen  = new BigDecimal("13.80");
+        BigDecimal s4Iva      = new BigDecimal("7.91");
+
+        List<com.ignis.prestamil.util.PagoExtemporaneoRow> ext =
+                svc.buildPagosExtemporaneos(c, pp, plazo, c.getFechaVencimiento());
+        com.ignis.prestamil.util.PagoExtemporaneoRow s5 = ext.get(0);
+        BigDecimal s5InteresCol = new BigDecimal(s5.getIntereses().replace("$", "").replace(",", ""));
+        BigDecimal s5AlmacenCol = new BigDecimal(s5.getAlmacenaje().replace("$", "").replace(",", ""));
+        BigDecimal s5IvaCol     = new BigDecimal(s5.getIva().replace("$", "").replace(",", ""));
+
+        // S5 ≥ S4 en TODAS las columnas (la de intereses del PDF ya lleva sanción embebida).
+        assertThat(s5InteresCol).as("S5 intereses+sanción >= S4 interes").isGreaterThanOrEqualTo(s4Interes);
+        assertThat(s5AlmacenCol).as("S5 almacen >= S4 almacen").isGreaterThanOrEqualTo(s4Almacen);
+        assertThat(s5IvaCol).as("S5 iva >= S4 iva").isGreaterThanOrEqualTo(s4Iva);
+
+        // S6 ≥ S5
+        com.ignis.prestamil.util.PagoExtemporaneoRow s6 = ext.get(1);
+        BigDecimal s6AlmacenCol = new BigDecimal(s6.getAlmacenaje().replace("$", "").replace(",", ""));
+        BigDecimal s6IvaCol     = new BigDecimal(s6.getIva().replace("$", "").replace(",", ""));
+        assertThat(s6AlmacenCol).as("S6 almacen >= S5").isGreaterThanOrEqualTo(s5AlmacenCol);
+        assertThat(s6IvaCol).as("S6 iva >= S5").isGreaterThanOrEqualTo(s5IvaCol);
+    }
 }

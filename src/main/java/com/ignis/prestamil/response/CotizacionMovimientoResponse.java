@@ -43,6 +43,12 @@ public class CotizacionMovimientoResponse {
     private Integer periodosNormales;
     private Integer periodosExtemporaneos;
     private Integer periodosMaximos;
+    /**
+     * Mínimo capturable en {@code REFRENDO_PARCIAL} (D-03, RN-31): 1 en contratos VIGENTE/EN_GRACIA,
+     * {@code extemporaneos + 1} en VENCIDO/EN_VENTA. En las demás operaciones es igual a
+     * {@code periodosAplicados}.
+     */
+    private Integer periodosMinimos;
     private Integer periodosAplicados;
     private Integer periodosNormalesAplicados;
     private Integer periodosExtemporaneosAplicados;

@@ -216,7 +216,9 @@ public class ContratoOperacionService {
                                 contrato.getId(), TipoMovimiento.CUENTAN_UNO_POR_DIA,
                                 hoy.atStartOfDay(), hoy.plusDays(1).atStartOfDay());
         Set<AccionContrato> acciones = EstatusContratoResolver.accionesDisponibles(
-                estatus, s != null ? s.periodosTranscurridos() : 0,
+                estatus,
+                s != null ? s.periodosTranscurridos() : 0,
+                s != null ? s.periodosExtemporaneos() : 0,
                 EstatusContratoResolver.refrendosAgotados(contrato, vigente), yaTuvoMovimientoHoy);
         return new Evaluacion(contrato, p, estatus, s, acciones, yaTuvoMovimientoHoy);
     }
@@ -225,6 +227,7 @@ public class ContratoOperacionService {
         Contrato c = e.contrato();
         r.setId(c.getId());
         r.setFolio(c.getFolio());
+        r.setNumBolsa(c.getNumBolsa());
         r.setNombrePlazo(c.getPlazo().getNombre());
         r.setNumeroPeriodos(c.getPlazo().getNumeroPeriodos());
         r.setDiasPorPeriodo(c.getPlazo().getDiasPorPeriodo());

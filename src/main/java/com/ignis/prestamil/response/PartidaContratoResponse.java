@@ -11,10 +11,15 @@ import java.math.BigDecimal;
 public class PartidaContratoResponse {
     private Long id;
     private Integer numPartida;
+    /** Código de barras único global de la partida (D-10). */
+    private String codigoBarras;
     private Integer idTipoPrenda;
     private String tipoPrendaNombre;
     private Integer idValorPrenda;
     private String clavePrenda;
+    /** Descripción general del catálogo al momento del empeño (D-09). */
+    private String descripcionGeneral;
+    /** Descripción específica de la pieza. */
     private String descripcion;
     private Integer cantidad;
 

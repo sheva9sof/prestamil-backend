@@ -1121,7 +1121,7 @@
 								<textElement>
 									<font fontName="Arial" size="8"/>
 								</textElement>
-								<textFieldExpression><![CDATA[$F{intereses}]]></textFieldExpression>
+								<textFieldExpression><![CDATA[$F{almacenaje}]]></textFieldExpression>
 							</textField>
 						</jr:detailCell>
 					</jr:column>

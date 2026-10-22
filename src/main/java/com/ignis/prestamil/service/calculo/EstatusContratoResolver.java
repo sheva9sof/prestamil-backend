@@ -131,7 +131,39 @@ public final class EstatusContratoResolver {
     public static Set<AccionContrato> accionesDisponibles(EstatusOperativo estatus, int periodosTranscurridos,
                                                           boolean refrendosAgotados,
                                                           boolean yaTuvoMovimientoHoy) {
+        return accionesDisponibles(estatus, periodosTranscurridos, 0,
+                refrendosAgotados, yaTuvoMovimientoHoy);
+    }
+
+    /**
+     * Igual que {@link #accionesDisponibles(EstatusOperativo, int, boolean, boolean)} pero evaluando
+     * también el mínimo del parcial (D-03, RN-31): en VENCIDO/EN_VENTA el parcial requiere cubrir
+     * extemporáneos + 1; si el máximo no alcanza, la acción se filtra de la matriz. En VIGENTE/EN_GRACIA
+     * el mínimo es 1 (basta {@code periodosTranscurridos >= 2}).
+     *
+     * @param estatus                 estatus operativo del contrato
+     * @param periodosTranscurridos   periodos que cobraría un refrendo completo hoy
+     * @param periodosExtemporaneos   extemporáneos a hoy (0 en VIGENTE/EN_GRACIA)
+     * @param refrendosAgotados       resultado de {@link #refrendosAgotados}
+     * @param yaTuvoMovimientoHoy     true si existe un movimiento no cancelado hoy cuyo tipo cuenta
+     *                                para la regla ({@link com.ignis.prestamil.model.TipoMovimiento#CUENTAN_UNO_POR_DIA})
+     * @return las acciones habilitadas
+     */
+    public static Set<AccionContrato> accionesDisponibles(EstatusOperativo estatus, int periodosTranscurridos,
+                                                          int periodosExtemporaneos,
+                                                          boolean refrendosAgotados,
+                                                          boolean yaTuvoMovimientoHoy) {
         Set<AccionContrato> acciones = accionesPorEstatus(estatus, periodosTranscurridos);
+        // D-03 (RN-31): mínimo del parcial depende del estatus. Solo lo evaluamos cuando quien llama
+        // conoce los extemporáneos; si no (overloads antiguos / tests), caemos al mínimo 1.
+        if (acciones.contains(AccionContrato.REFRENDO_PARCIAL)) {
+            int minimo = (estatus == EstatusOperativo.VENCIDO || estatus == EstatusOperativo.EN_VENTA)
+                    ? periodosExtemporaneos + 1 : 1;
+            int maximo = periodosTranscurridos - 1;
+            if (maximo < minimo) {
+                acciones.remove(AccionContrato.REFRENDO_PARCIAL);
+            }
+        }
         if (refrendosAgotados) {
             acciones.removeAll(EnumSet.of(AccionContrato.REFRENDO, AccionContrato.REFRENDO_EXTEMPORANEO,
                     AccionContrato.REFRENDO_PARCIAL, AccionContrato.ABONO_CAPITAL));

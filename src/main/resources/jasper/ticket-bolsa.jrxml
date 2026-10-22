@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Ticket de BOLSA (D-10). Identifica la bolsa del contrato en el almacén. Ticket angosto (~80 mm,
+     227 pt) con el mismo ancho y estilo que la nota de movimiento (RN-25), para la impresora térmica.
+     Contiene: contrato, número de bolsa grande, cliente, prendas (clave, descripción general y
+     específica), cantidad de piezas, peso total, valuador, fecha de empeño y fecha de venta al público. -->
+<jasperReport xmlns="http://jasperreports.sourceforge.net/jasperreports" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://jasperreports.sourceforge.net/jasperreports http://jasperreports.sourceforge.net/xsd/jasperreport.xsd" name="ticket-bolsa" pageWidth="227" pageHeight="842" whenNoDataType="AllSectionsNoDetail" columnWidth="211" leftMargin="8" rightMargin="8" topMargin="8" bottomMargin="8" isIgnorePagination="true">
+	<property name="net.sf.jasperreports.awt.ignore.missing.font" value="true"/>
+	<style name="Base" isDefault="true" fontName="Arial" fontSize="7"/>
+	<parameter name="P_EMPRESA" class="java.lang.String"/>
+	<parameter name="P_SUCURSAL" class="java.lang.String"/>
+	<parameter name="P_CONTRATO" class="java.lang.String"/>
+	<parameter name="P_BOLSA" class="java.lang.String"/>
+	<parameter name="P_CLIENTE" class="java.lang.String"/>
+	<parameter name="P_PIEZAS" class="java.lang.String"/>
+	<parameter name="P_PESO_TOTAL" class="java.lang.String"/>
+	<parameter name="P_VALUADOR" class="java.lang.String"/>
+	<parameter name="P_FECHA_EMPENO" class="java.lang.String"/>
+	<parameter name="P_FECHA_COMERCIALIZACION" class="java.lang.String"/>
+	<field name="partida" class="java.lang.String"/>
+	<field name="descripcion" class="java.lang.String"/>
+	<field name="detalle" class="java.lang.String"/>
+	<title>
+		<band height="137" splitType="Stretch">
+			<textField textAdjust="StretchHeight">
+				<reportElement x="0" y="0" width="211" height="13"/>
+				<textElement textAlignment="Center"><font size="11" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_EMPRESA}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="0" y="13" width="211" height="9" isRemoveLineWhenBlank="true"/>
+				<textElement textAlignment="Center"><font size="6.5"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_SUCURSAL}]]></textFieldExpression>
+			</textField>
+			<line>
+				<reportElement positionType="Float" x="0" y="24" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="27" width="211" height="12"/>
+				<textElement textAlignment="Center"><font size="10" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[TICKET DE BOLSA]]></text>
+			</staticText>
+			<line>
+				<reportElement positionType="Float" x="0" y="41" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<textField>
+				<reportElement positionType="Float" x="0" y="44" width="211" height="13"/>
+				<textElement textAlignment="Center"><font size="10" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_CONTRATO}]]></textFieldExpression>
+			</textField>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="58" width="211" height="10"/>
+				<textElement textAlignment="Center"><font size="8" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[BOLSA]]></text>
+			</staticText>
+			<!-- Número de bolsa grande: se lee de lejos en el almacén -->
+			<textField>
+				<reportElement positionType="Float" x="0" y="68" width="211" height="40"/>
+				<textElement textAlignment="Center" verticalAlignment="Middle"><font size="34" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_BOLSA}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="0" y="110" width="211" height="9" isRemoveLineWhenBlank="true"/>
+				<textElement textAlignment="Center"/>
+				<textFieldExpression><![CDATA[$P{P_CLIENTE}]]></textFieldExpression>
+			</textField>
+			<line>
+				<reportElement positionType="Float" x="0" y="122" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="125" width="211" height="10"/>
+				<textElement><font isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[PRENDAS]]></text>
+			</staticText>
+		</band>
+	</title>
+	<detail>
+		<band height="19" splitType="Stretch">
+			<textField>
+				<reportElement x="0" y="0" width="12" height="9"/>
+				<textFieldExpression><![CDATA[$F{partida}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement x="12" y="0" width="199" height="9"/>
+				<textFieldExpression><![CDATA[$F{descripcion}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="12" y="9" width="199" height="9" isRemoveLineWhenBlank="true"/>
+				<textElement><font size="6.5"/></textElement>
+				<textFieldExpression><![CDATA[$F{detalle}]]></textFieldExpression>
+			</textField>
+		</band>
+	</detail>
+	<summary>
+		<band height="72" splitType="Stretch">
+			<line>
+				<reportElement x="0" y="1" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="5" width="100" height="11"/>
+				<textElement><font size="9" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[Piezas]]></text>
+			</staticText>
+			<textField>
+				<reportElement positionType="Float" x="100" y="5" width="111" height="11"/>
+				<textElement textAlignment="Right"><font size="9" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_PIEZAS}]]></textFieldExpression>
+			</textField>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="17" width="100" height="11"/>
+				<textElement><font size="9" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[Peso total]]></text>
+			</staticText>
+			<textField>
+				<reportElement positionType="Float" x="100" y="17" width="111" height="11"/>
+				<textElement textAlignment="Right"><font size="9" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_PESO_TOTAL}]]></textFieldExpression>
+			</textField>
+			<line>
+				<reportElement positionType="Float" x="0" y="31" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="35" width="80" height="9"/>
+				<text><![CDATA[Valuador:]]></text>
+			</staticText>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="80" y="35" width="131" height="9"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$P{P_VALUADOR}]]></textFieldExpression>
+			</textField>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="45" width="100" height="9"/>
+				<text><![CDATA[Fecha de empeño:]]></text>
+			</staticText>
+			<textField>
+				<reportElement positionType="Float" x="100" y="45" width="111" height="9"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$P{P_FECHA_EMPENO}]]></textFieldExpression>
+			</textField>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="56" width="110" height="11"/>
+				<textElement><font size="8" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[Venta al público:]]></text>
+			</staticText>
+			<textField>
+				<reportElement positionType="Float" x="110" y="56" width="101" height="11"/>
+				<textElement textAlignment="Right"><font size="8" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_FECHA_COMERCIALIZACION}]]></textFieldExpression>
+			</textField>
+		</band>
+	</summary>
+</jasperReport>

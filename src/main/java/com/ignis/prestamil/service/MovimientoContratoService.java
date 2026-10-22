@@ -1,6 +1,7 @@
 package com.ignis.prestamil.service;
 
 import com.ignis.prestamil.exception.BadRequestException;
+import com.ignis.prestamil.exception.ConflictException;
 import com.ignis.prestamil.exception.ForbiddenException;
 import com.ignis.prestamil.exception.ResourceNotFoundException;
 import com.ignis.prestamil.model.*;
@@ -144,9 +145,19 @@ public class MovimientoContratoService {
         CotizacionMovimiento c = calculoContratoService.cotizar(contrato, p, request.getTipoOperacion(),
                 hoy, request.getPeriodos(), request.getAbonoCapital());
 
+        // D-01: en refrendo parcial el "n" que ve el cajero y el que aplica el motor deben coincidir.
+        // Si el usuario envió 10 y el motor lo recorta a 2 (max transcurridos-1) sería silencioso: aquí
+        // forzamos a volver a cotizar en el frontend para que la ventana muestre el n ajustado antes de cobrar.
+        if (request.getTipoOperacion() == TipoOperacion.REFRENDO_PARCIAL
+                && request.getPeriodos() != null
+                && request.getPeriodos() != c.periodosAplicados()) {
+            throw new ConflictException("Los periodos a cubrir cambiaron desde la cotización ("
+                    + request.getPeriodos() + " → " + c.periodosAplicados() + "). Vuelva a cotizar.");
+        }
+
         // El cajero cobra lo que vio: si el importe cambió (cambio de día, gracia rebasada) se vuelve a cotizar
         if (request.getTotalCotizado() != null && request.getTotalCotizado().compareTo(c.total()) != 0) {
-            throw new BadRequestException("El importe cambió desde la cotización ($" + request.getTotalCotizado()
+            throw new ConflictException("El importe cambió desde la cotización ($" + request.getTotalCotizado()
                     + " → $" + c.total() + "). Vuelva a cotizar la operación.");
         }
 
@@ -248,14 +259,44 @@ public class MovimientoContratoService {
             validarRolPuedeExentar(usuario);
         }
 
+        // D-15: validar que el contrato sea reimprimible según el estatus operativo. La matriz
+        // RN-16 ya tiene REPOSICION en VIGENTE/EN_GRACIA/VENCIDO/EN_VENTA; aquí defendemos el
+        // backend para que FINIQUITADO/CANCELADO/VENDIDO/APARTADO respondan con el motivo real
+        // en vez del genérico "plazo no tiene reposición". El estatus derivado ya considera
+        // partidas VEN/APA (RN-17), así que un EN_VENTA con una prenda apartada aterriza en
+        // APARTADO automáticamente.
         PlazoParametro param = obtenerParametro(contrato);
-        if (param == null || !Boolean.TRUE.equals(param.getCobrarReposicionContrato())) {
-            throw new BadRequestException("El plazo no tiene habilitado el cobro de reposición de contrato");
+        int diasGraciaSancion = param != null && param.getDiasGraciaSinInteres() != null
+                ? param.getDiasGraciaSinInteres() : 0;
+        EstatusOperativo estatusOp = EstatusContratoResolver.estatusDerivado(
+                contrato, diasGraciaSancion, LocalDate.now(clock));
+        switch (estatusOp) {
+            case FINIQUITADO -> throw new BadRequestException(
+                    "El contrato está finiquitado; no se puede reimprimir.");
+            case CANCELADO -> throw new BadRequestException(
+                    "El contrato está cancelado; no se puede reimprimir.");
+            case VENDIDO -> throw new BadRequestException(
+                    "El contrato tiene una prenda vendida; no se puede reimprimir.");
+            case APARTADO -> throw new BadRequestException(
+                    "Una prenda del contrato ya está apartada; no se puede reimprimir.");
+            default -> { /* VIGENTE, EN_GRACIA, VENCIDO, EN_VENTA — reimprimibles */ }
         }
 
-        BigDecimal importe = request.isNoCobrar()
-                ? BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP)
-                : calcularImporteReposicion(contrato, param);
+        // D-15: si el plazo no tiene reposición configurada o el importe calculado es 0, se
+        // registra RE en $0 con la observación "sin cobro de reposición configurado" (Jorge,
+        // 01:22:10: COCAE tenía la reposición "inhabilitada en cero" y aun así reimprimía).
+        // La reimpresión del contrato queda habilitada igual porque /pdf-reposicion solo exige
+        // que exista un RE no cancelado hoy (C-02), sin importar su monto.
+        boolean sinConfigReposicion = param == null
+                || !Boolean.TRUE.equals(param.getCobrarReposicionContrato())
+                || importeReposicionCero(param);
+
+        BigDecimal importe;
+        if (request.isNoCobrar() || sinConfigReposicion) {
+            importe = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        } else {
+            importe = calcularImporteReposicion(contrato, param);
+        }
 
         // C-04: en reposicion por monto fijo se desglosa el IVA — Jorge lo pidio para el corte de
         // caja (30-sep). La reposicion por porcentaje queda sin IVA desglosado (fuera del scope de
@@ -280,7 +321,7 @@ public class MovimientoContratoService {
         mov.setImporteDescuento(BigDecimal.ZERO);
         mov.setFecha(LocalDateTime.now(clock));
         mov.setRequestId(request.getRequestId());
-        mov.setObservaciones(observacionesReposicion(request));
+        mov.setObservaciones(observacionesReposicion(request, sinConfigReposicion));
 
         // Un importe 0 no exige ventana de Cobro; con importe > 0 se valida el pago (RN-24)
         PagoRequest pago = request.getPago() != null ? request.getPago() : pagoExactoEnEfectivo(desglose.total);
@@ -377,10 +418,17 @@ public class MovimientoContratoService {
                 .orElseGet(java.util.Collections::emptySet);
     }
 
-    private static String observacionesReposicion(ReposicionRequest request) {
-        String base = request.isNoCobrar()
-                ? "Reposición de contrato exenta"
-                : "Cobro por reposición/reimpresión de contrato";
+    private static String observacionesReposicion(ReposicionRequest request, boolean sinConfigReposicion) {
+        String base;
+        if (request.isNoCobrar()) {
+            base = "Reposición de contrato exenta";
+        } else if (sinConfigReposicion) {
+            // D-15: el plazo no tiene cobro de reposición configurado (o monto/porc = 0). El RE
+            // se registra en $0 para dejar rastro y habilitar la reimpresión del contrato.
+            base = "sin cobro de reposición configurado";
+        } else {
+            base = "Cobro por reposición/reimpresión de contrato";
+        }
         String comentario = request.getComentario();
         if (comentario == null || comentario.isBlank()) {
             return base;
@@ -389,6 +437,16 @@ public class MovimientoContratoService {
         String texto = base + ". " + limpio;
         // observaciones admite máximo 300 caracteres (columna VARCHAR(300))
         return texto.length() > 300 ? texto.substring(0, 300) : texto;
+    }
+
+    /** D-15: ¿el plazo tiene reposición en 0 (monto fijo o porcentaje)? */
+    private static boolean importeReposicionCero(PlazoParametro param) {
+        if (Boolean.TRUE.equals(param.getReposicionEsPorcentaje())) {
+            BigDecimal porc = param.getPorcReposicion();
+            return porc == null || porc.signum() == 0;
+        }
+        BigDecimal monto = param.getMontoReposicion();
+        return monto == null || monto.signum() == 0;
     }
 
     /**
@@ -551,6 +609,115 @@ public class MovimientoContratoService {
         return toResponse(mov, contrato);
     }
 
+    /**
+     * Cancela un contrato recién creado (C-06, RN-26). Localiza el movimiento EMP del contrato,
+     * valida reglas con mensajes específicos para cada motivo de rechazo y, en una sola transacción:
+     * pone el contrato en {@link EstatusContrato#CANCELADO} con {@code saldo_capital = 0}, marca
+     * todas sus partidas como {@link EstatusPartida#CAN} (devueltas al cliente), marca el EMP como
+     * cancelado (sin borrarlo), registra una ENTRADA de caja por el monto del préstamo ligada al EMP
+     * y deja huella en bitácora. Las reposiciones (RE) no se tocan ni cuentan para "el último
+     * movimiento" (C-03): si hubo una ese día, su cobro queda vigente.
+     *
+     * <p>Validaciones y mensajes:</p>
+     * <ul>
+     *   <li>Rol permitido → 403 (default: Gerente).</li>
+     *   <li>Motivo texto libre, ≥ 10 caracteres → 400 "El motivo…".</li>
+     *   <li>Contrato ya cancelado → 400 "El contrato ya está cancelado".</li>
+     *   <li>Sin EMP → 400 "El contrato no tiene registro de empeño (EMP); contacte a Sistemas".</li>
+     *   <li>Hay movimientos de cobro vigentes (excluyendo RE) → 400 "El contrato tiene movimientos
+     *       de cobro; cancele primero el último".</li>
+     *   <li>EMP no es del día → 400 "Solo se pueden cancelar contratos del día".</li>
+     *   <li>Turno del empeño ya cerró → 400 "El turno…".</li>
+     * </ul>
+     *
+     * @param contratoId identificador del contrato
+     * @param request    motivo de la cancelación
+     * @param username   usuario que cancela (debe tener rol permitido)
+     * @return el movimiento EMP marcado como cancelado
+     * @throws BadRequestException       con el mensaje específico por motivo de rechazo
+     * @throws ForbiddenException        si el rol del usuario no puede cancelar
+     * @throws ResourceNotFoundException si el contrato o el usuario no existen
+     */
+    public MovimientoResponse cancelarContrato(Long contratoId, CancelarMovimientoRequest request,
+                                               String username) {
+        Usuario usuario = usuarioRepository.findByNombreUsuario(username)
+                .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado: " + username));
+
+        // Rol y motivo antes de leer datos: rechaza con el mensaje más específico sin tocar la BD
+        validarRolPuedeCancelar(usuario);
+        validarMotivo(request.getMotivo());
+
+        Contrato contrato = contratoRepository.findWithLockById(contratoId)
+                .orElseThrow(() -> new ResourceNotFoundException("Contrato no encontrado: " + contratoId));
+
+        if (contrato.getEstatus() == EstatusContrato.CANCELADO) {
+            throw new BadRequestException("El contrato ya está cancelado");
+        }
+
+        // EMP vigente del contrato. Si no existe (contratos pre-F0, o EMP ya cancelado), el único
+        // camino es Sistemas (procedimiento manual fuera de la app).
+        MovimientoContrato emp = movimientoRepository
+                .findByContratoIdOrderByFechaAsc(contratoId).stream()
+                .filter(m -> m.getTipo() == TipoMovimiento.EMP && !Boolean.TRUE.equals(m.getCancelado()))
+                .findFirst()
+                .orElseThrow(() -> new BadRequestException(
+                        "El contrato no tiene registro de empeño (EMP); contacte a Sistemas"));
+
+        // "Último movimiento cancelable" excluyendo RE (C-03). Si no es el EMP hay cobros vigentes.
+        MovimientoContrato ultimoCancelable = movimientoRepository
+                .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(
+                        contratoId, TipoMovimiento.RE)
+                .orElseThrow(() -> new BadRequestException(
+                        "El contrato no tiene registro de empeño (EMP); contacte a Sistemas"));
+        if (!ultimoCancelable.getId().equals(emp.getId())) {
+            throw new BadRequestException(
+                    "El contrato tiene movimientos de cobro; cancele primero el último");
+        }
+
+        LocalDate hoy = LocalDate.now(clock);
+        if (emp.getFecha() == null || !emp.getFecha().toLocalDate().equals(hoy)) {
+            throw new BadRequestException(
+                    "Solo se pueden cancelar contratos del día; para cancelaciones de días anteriores contacte a Sistemas");
+        }
+
+        Turno turnoEmp = emp.getTurno();
+        if (turnoEmp == null || !Boolean.TRUE.equals(turnoEmp.getActivo())) {
+            throw new BadRequestException(
+                    "El turno del contrato ya cerró; no se puede cancelar tras el cierre de día");
+        }
+
+        String valorViejo = snapshotContrato(contrato);
+
+        // Reversión al estado pre-contrato: saldo 0 y estatus CANCELADO del snapshot del EMP
+        // (ContratoService.registrarMovimientoEmpeno). Las partidas en operación se devuelven al
+        // cliente (CAN). Las fechas y el folio del contrato se conservan: el folio no se reutiliza.
+        revertirContrato(contrato, emp);
+
+        emp.setCancelado(true);
+        emp.setUsuarioCancela(usuario);
+        emp.setFechaCancelacion(LocalDateTime.now(clock));
+        emp.setMotivoCancelacion(request.getMotivo().trim());
+
+        movimientoRepository.save(emp);
+        contratoRepository.save(contrato);
+
+        // C-06/C-07: el cliente devuelve el préstamo en efectivo → ENTRADA de caja ligada al EMP
+        movimientoCajaService.registrar(
+                turnoEmp,
+                contrato.getSucursalId(),
+                TipoMovimientoCaja.ENTRADA,
+                "CANCELACIÓN DE CONTRATO " + nz(contrato.getFolio()) + " - Préstamo devuelto",
+                emp.getMonto(),
+                usuario,
+                emp);
+
+        registrarBitacora(username, valorViejo, snapshotContrato(contrato), emp);
+
+        log.info("Cancelación de contrato={} emp={} usuario={} motivo={}",
+                contrato.getFolio(), emp.getId(), username, request.getMotivo());
+        return toResponse(emp, contrato);
+    }
+
     private static String nz(String s) {
         return s != null ? s : "";
     }
@@ -699,11 +866,14 @@ public class MovimientoContratoService {
     private Disponibilidad validarOperacion(Contrato contrato, PlazoParametro param, ParametrosCalculo p,
                                             TipoOperacion operacion, LocalDate hoy) {
         EstatusOperativo estatus = EstatusContratoResolver.estatusDerivado(contrato, p.diasGraciaSancion(), hoy);
-        int transcurridos = calculoContratoService.situacion(contrato, p, hoy).periodosTranscurridos();
+        SituacionPeriodos situacion = calculoContratoService.situacion(contrato, p, hoy);
+        int transcurridos = situacion.periodosTranscurridos();
         boolean agotados = EstatusContratoResolver.refrendosAgotados(contrato, param);
         boolean yaTuvoMovimientoHoy = yaTuvoMovimientoHoy(contrato.getId(), hoy);
+        // D-03 (RN-31): pasamos extemporáneos para que la matriz filtre el parcial cuando el mínimo
+        // no cabe en VENCIDO/EN_VENTA.
         Set<AccionContrato> acciones = EstatusContratoResolver.accionesDisponibles(
-                estatus, transcurridos, agotados, yaTuvoMovimientoHoy);
+                estatus, transcurridos, situacion.periodosExtemporaneos(), agotados, yaTuvoMovimientoHoy);
 
         AccionContrato accion = EstatusContratoResolver.accionPara(operacion, estatus);
         if (!acciones.contains(accion)) {
@@ -885,6 +1055,7 @@ public class MovimientoContratoService {
         r.setPeriodosNormales(s.periodosNormales());
         r.setPeriodosExtemporaneos(s.periodosExtemporaneos());
         r.setPeriodosMaximos(c.periodosMaximos());
+        r.setPeriodosMinimos(c.periodosMinimos());
         r.setPeriodosAplicados(c.periodosAplicados());
         r.setPeriodosNormalesAplicados(c.periodosNormalesAplicados());
         r.setPeriodosExtemporaneosAplicados(c.periodosExtemporaneosAplicados());

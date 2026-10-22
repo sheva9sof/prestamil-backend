@@ -18,6 +18,8 @@ import java.util.Set;
 public class ContratoOperacionResponse {
     private Long id;
     private String folio;
+    /** Número de bolsa, consecutivo por sucursal (D-10). */
+    private Integer numBolsa;
 
     private String nombrePlazo;
     private Integer numeroPeriodos;
