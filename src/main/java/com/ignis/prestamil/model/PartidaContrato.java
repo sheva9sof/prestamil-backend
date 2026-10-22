@@ -24,6 +24,13 @@ public class PartidaContrato {
     @Column(name = "num_partida", nullable = false)
     private Integer numPartida;
 
+    /**
+     * Código de barras de la partida (D-10): consecutivo global del sistema, único entre sucursales y
+     * nunca reutilizado. Se asigna al crear el contrato; identifica la pieza como un SKU.
+     */
+    @Column(name = "codigo_barras", length = 20, unique = true)
+    private String codigoBarras;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "id_tipo_prenda", nullable = false)
     private TipoPrenda tipoPrenda;
@@ -35,6 +42,15 @@ public class PartidaContrato {
     @Column(name = "clave_prenda", length = 20)
     private String clavePrenda;
 
+    /**
+     * Descripción general del catálogo copiada al empeñar (snapshot, D-09): si el catálogo
+     * cambia después, el contrato firmado conserva el texto original. NULL si la partida no
+     * se ligó a un valor del catálogo.
+     */
+    @Column(name = "descripcion_general", length = 100)
+    private String descripcionGeneral;
+
+    /** Descripción específica de la pieza capturada en el avalúo ("esclava con mariposa, rota"). */
     @Column(name = "descripcion", length = 200, nullable = false)
     private String descripcion;
 
@@ -95,4 +111,8 @@ public class PartidaContrato {
 
     @Column(name = "estado_fisico", length = 20)
     private String estadoFisico;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "estatus", nullable = false, length = 10)
+    private EstatusPartida estatus = EstatusPartida.OP;
 }

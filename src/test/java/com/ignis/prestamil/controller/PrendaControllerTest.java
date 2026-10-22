@@ -14,10 +14,12 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.MediaType;
 import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -27,6 +29,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @ExtendWith(MockitoExtension.class)
 class PrendaControllerTest {
+
+    private static final UsernamePasswordAuthenticationToken SISTEMAS =
+            new UsernamePasswordAuthenticationToken("sistemas", null, java.util.List.of());
 
     @Mock
     TipoPrendaService tipoPrendaService;
@@ -57,9 +62,10 @@ class PrendaControllerTest {
     @Test
     void postValores_creaValorDeCatalogo() throws Exception {
         CatValorPrenda entity = mockResponse(25);
-        when(catValorPrendaService.create(any(CatValorPrendaRequest.class))).thenReturn(entity);
+        when(catValorPrendaService.create(any(CatValorPrendaRequest.class), eq("sistemas"))).thenReturn(entity);
 
         mockMvc.perform(post("/api/prendas/valores")
+                        .principal(SISTEMAS)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(validRequestJson()))
                 .andExpect(status().isCreated())
@@ -79,10 +85,11 @@ class PrendaControllerTest {
     @Test
     void putValores_actualizaValorDeCatalogo() throws Exception {
         CatValorPrenda entity = mockResponse(25);
-        when(catValorPrendaService.update(any(Integer.class), any(CatValorPrendaRequest.class)))
+        when(catValorPrendaService.update(any(Integer.class), any(CatValorPrendaRequest.class), eq("sistemas")))
                 .thenReturn(entity);
 
         mockMvc.perform(put("/api/prendas/valores/25")
+                        .principal(SISTEMAS)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(validRequestJson()))
                 .andExpect(status().isOk())
@@ -107,7 +114,7 @@ class PrendaControllerTest {
                   "descripcion": "Celular",
                   "clave": "AB-101",
                   "kilataje": null,
-                  "contienePiedad": false
+                  "contienePiedra": false
                 }
                 """;
     }

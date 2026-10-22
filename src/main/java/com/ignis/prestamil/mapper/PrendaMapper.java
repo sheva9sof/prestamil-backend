@@ -53,7 +53,8 @@ public class PrendaMapper {
         response.setClave(catValorPrenda.getClave());
         response.setDescripcion(catValorPrenda.getDescripcion());
         response.setKilataje(catValorPrenda.getKilataje());
-        response.setContienePiedad(catValorPrenda.getContienePiedad());
+        response.setContienePiedra(catValorPrenda.getContienePiedra());
+        response.setPendienteRevision(Boolean.TRUE.equals(catValorPrenda.getPendienteRevision()));
 
         // Información del subtipo de prenda
         if (catValorPrenda.getSubtipoPrenda() != null) {

@@ -7,11 +7,14 @@ import com.ignis.prestamil.model.*;
 import com.ignis.prestamil.repository.*;
 import com.ignis.prestamil.request.ContratoRequest;
 import com.ignis.prestamil.request.PartidaContratoRequest;
+import com.ignis.prestamil.request.RecalcularPartidasRequest;
 import com.ignis.prestamil.response.ContratoResponse;
+import com.ignis.prestamil.response.PartidaRecalculadaResponse;
 import com.ignis.prestamil.service.calculo.CalculoContratoService;
 import com.ignis.prestamil.service.calculo.DesgloseCobro;
 import com.ignis.prestamil.service.calculo.ParametrosCalculo;
 import com.ignis.prestamil.service.calculo.ParametrosSistemaCache;
+import com.ignis.prestamil.util.Constantes;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,12 +43,19 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
     private final PlazoHechuraAlhajaRepository plazoHechuraAlhajaRepository;
     private final ParametrosSistemaCache parametrosSistemaCache;
     private final CalculoContratoService calculoContratoService;
+    private final MovimientoContratoRepository movimientoContratoRepository;
+    private final MovimientoCajaService movimientoCajaService;
+    private final BolsaService bolsaService;
 
     private static final List<Integer> KILATAJES_COCAE = List.of(6, 8, 10, 12, 14, 18, 21, 24);
     private static final BigDecimal LEY_925 = new BigDecimal("925");
     // Ley de plata baja: COCAE la maneja como 720 (fineness estándar 0.720). La columna de precio
     // sigue llamándose ley_725 por compatibilidad; almacena el precio por gramo de esta ley.
     private static final BigDecimal LEY_720 = new BigDecimal("720");
+    // C-08 (RN-30, PLAN-CORRECCIONES-30SEP): el total prestado en partidas sujetas al redondeo
+    // se baja al múltiplo de $5 más cercano. COCAE lo hace para entregar efectivo fácil de contar
+    // ("no le estamos prestando 10 centavos"). El ajuste se descuenta de la última partida.
+    private static final BigDecimal MULTIPLO_REDONDEO_PRESTAMO = new BigDecimal("5");
     // (IVA_PORCENTAJE eliminado en Pasada 2: el IVA lo lee CalculoContratoService del snapshot del
     // contrato o del cache de parametros_sistema con fallback 16 + log.warn.)
     private static final String MSG_PLATA_SIN_CONFIG =
@@ -64,7 +74,10 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
                            PlazoService plazoService,
                            PlazoHechuraAlhajaRepository plazoHechuraAlhajaRepository,
                            ParametrosSistemaCache parametrosSistemaCache,
-                           CalculoContratoService calculoContratoService) {
+                           CalculoContratoService calculoContratoService,
+                           MovimientoContratoRepository movimientoContratoRepository,
+                           MovimientoCajaService movimientoCajaService,
+                           BolsaService bolsaService) {
         super(repository);
         this.clienteRepository = clienteRepository;
         this.plazoRepository = plazoRepository;
@@ -78,6 +91,9 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
         this.plazoHechuraAlhajaRepository = plazoHechuraAlhajaRepository;
         this.parametrosSistemaCache = parametrosSistemaCache;
         this.calculoContratoService = calculoContratoService;
+        this.movimientoContratoRepository = movimientoContratoRepository;
+        this.movimientoCajaService = movimientoCajaService;
+        this.bolsaService = bolsaService;
     }
 
     /**
@@ -122,11 +138,17 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
 
         for (int i = 0; i < request.getPartidas().size(); i++) {
             PartidaContratoRequest pr = request.getPartidas().get(i);
-            PartidaContrato partida = buildPartida(pr, i + 1, plazo.getId(), sucursalId);
+            PartidaContrato partida = buildPartida(pr, i + 1, plazo, sucursalId);
             totalPrestamo = totalPrestamo.add(partida.getMontoPrestamo());
             totalAvaluo = totalAvaluo.add(partida.getAvaluoContrato());
             partidas.add(partida);
         }
+
+        // 6.b C-08 (RN-30): el total prestado en partidas sujetas al redondeo (hoy solo alhajas,
+        // ver aplicaRedondeoMultiploDe5) debe ser múltiplo de $5. El frontend ya descuenta la
+        // diferencia en la última partida; aquí validamos para que un cliente que lo omita no
+        // pueda cerrar el contrato con centavos.
+        validarRedondeoMultiploDe5(partidas);
 
         // 7. Construir contrato
         Contrato contrato = new Contrato();
@@ -136,8 +158,12 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
         contrato.setPlazo(plazo);
         contrato.setUsuario(usuario);
         contrato.setFechaApertura(fechaApertura);
+        contrato.setFechaContrato(fechaApertura.toLocalDate());
         contrato.setFechaVencimiento(fechaVencimiento);
+        contrato.setFechaComercializacion(
+                fechaVencimiento.plusDays(Constantes.DIAS_VENCIMIENTO_A_COMERCIALIZACION));
         contrato.setMontoPrestamo(totalPrestamo);
+        contrato.setSaldoCapital(totalPrestamo);
         contrato.setMontoAvaluo(totalAvaluo);
         contrato.setEstatus(EstatusContrato.VIGENTE);
         contrato.setNumRefrendos(0);
@@ -166,6 +192,11 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
         // Pasada 2 lo consumira desde CalculoContratoService.
         aplicarSnapshotCalculo(contrato, partidas, plazo.getId(), sucursalId);
 
+        // 8.c D-10: bolsa (consecutivo por sucursal) y código de barras de cada partida (consecutivo
+        // global). Se toman en esta transacción: si el contrato falla, los contadores no avanzan.
+        contrato.setNumBolsa(bolsaService.siguienteNumBolsa(sucursalId));
+        bolsaService.asignarCodigosBarras(partidas);
+
         // 9. Primera persistencia para obtener el ID generado
         Contrato guardado = repository.save(contrato);
 
@@ -173,8 +204,23 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
         guardado.setFolio(String.format("CTR-%06d", guardado.getId()));
         guardado = repository.save(guardado);
 
-        log.info("Contrato creado: {} | cliente={} | monto={}", guardado.getFolio(),
-                cliente.getId(), totalPrestamo);
+        // 11. Movimiento EMP (periodo 0): primera fila del historial del contrato
+        MovimientoContrato emp = registrarMovimientoEmpeno(guardado, turno, usuario);
+
+        // 12. C-07: el préstamo entregado al cliente sale de caja. Base del corte de caja.
+        if (totalPrestamo != null && totalPrestamo.signum() > 0) {
+            movimientoCajaService.registrar(
+                    turno,
+                    guardado.getSucursalId(),
+                    TipoMovimientoCaja.SALIDA,
+                    "PRÉSTAMO CONTRATO " + guardado.getFolio(),
+                    totalPrestamo,
+                    usuario,
+                    emp);
+        }
+
+        log.info("Contrato creado: {} | bolsa={} | cliente={} | monto={}", guardado.getFolio(),
+                guardado.getNumBolsa(), cliente.getId(), totalPrestamo);
 
         return contratoMapper.toResponse(guardado);
     }
@@ -238,6 +284,35 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
     // =========================================================================
 
     /**
+     * Registra el movimiento EMP (empeño, periodo 0) de un contrato recién creado. El monto es el
+     * préstamo entregado. Guarda un snapshot "pre-contrato" en los campos {@code *Anterior}
+     * (saldo 0, estatus CANCELADO, 0 refrendos) para que la cancelación del día (C-06) deje al
+     * contrato en el estado anterior al empeño reutilizando la lógica genérica de reversión.
+     */
+    private MovimientoContrato registrarMovimientoEmpeno(Contrato contrato, Turno turno, Usuario usuario) {
+        MovimientoContrato emp = new MovimientoContrato();
+        emp.setContrato(contrato);
+        emp.setTurno(turno);
+        emp.setUsuario(usuario);
+        emp.setTipo(TipoMovimiento.EMP);
+        emp.setMonto(contrato.getMontoPrestamo());
+        emp.setInteres(BigDecimal.ZERO);
+        emp.setPeriodosNormales(0);
+        // Snapshot "pre-contrato": lo que el revert del EMP debe restaurar al cancelarlo.
+        emp.setSaldoAnterior(BigDecimal.ZERO);
+        emp.setEstatusAnterior(EstatusContrato.CANCELADO);
+        emp.setNumRefrendosAnterior(0);
+        emp.setSaldoNuevo(contrato.getSaldoCapital());
+        emp.setFechaContratoNueva(contrato.getFechaContrato());
+        emp.setFechaVencNueva(contrato.getFechaVencimiento());
+        emp.setEstatusNuevo(contrato.getEstatus());
+        emp.setFecha(contrato.getFechaApertura());
+        emp.setObservaciones("Empeño");
+        movimientoContratoRepository.save(emp);
+        return emp;
+    }
+
+    /**
      * Copia al contrato los 7 parametros de calculo vigentes (PlazoParametro de la primera partida +
      * IVA) para que la reimpresion futura del PDF y el cobro en caja no cambien de monto si la
      * configuracion vigente se modifica despues (requisito PROFECO, changeset 026). Si la primera
@@ -265,41 +340,52 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
     }
 
     private PartidaContrato buildPartida(PartidaContratoRequest pr, int numPartida,
-                                         Long plazoId, Integer sucursalId) {
+                                         Plazo plazo, Integer sucursalId) {
         TipoPrenda tipoPrenda = tipoPrendaRepository.findById(pr.getIdTipoPrenda())
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "TipoPrenda no encontrado: " + pr.getIdTipoPrenda()));
 
+        // D-09: la descripción específica es la defensa antifraude; se valida antes de calcular.
+        validarDescripcionEspecifica(pr, numPartida, tipoPrenda);
+
         // Parámetros del plazo/tipo de prenda/sucursal (puede no existir → reglas por defecto)
         PlazoParametro parametro = plazoParametroRepository
-                .findByPlazoIdAndTipoPrendaIdAndSucursalId(plazoId, tipoPrenda.getId(), sucursalId)
+                .findByPlazoIdAndTipoPrendaIdAndSucursalId(plazo.getId(), tipoPrenda.getId(), sucursalId)
                 .orElse(null);
 
-        // Avalúo real: para ALHAJA lo calcula el servidor a partir de PlazoHechuraAlhaja (D-07 de Phase 4);
-        // para PLATAS lo calcula el servidor a partir de ley925/ley725 del PlazoParametro (D-05/D-06 de Phase 6).
-        // Para el resto (Varios/electrónicos, avalúo libre del valuador) se conserva el valor del cliente.
-        BigDecimal avaluoReal = esAlhaja(tipoPrenda)
-                ? calcularAvaluoRealAlhaja(pr, plazoId, sucursalId)
-                : esPlata(tipoPrenda)
-                    ? calcularAvaluoRealPlata(pr, parametro)
-                    : (pr.getAvaluoReal() != null ? pr.getAvaluoReal() : BigDecimal.ZERO);
+        BigDecimal avaluoReal = calcularAvaluoRealServidor(pr, tipoPrenda, plazo.getId(), sucursalId, parametro);
 
-        // Préstamo máximo autorizado para esta partida, a partir del avalúo YA recalculado por el servidor.
+        // Préstamo máximo autorizado para esta partida, a partir de valores YA recalculados por el servidor.
+        // ALHAJA: la base es el préstamo de la tabla (no el avalúo real, que es el valor del oro).
         // PLATA: el precio por gramo YA es el precio de préstamo (COCAE: "Calcular sobre Préstamo"),
         // así que el techo es peso × precio (= avaluoReal), SIN aplicar % Préstamo s/Avalúo (ese
         // recorte no aplica a plata; el precio por gramo ya incorpora el préstamo). Alinea con COCAE.
-        BigDecimal prestamoMaximo = esPlata(tipoPrenda)
-                ? avaluoReal
-                : calcularPrestamoMaximo(avaluoReal, parametro);
+        BigDecimal basePrestamo = calcularBasePrestamoServidor(pr, avaluoReal, tipoPrenda, plazo.getId(), sucursalId);
+        BigDecimal prestamoMaximo = calcularPrestamoMaximoServidor(basePrestamo, tipoPrenda, parametro);
 
         // El préstamo solicitado NUNCA puede superar el máximo (solo ajuste hacia abajo)
         if (pr.getMontoPrestamo() == null || pr.getMontoPrestamo().compareTo(BigDecimal.ZERO) <= 0) {
             throw new BadRequestException("Partida " + numPartida + ": el monto de préstamo debe ser mayor que cero");
         }
+        // D-06/D-07 Invariante 1: préstamo ≤ base × % préstamo sobre avalúo del plazo (base = préstamo
+        // de tabla en ALHAJA, avalúo real en el resto). El mensaje incluye todos los datos del cálculo
+        // para que el usuario sepa de dónde salió el máximo (D-07: "el próximo error se entiende solo").
+        // Si el plazo tiene porcPrestamoSAvaluo=0 el motor interpreta "sin tope extra" y el porcentaje
+        // efectivo es 100%.
         if (pr.getMontoPrestamo().compareTo(prestamoMaximo) > 0) {
+            BigDecimal porcEfectivo = parametro != null
+                    && parametro.getPorcPrestamoSAvaluo() != null
+                    && parametro.getPorcPrestamoSAvaluo().compareTo(BigDecimal.ZERO) > 0
+                    ? parametro.getPorcPrestamoSAvaluo() : new BigDecimal("100");
             throw new BadRequestException(String.format(
-                    "Partida %d: el préstamo (%s) supera el máximo autorizado (%s)",
-                    numPartida, pr.getMontoPrestamo(), prestamoMaximo));
+                    "Partida %d (%s): préstamo $%s supera el máximo autorizado $%s "
+                    + "(= %s $%s × %s%% del plazo \"%s\"). "
+                    + "Si cambió el plazo, recalcula las partidas antes de generar el contrato.",
+                    numPartida, tipoPrenda.getTipo(),
+                    pr.getMontoPrestamo(), prestamoMaximo,
+                    esAlhaja(tipoPrenda) ? "préstamo de tabla" : "avalúo real", basePrestamo,
+                    porcEfectivo.stripTrailingZeros().toPlainString(),
+                    plazo.getNombre() != null ? plazo.getNombre() : ("id=" + plazo.getId())));
         }
         // Importe mínimo de préstamo configurado
         if (parametro != null && parametro.getImporteMinPrestamo() != null
@@ -310,15 +396,36 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
                     numPartida, pr.getMontoPrestamo(), parametro.getImporteMinPrestamo()));
         }
 
-        // Avalúo del contrato: lo fija el servidor (no se confía en el valor del cliente)
-        BigDecimal avaluoContrato = parametro != null
-                ? plazoService.calcularAvaluoContrato(pr.getMontoPrestamo(), parametro)
-                : pr.getMontoPrestamo();
+        // D-06 Invariante 2: avalúoContrato = préstamo × (1 + incrementoSobreAvaluo). Lo fija el
+        // servidor; si el cliente envió un avaluoContrato distinto (frontend con valores del plazo
+        // anterior) se rechaza con el valor esperado para forzar un recálculo.
+        BigDecimal avaluoContrato = calcularAvaluoContratoServidor(pr.getMontoPrestamo(), parametro);
+        if (pr.getAvaluoContrato() != null
+                && pr.getAvaluoContrato().compareTo(BigDecimal.ZERO) > 0
+                && pr.getAvaluoContrato().compareTo(avaluoContrato) != 0) {
+            throw new BadRequestException(String.format(
+                    "Partida %d (%s): el avalúo de contrato enviado (%s) no coincide con el esperado "
+                    + "para este plazo (%s = préstamo %s × factor). Recalcula las partidas antes de generar el contrato.",
+                    numPartida, tipoPrenda.getTipo(), pr.getAvaluoContrato(), avaluoContrato,
+                    pr.getMontoPrestamo()));
+        }
+
+        // D-06 Invariante 3: avalúoContrato ≤ avalúoReal. Si el %Prestamo s/Avaluo combinado con el
+        // incremento sobre avalúo produce un contrato con avalúo superior al real de la prenda,
+        // rechazar: Jorge, 00:17:57 — "el avalúo real tiene que ser al menos igual al avalúo de contrato".
+        // No aplica a PLATA: su "avalúo real" es peso × precio de PRÉSTAMO por gramo (el sistema no
+        // tiene el valor real de la plata), así que cualquier incremento > 0 la violaría siempre.
+        if (!esPlata(tipoPrenda) && avaluoContrato.compareTo(avaluoReal) > 0) {
+            throw new BadRequestException(String.format(
+                    "Partida %d (%s): el avalúo de contrato (%s) supera el avalúo real (%s). "
+                    + "Revisa el %% de préstamo sobre avalúo y el incremento sobre avalúo del plazo.",
+                    numPartida, tipoPrenda.getTipo(), avaluoContrato, avaluoReal));
+        }
 
         PartidaContrato partida = new PartidaContrato();
         partida.setNumPartida(numPartida);
         partida.setTipoPrenda(tipoPrenda);
-        partida.setDescripcion(pr.getDescripcion());
+        partida.setDescripcion(pr.getDescripcion().trim());
         partida.setClavePrenda(pr.getClavePrenda());
         // cantidad es informativa: los pesos ya vienen como total del lote, así que NO se
         // multiplica peso × cantidad en ningún punto del cálculo.
@@ -354,9 +461,45 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
                         "El valor de catálogo seleccionado no pertenece al tipo de prenda de la partida");
             }
             partida.setValorPrenda(valorPrenda);
+            // D-09: clave y descripción general salen del catálogo (no del cliente) y se copian a
+            // la partida para que el contrato firmado no cambie si después se edita el catálogo.
+            partida.setClavePrenda(valorPrenda.getClave());
+            partida.setDescripcionGeneral(valorPrenda.getDescripcion());
         }
 
         return partida;
+    }
+
+    /**
+     * Valida la descripción específica de la pieza (D-09). Con descripciones genéricas
+     * ("celular", "bocina") el personal puede cambiar un equipo por otro de menor valor sin
+     * que auditoría lo note, por eso es obligatoria y con un mínimo de detalle.
+     *
+     * @param pr         partida solicitada
+     * @param numPartida número de partida para el mensaje
+     * @param tipoPrenda tipo de prenda ya resuelto
+     * @throws BadRequestException si falta la descripción, es muy corta, o en VARIOS falta
+     *                             marca, modelo o serie/IMEI
+     */
+    private void validarDescripcionEspecifica(PartidaContratoRequest pr, int numPartida, TipoPrenda tipoPrenda) {
+        String descripcion = pr.getDescripcion() != null ? pr.getDescripcion().trim() : "";
+        if (descripcion.length() < Constantes.MIN_CARACTERES_DESCRIPCION_ESPECIFICA) {
+            throw new BadRequestException(String.format(
+                    "Partida %d: la descripción específica de la prenda es obligatoria y debe tener al menos "
+                    + "%d caracteres (ej. \"esclava con mariposa, broche roto\")",
+                    numPartida, Constantes.MIN_CARACTERES_DESCRIPCION_ESPECIFICA));
+        }
+        // TODO Q4: confirmar con Jorge si marca/modelo/serie aplican a todo VARIOS o solo a electrónicos.
+        if (esVarios(tipoPrenda)) {
+            List<String> faltantes = new ArrayList<>();
+            if (pr.getMarca() == null || pr.getMarca().isBlank()) faltantes.add("marca");
+            if (pr.getModelo() == null || pr.getModelo().isBlank()) faltantes.add("modelo");
+            if (pr.getSerieImei() == null || pr.getSerieImei().isBlank()) faltantes.add("serie/IMEI");
+            if (!faltantes.isEmpty()) {
+                throw new BadRequestException(String.format(
+                        "Partida %d (VARIOS): falta capturar %s", numPartida, String.join(", ", faltantes)));
+            }
+        }
     }
 
     /**
@@ -391,19 +534,53 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
     }
 
     /**
-     * Recalcula el avalúo real de una partida ALHAJA a partir de la tabla de precios
-     * del plazo (PlazoHechuraAlhaja), ignorando el avaluoReal que envía el cliente.
-     * Cierra la brecha de confianza servidor/cliente (D-07, Pitfall 1 de PITFALLS.md).
+     * Recalcula el avalúo real de una partida ALHAJA, ignorando el avaluoReal que envía el
+     * cliente (D-07, Pitfall 1 de PITFALLS.md). El avalúo real es el VALOR de la prenda
+     * (oro del kilataje × factor de hechura × peso neto), no el préstamo de la tabla: la
+     * columna PRÉSTAMO ya trae aplicado el %Préstamo de la tabla de oro y el aumento del plazo.
+     *
+     * @param pr         datos de la partida solicitada
+     * @param plazoId    identificador del plazo
+     * @param sucursalId identificador de la sucursal
+     * @return avalúo real calculado por el servidor, escala 2 (HALF_UP)
+     * @throws BadRequestException si el kilataje es 24K, no soportado, o falta peso neto/hechura
+     * @throws ResourceNotFoundException si no existe tabla de precios o %Prestamo para la celda
+     */
+    private BigDecimal calcularAvaluoRealAlhaja(PartidaContratoRequest pr, Long plazoId, Integer sucursalId) {
+        PlazoHechuraAlhaja fila = buscarFilaAlhaja(pr, plazoId, sucursalId);
+        return plazoService.calcularPrecioAvaluoGramo(fila)
+                .multiply(pr.getPesoNeto())
+                .setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Préstamo que da la tabla del plazo para una partida ALHAJA: precio de préstamo de la
+     * celda kilataje/hechura × peso neto. Es la base del préstamo máximo de la partida.
+     *
+     * @param pr         datos de la partida solicitada
+     * @param plazoId    identificador del plazo
+     * @param sucursalId identificador de la sucursal
+     * @return préstamo de tabla, escala 2 (HALF_UP)
+     */
+    private BigDecimal calcularPrestamoTablaAlhaja(PartidaContratoRequest pr, Long plazoId, Integer sucursalId) {
+        return buscarFilaAlhaja(pr, plazoId, sucursalId).getPrecioPrestamo()
+                .multiply(pr.getPesoNeto())
+                .setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Valida kilataje, hechura y peso de una partida ALHAJA y devuelve su celda de la tabla
+     * de precios del plazo (PlazoHechuraAlhaja).
      *
      * @param pr         datos de la partida solicitada
      * @param plazoId    identificador del plazo (se convierte a Integer explícitamente —
      *                   PlazoHechuraAlhajaId usa Integer, Plazo.id es Long)
      * @param sucursalId identificador de la sucursal
-     * @return avalúo real calculado por el servidor, escala 2 (HALF_UP)
+     * @return celda de la tabla de precios
      * @throws BadRequestException si el kilataje es 24K, no soportado, o falta peso neto/hechura
      * @throws ResourceNotFoundException si no existe tabla de precios para la celda
      */
-    private BigDecimal calcularAvaluoRealAlhaja(PartidaContratoRequest pr, Long plazoId, Integer sucursalId) {
+    private PlazoHechuraAlhaja buscarFilaAlhaja(PartidaContratoRequest pr, Long plazoId, Integer sucursalId) {
         Integer kilataje = pr.getKilataje();
         if (kilataje == null) {
             throw new BadRequestException("Kilataje es requerido para partidas de tipo ALHAJA");
@@ -422,13 +599,10 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
         }
         String hechura = pr.getHechura();
         PlazoHechuraAlhajaId id = new PlazoHechuraAlhajaId(Math.toIntExact(plazoId), sucursalId, kilataje, hechura);
-        PlazoHechuraAlhaja tabla = plazoHechuraAlhajaRepository.findById(id)
+        return plazoHechuraAlhajaRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "No hay precio configurado para plazo=" + plazoId + ", kilataje=" + kilataje
                         + ", hechura=" + hechura));
-        return tabla.getPrecioPrestamo()
-                .multiply(pr.getPesoNeto())
-                .setScale(2, RoundingMode.HALF_UP);
     }
 
     /**
@@ -452,6 +626,11 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
      */
     private boolean esPlata(TipoPrenda tipoPrenda) {
         return tipoPrenda != null && "PLATAS".equalsIgnoreCase(tipoPrenda.getTipo());
+    }
+
+    /** Determina si un tipo de prenda corresponde a VARIOS (electrónicos y artículos), por texto. */
+    private boolean esVarios(TipoPrenda tipoPrenda) {
+        return tipoPrenda != null && "VARIOS".equalsIgnoreCase(tipoPrenda.getTipo());
     }
 
     /**
@@ -518,6 +697,49 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
     }
 
     /**
+     * ¿Al tipo de prenda le aplica el redondeo del total a múltiplo de $5 (C-08 / RN-30)?
+     * Único lugar donde vive la regla por tipo: cuando el negocio confirme si extender
+     * la regla a plata/relojes/varios (G-04), basta con tocar este método.
+     *
+     * TODO G-04: hoy aplica solo a alhajas; pendiente de validar con Jorge.
+     */
+    private boolean aplicaRedondeoMultiploDe5(TipoPrenda tipoPrenda) {
+        return esAlhaja(tipoPrenda);
+    }
+
+    /** floor(valor / 5) × 5 con escala 2. Nunca redondea hacia arriba (ver C-08). */
+    private BigDecimal redondearAMultiploDe5(BigDecimal valor) {
+        if (valor == null) {
+            return BigDecimal.ZERO.setScale(2);
+        }
+        return valor.divide(MULTIPLO_REDONDEO_PRESTAMO, 0, RoundingMode.FLOOR)
+                .multiply(MULTIPLO_REDONDEO_PRESTAMO)
+                .setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Valida la regla C-08/RN-30: el total prestado en partidas sujetas al redondeo (hoy solo
+     * alhajas) debe ser múltiplo de $5. El frontend ajusta la última partida; si el request
+     * llega sin el ajuste, rechazamos con un mensaje que explica cómo corregirlo.
+     */
+    private void validarRedondeoMultiploDe5(List<PartidaContrato> partidas) {
+        BigDecimal totalRedondeable = partidas.stream()
+                .filter(p -> aplicaRedondeoMultiploDe5(p.getTipoPrenda()))
+                .map(PartidaContrato::getMontoPrestamo)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (totalRedondeable.signum() <= 0) {
+            return;
+        }
+        BigDecimal esperado = redondearAMultiploDe5(totalRedondeable);
+        if (totalRedondeable.compareTo(esperado) != 0) {
+            throw new BadRequestException(String.format(
+                    "El préstamo total de alhajas (%s) debe ser múltiplo de $5. "
+                    + "Esperado: %s. Ajuste la última partida de alhaja para descontar la diferencia.",
+                    totalRedondeable.setScale(2, RoundingMode.HALF_UP), esperado));
+        }
+    }
+
+    /**
      * Calcula el préstamo máximo autorizado para una partida según el tipo de prenda:
      *   - El tope base es el avalúo YA recalculado por el servidor (avaluoReal).
      *   - Si el parámetro define un % de préstamo sobre avalúo (porcPrestamoSAvaluo > 0),
@@ -539,6 +761,164 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
                     .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
         }
         return avaluo.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    // =========================================================================
+    // D-06: Recálculo server-side al cambiar de plazo
+    // =========================================================================
+
+    /**
+     * Avalúo real que el servidor fija para una partida: ALHAJA sale de la tabla
+     * PlazoHechuraAlhaja; PLATAS sale del precio por gramo configurado en PlazoParametro
+     * (ley 925 o 720); el resto conserva el valor libre que capturó el valuador.
+     */
+    private BigDecimal calcularAvaluoRealServidor(PartidaContratoRequest pr, TipoPrenda tipoPrenda,
+                                                   Long plazoId, Integer sucursalId,
+                                                   PlazoParametro parametro) {
+        if (esAlhaja(tipoPrenda)) {
+            return calcularAvaluoRealAlhaja(pr, plazoId, sucursalId);
+        }
+        if (esPlata(tipoPrenda)) {
+            return calcularAvaluoRealPlata(pr, parametro);
+        }
+        return pr.getAvaluoReal() != null ? pr.getAvaluoReal() : BigDecimal.ZERO;
+    }
+
+    /**
+     * Base sobre la que se aplica el % de préstamo sobre avalúo del plazo. ALHAJA: el préstamo
+     * de la tabla (precio de préstamo × peso), porque el avalúo real es el valor del oro y la
+     * tabla ya descuenta el %Préstamo. Resto: el avalúo real.
+     */
+    private BigDecimal calcularBasePrestamoServidor(PartidaContratoRequest pr, BigDecimal avaluoReal,
+                                                     TipoPrenda tipoPrenda, Long plazoId, Integer sucursalId) {
+        return esAlhaja(tipoPrenda) ? calcularPrestamoTablaAlhaja(pr, plazoId, sucursalId) : avaluoReal;
+    }
+
+    /**
+     * Préstamo máximo autorizado según tipo de prenda. PLATA: techo = avalúo real
+     * (el precio por gramo YA es el precio de préstamo COCAE). Resto: base × % de préstamo
+     * sobre avalúo del plazo (ver calcularBasePrestamoServidor).
+     */
+    private BigDecimal calcularPrestamoMaximoServidor(BigDecimal basePrestamo, TipoPrenda tipoPrenda,
+                                                       PlazoParametro parametro) {
+        return esPlata(tipoPrenda)
+                ? (basePrestamo != null ? basePrestamo : BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP)
+                : calcularPrestamoMaximo(basePrestamo, parametro);
+    }
+
+    /**
+     * Avalúo de contrato según el plazo. Delega en PlazoService cuando hay parámetro;
+     * si no hay parámetro (varios/electrónicos sin configuración), el avalúo de contrato
+     * es igual al préstamo (invariante 2 degenera a identidad).
+     */
+    private BigDecimal calcularAvaluoContratoServidor(BigDecimal prestamo, PlazoParametro parametro) {
+        if (parametro != null) {
+            return plazoService.calcularAvaluoContrato(prestamo, parametro);
+        }
+        return prestamo != null ? prestamo.setScale(2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
+    }
+
+    /**
+     * Precio por gramo que el servidor fija en la partida. Para PLATAS lo lee del
+     * PlazoParametro (ley 925 o 720); para el resto conserva el valor del cliente.
+     */
+    private BigDecimal calcularPrecioXGramoServidor(PartidaContratoRequest pr, TipoPrenda tipoPrenda,
+                                                     PlazoParametro parametro) {
+        if (esPlata(tipoPrenda)) {
+            return resolverPrecioGramoLey(pr.getLey(), parametro);
+        }
+        return pr.getPrecioXGramo();
+    }
+
+    /**
+     * Recalcula cada partida con los parámetros de un plazo nuevo (D-06). El cliente invoca
+     * este endpoint cuando el valuador cambia de plazo en el avalúo, de modo que ningún valor
+     * del plazo anterior quede "pegado" a la partida. El préstamo que supera el máximo nuevo
+     * se recorta hacia abajo (nunca hacia arriba); el total de alhajas se baja al múltiplo de
+     * $5 descontando la diferencia de la última partida de alhaja (RN-30).
+     *
+     * @param request idPlazo y las partidas capturadas en el avalúo
+     * @return partidas recalculadas con precio por gramo, avalúo real, préstamo máximo,
+     *         préstamo final (clamp + redondeo) y avalúo de contrato — sin persistir.
+     */
+    @Transactional(readOnly = true)
+    public List<PartidaRecalculadaResponse> recalcularPartidas(RecalcularPartidasRequest request) {
+        Plazo plazo = plazoRepository.findById(request.getIdPlazo())
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Plazo no encontrado: " + request.getIdPlazo()));
+        Integer sucursalId = 1; // TODO: derivar de la sucursal del usuario/turno (mismo convenio que crearContrato)
+
+        List<PartidaRecalculadaResponse> resultado = new ArrayList<>();
+        List<BigDecimal> prestamosAlhaja = new ArrayList<>();
+        List<Integer> idxAlhaja = new ArrayList<>();
+
+        for (int i = 0; i < request.getPartidas().size(); i++) {
+            PartidaContratoRequest pr = request.getPartidas().get(i);
+            TipoPrenda tipoPrenda = tipoPrendaRepository.findById(pr.getIdTipoPrenda())
+                    .orElseThrow(() -> new ResourceNotFoundException(
+                            "TipoPrenda no encontrado: " + pr.getIdTipoPrenda()));
+            PlazoParametro parametro = plazoParametroRepository
+                    .findByPlazoIdAndTipoPrendaIdAndSucursalId(plazo.getId(), tipoPrenda.getId(), sucursalId)
+                    .orElse(null);
+
+            BigDecimal avaluoReal = calcularAvaluoRealServidor(pr, tipoPrenda, plazo.getId(), sucursalId, parametro);
+            BigDecimal basePrestamo = calcularBasePrestamoServidor(pr, avaluoReal, tipoPrenda, plazo.getId(), sucursalId);
+            BigDecimal prestamoMaximo = calcularPrestamoMaximoServidor(basePrestamo, tipoPrenda, parametro);
+            BigDecimal precioXGramo = calcularPrecioXGramoServidor(pr, tipoPrenda, parametro);
+
+            // El préstamo del plazo anterior puede superar el máximo del plazo nuevo. Clamp hacia
+            // abajo (nunca hacia arriba). El importe mínimo NO se fuerza aquí: dejar que el
+            // valuador vea el resultado y decida (si quedó bajo el mínimo, crearContrato rechaza).
+            BigDecimal prestamoSolicitado = pr.getMontoPrestamo() != null
+                    ? pr.getMontoPrestamo() : BigDecimal.ZERO;
+            BigDecimal montoPrestamo = prestamoSolicitado.compareTo(prestamoMaximo) > 0
+                    ? prestamoMaximo
+                    : prestamoSolicitado.setScale(2, RoundingMode.HALF_UP);
+
+            PartidaRecalculadaResponse row = new PartidaRecalculadaResponse();
+            row.setNumPartida(i + 1);
+            row.setIdTipoPrenda(tipoPrenda.getId());
+            row.setPrecioXGramo(precioXGramo);
+            row.setAvaluoReal(avaluoReal);
+            row.setPrestamoMaximo(prestamoMaximo);
+            row.setMontoPrestamo(montoPrestamo);
+            // Avalúo de contrato se calcula al final porque el redondeo a $5 puede ajustar el préstamo
+            resultado.add(row);
+
+            if (aplicaRedondeoMultiploDe5(tipoPrenda)) {
+                idxAlhaja.add(i);
+                prestamosAlhaja.add(montoPrestamo);
+            }
+        }
+
+        // RN-30 (C-08): el total prestado en alhajas se baja al múltiplo de $5. La diferencia se
+        // descuenta de la ÚLTIMA partida de alhaja. Si el redondeo deja la última partida por
+        // debajo de 0 (edge: diferencia > último préstamo), se absorbe en 0 y no se vuelve a bajar.
+        if (!idxAlhaja.isEmpty()) {
+            BigDecimal total = prestamosAlhaja.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal totalRedondeado = redondearAMultiploDe5(total);
+            BigDecimal diferencia = total.subtract(totalRedondeado);
+            if (diferencia.signum() > 0) {
+                int ultimo = idxAlhaja.get(idxAlhaja.size() - 1);
+                PartidaRecalculadaResponse row = resultado.get(ultimo);
+                BigDecimal ajustado = row.getMontoPrestamo().subtract(diferencia);
+                row.setMontoPrestamo(ajustado.signum() < 0
+                        ? BigDecimal.ZERO.setScale(2)
+                        : ajustado.setScale(2, RoundingMode.HALF_UP));
+            }
+        }
+
+        // Avalúo de contrato final sobre el préstamo ya ajustado.
+        for (int i = 0; i < resultado.size(); i++) {
+            PartidaContratoRequest pr = request.getPartidas().get(i);
+            PartidaRecalculadaResponse row = resultado.get(i);
+            TipoPrenda tipoPrenda = tipoPrendaRepository.findById(pr.getIdTipoPrenda()).orElseThrow();
+            PlazoParametro parametro = plazoParametroRepository
+                    .findByPlazoIdAndTipoPrendaIdAndSucursalId(plazo.getId(), tipoPrenda.getId(), sucursalId)
+                    .orElse(null);
+            row.setAvaluoContrato(calcularAvaluoContratoServidor(row.getMontoPrestamo(), parametro));
+        }
+        return resultado;
     }
 
     /**
@@ -573,10 +953,14 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
 
         List<com.ignis.prestamil.response.VencimientoResponse> filas = new ArrayList<>();
         LocalDate base = contrato.getFechaApertura().toLocalDate();
+        // La amortización usa diasPorPeriodo y numeroPeriodos del plazo (NO constantes hardcodeadas):
+        // semanal => 7 x 4, quincenal => 15 x 3, mensual => 30 x 1, etc.
+        // TODO Q1 (PLAN-CORRECCIONES-07OCT): confirmar con Jorge si la quincena dura 14 o 15 días.
+        // Hoy la BD guarda 15 (coincide con COCAE); el motor respeta el valor configurado.
         for (int n = 1; n <= plazo.getNumeroPeriodos(); n++) {
             DesgloseCobro d = calculoContratoService.calcularCobroPeriodo(
                     prestamo, pc, fechaSinAtraso, fechaSinAtraso, n);
-            BigDecimal totalInt = d.interes().add(d.almacen()).add(d.gastosAdmin());
+            BigDecimal totalInt = d.interesTotal();
             BigDecimal desempeno = prestamo.add(totalInt).add(d.iva()).setScale(2, RoundingMode.HALF_UP);
 
             com.ignis.prestamil.response.VencimientoResponse v =
@@ -585,7 +969,6 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
             v.setFecha(base.plusDays((long) plazo.getDiasPorPeriodo() * n));
             v.setInteres(d.interes());
             v.setAlmacen(d.almacen());
-            v.setGastosAdmin(d.gastosAdmin());
             v.setTotalInteres(totalInt);
             v.setIva(d.iva());
             v.setDesempeno(desempeno);

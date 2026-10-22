@@ -1,25 +1,51 @@
 package com.ignis.prestamil.service;
 
+import com.ignis.prestamil.exception.BadRequestException;
+import com.ignis.prestamil.exception.ConflictException;
+import com.ignis.prestamil.exception.ForbiddenException;
+import com.ignis.prestamil.exception.ResourceNotFoundException;
+import com.ignis.prestamil.model.AccionContrato;
+import com.ignis.prestamil.model.Banco;
 import com.ignis.prestamil.model.Contrato;
 import com.ignis.prestamil.model.EstatusContrato;
+import com.ignis.prestamil.model.EstatusOperativo;
+import com.ignis.prestamil.model.EstatusPartida;
+import com.ignis.prestamil.model.FolioNota;
 import com.ignis.prestamil.model.MovimientoContrato;
 import com.ignis.prestamil.model.PartidaContrato;
+import com.ignis.prestamil.model.Configuracion;
 import com.ignis.prestamil.model.Plazo;
 import com.ignis.prestamil.model.PlazoParametro;
+import com.ignis.prestamil.model.Rol;
 import com.ignis.prestamil.model.TipoMovimiento;
+import com.ignis.prestamil.model.TipoOperacion;
 import com.ignis.prestamil.model.TipoPrenda;
+import com.ignis.prestamil.model.TipoTarjeta;
 import com.ignis.prestamil.model.Turno;
 import com.ignis.prestamil.model.Usuario;
+import com.ignis.prestamil.repository.BancoRepository;
+import com.ignis.prestamil.repository.BitacoraRepository;
+import com.ignis.prestamil.repository.ConfiguracionRepository;
 import com.ignis.prestamil.repository.ContratoRepository;
+import com.ignis.prestamil.repository.FolioNotaRepository;
 import com.ignis.prestamil.repository.MovimientoContratoRepository;
 import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.TurnoRepository;
 import com.ignis.prestamil.repository.UsuarioRepository;
+import com.ignis.prestamil.model.Bitacora;
+import com.ignis.prestamil.request.CancelarMovimientoRequest;
+import com.ignis.prestamil.request.CotizacionRequest;
+import com.ignis.prestamil.request.MovimientoRequest;
+import com.ignis.prestamil.request.PagoRequest;
 import com.ignis.prestamil.request.RefrendoRequest;
+import com.ignis.prestamil.request.ReposicionRequest;
+import com.ignis.prestamil.util.Constantes;
+import com.ignis.prestamil.response.CotizacionMovimientoResponse;
 import com.ignis.prestamil.response.MovimientoResponse;
 import com.ignis.prestamil.service.calculo.CalculoContratoService;
 import com.ignis.prestamil.service.calculo.ParametrosSistemaCache;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -27,303 +53,2575 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Tests de MovimientoContratoService.refrendar tras la Pasada 2. Cubre:
- *   - Refrendo dentro de gracia: sancion=0, IVA sobre solo interes.
- *   - Refrendo extemporaneo: sancion>0, IVA sobre (interes + almacen + gastos + sancion).
- *   - El snapshot del contrato (changeset 026) tiene prioridad sobre la config vigente.
- *   - Consistencia con la fila extemporanea del PDF para plazo QUINCENAL (diasPorPeriodo=15,
- *     el caso donde ambos motores divergian antes).
- *   - Regla del maximo de refrendos preservada.
- *
- * Este servicio NO tenia tests antes de Pasada 2 (documentado en STATE.md).
+ * Registro de movimientos con cobro (F3): {@code registrar} recalcula con el motor único, valida la
+ * ventana de Cobro (RN-24), es idempotente por requestId y exige turno activo. Los casos C2 y C5 usan las
+ * fechas exactas de COCAE gracias al reloj inyectado.
  */
 @ExtendWith(MockitoExtension.class)
 class MovimientoContratoServiceTest {
+
+    /** Fecha de operación de los casos COCAE C1 a C4 (contratos 1493 y 448). */
+    private static final LocalDate HOY = LocalDate.of(2026, 8, 11);
 
     @Mock MovimientoContratoRepository movimientoRepository;
     @Mock ContratoRepository contratoRepository;
     @Mock PlazoParametroRepository plazoParametroRepository;
     @Mock TurnoRepository turnoRepository;
     @Mock UsuarioRepository usuarioRepository;
+    @Mock FolioNotaRepository folioNotaRepository;
+    @Mock BancoRepository bancoRepository;
+    @Mock ConfiguracionRepository configuracionRepository;
+    @Mock BitacoraRepository bitacoraRepository;
     @Mock ParametrosSistemaCache parametrosSistemaCache;
+    @Mock MovimientoCajaService movimientoCajaService;
 
-    // Motor REAL (no mock): el punto de estos tests es verificar que refrendar consume el motor
-    // correctamente, no re-testear el motor (eso ya se hace en CalculoContratoServiceTest).
+    // Motor y validación de pago REALES: el punto es verificar que registrar los consume correctamente
     CalculoContratoService calculoContratoService;
     MovimientoContratoService service;
+    Turno turno;
+    FolioNota folio;
 
     @BeforeEach
     void setUp() {
         calculoContratoService = new CalculoContratoService(parametrosSistemaCache);
-        service = new MovimientoContratoService(
-                movimientoRepository, contratoRepository, plazoParametroRepository,
-                turnoRepository, usuarioRepository, calculoContratoService);
+        service = servicioEn(HOY);
 
-        // Turno y usuario siempre resolubles
-        Turno turno = new Turno();
+        turno = new Turno();
         turno.setId(1);
+        turno.setActivo(true);
         lenient().when(turnoRepository.findByActivo(true)).thenReturn(Optional.of(turno));
         Usuario usuario = new Usuario();
         usuario.setNombreUsuario("cajero1");
         lenient().when(usuarioRepository.findByNombreUsuario("cajero1")).thenReturn(Optional.of(usuario));
-
-        // IVA por defecto para tests sin snapshot: 16%
         lenient().when(parametrosSistemaCache.getIvaPorcentaje()).thenReturn(new BigDecimal("16.00"));
+        // C-04: default true (monto fijo de reposición es IVA incluido)
+        lenient().when(parametrosSistemaCache.isReposicionIncluyeIva()).thenReturn(true);
+        lenient().when(movimientoRepository.save(any(MovimientoContrato.class))).thenAnswer(inv -> inv.getArgument(0));
+        lenient().when(movimientoRepository.findByRequestId(any())).thenReturn(Optional.empty());
 
-        // Los movimientos se guardan con el id que llega
-        lenient().when(movimientoRepository.save(any(MovimientoContrato.class)))
-                .thenAnswer(inv -> inv.getArgument(0));
+        // La sucursal ya emitió notas: la siguiente es la 27323 (numeración de COCAE)
+        folio = new FolioNota();
+        folio.setSucursalId(1);
+        folio.setUltimoFolio(27322);
+        lenient().when(folioNotaRepository.findBySucursalId(1)).thenReturn(Optional.of(folio));
+
+        Banco bbva = new Banco();
+        bbva.setId(1);
+        bbva.setNombre("BBVA");
+        bbva.setActivo(true);
+        lenient().when(bancoRepository.findById(1)).thenReturn(Optional.of(bbva));
     }
 
     // =========================================================================
     // Fixtures
     // =========================================================================
 
-    /**
-     * Contrato de referencia: prestamo 1000, vencimiento hace {diasAtraso} dias, plazo semanal
-     * (7 dias/periodo). Sin snapshot -> el motor usa el PlazoParametro vigente.
-     */
-    private Contrato contratoRef(int diasAtraso, int diasPorPeriodo) {
+    private MovimientoContratoService servicioEn(LocalDate hoy) {
+        ZoneId zona = ZoneId.systemDefault();
+        Clock clock = Clock.fixed(hoy.atTime(12, 30).atZone(zona).toInstant(), zona);
+        return new MovimientoContratoService(movimientoRepository, contratoRepository, plazoParametroRepository,
+                turnoRepository, usuarioRepository, folioNotaRepository, configuracionRepository,
+                bitacoraRepository, calculoContratoService, new CobroService(bancoRepository),
+                movimientoCajaService, parametrosSistemaCache, clock);
+    }
+
+    /** Alhajas en COCAE: 1.13% + 0.60% ("Int x Per." = 1.73%). Los gastos admin NO se cobran (GAP-09). */
+    private static PlazoParametro paramAlhajas() {
+        PlazoParametro pp = new PlazoParametro();
+        pp.setPorcInteres(new BigDecimal("1.1300"));
+        pp.setPorcAlmacen(new BigDecimal("0.6000"));
+        pp.setPorcGastosAdmin(new BigDecimal("1.0000"));
+        pp.setPorcSancionSemanal(new BigDecimal("2.0000"));
+        pp.setDiasGraciaSinInteres(2);
+        pp.setAplicarSancionPorPeriodo(true);
+        pp.setNumMaxRefrendos(0);
+        return pp;
+    }
+
+    /** Contrato 1493 de COCAE (04 SEM, saldo 1,195) con el periodo vigente indicado. */
+    private Contrato contrato1493(LocalDate fechaContrato, LocalDate vencimiento, PlazoParametro param) {
         Contrato c = new Contrato();
         c.setId(42L);
-        c.setMontoPrestamo(new BigDecimal("1000.00"));
+        c.setFolio("1493");
+        c.setMontoPrestamo(new BigDecimal("1195.00"));
+        c.setSaldoCapital(new BigDecimal("1195.00"));
+        c.setMontoAvaluo(new BigDecimal("1500.00"));
         c.setNumRefrendos(0);
         c.setEstatus(EstatusContrato.VIGENTE);
         c.setSucursalId(1);
-        c.setFechaVencimiento(LocalDate.now().minusDays(diasAtraso));
+        c.setFechaContrato(fechaContrato);
+        c.setFechaVencimiento(vencimiento);
+        c.setFechaComercializacion(vencimiento.plusDays(15));
 
         Plazo plazo = new Plazo();
         plazo.setId(1L);
-        plazo.setDiasPorPeriodo(diasPorPeriodo);
+        plazo.setDiasPorPeriodo(7);
+        plazo.setNumeroPeriodos(4);
         c.setPlazo(plazo);
 
         TipoPrenda alhaja = new TipoPrenda();
         alhaja.setId(1);
         alhaja.setTipo("ALHAJA");
-        PartidaContrato p = new PartidaContrato();
-        p.setTipoPrenda(alhaja);
-        List<PartidaContrato> ps = new ArrayList<>();
-        ps.add(p);
-        c.setPartidas(ps);
+        PartidaContrato partida = new PartidaContrato();
+        partida.setTipoPrenda(alhaja);
+        List<PartidaContrato> partidas = new ArrayList<>();
+        partidas.add(partida);
+        c.setPartidas(partidas);
+
+        lenient().when(contratoRepository.findWithLockById(42L)).thenReturn(Optional.of(c));
+        lenient().when(contratoRepository.findById(42L)).thenReturn(Optional.of(c));
+        lenient().when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(1L, 1, 1))
+                .thenReturn(Optional.of(param));
         return c;
     }
 
-    /** PlazoParametro con los 7 campos que el motor consume (config vigente). */
-    private PlazoParametro paramVigente() {
-        PlazoParametro pp = new PlazoParametro();
-        pp.setPorcInteres(new BigDecimal("3.0000"));
-        pp.setPorcAlmacen(new BigDecimal("2.0000"));
-        pp.setPorcGastosAdmin(new BigDecimal("1.0000"));
-        pp.setPorcSancionSemanal(new BigDecimal("2.0000"));
-        pp.setDiasGraciaSinInteres(2);
-        pp.setAplicarSancionPorPeriodo(true);
-        return pp;
+    /** C2: 16/07 → 13/08/2026, operación el 11/08/2026 (26 días → 4 periodos). */
+    private Contrato contratoC2() {
+        return contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13), paramAlhajas());
     }
 
-    private RefrendoRequest refrendoRequest(BigDecimal abono) {
-        RefrendoRequest r = new RefrendoRequest();
-        r.setIdContrato(42L);
-        r.setAbonoCapital(abono);
+    private static MovimientoRequest request(TipoOperacion operacion, PagoRequest pago) {
+        MovimientoRequest r = new MovimientoRequest();
+        r.setContratoId(42L);
+        r.setTipoOperacion(operacion);
+        r.setPago(pago);
+        r.setRequestId("req-1");
         return r;
+    }
+
+    private static PagoRequest efectivo(String monto) {
+        PagoRequest pago = new PagoRequest();
+        pago.setEfectivo(new BigDecimal(monto));
+        return pago;
+    }
+
+    private static PagoRequest mixto(String efectivo, String tarjeta) {
+        PagoRequest pago = new PagoRequest();
+        pago.setEfectivo(new BigDecimal(efectivo));
+        pago.setTarjeta(new BigDecimal(tarjeta));
+        pago.setTipoTarjeta(TipoTarjeta.DEBITO);
+        pago.setTarjetaUltimos4("1234");
+        pago.setBancoEmisorId(1);
+        pago.setAutorizacion("A1B2C3");
+        return pago;
     }
 
     private MovimientoContrato capturarMovimiento() {
         ArgumentCaptor<MovimientoContrato> captor = ArgumentCaptor.forClass(MovimientoContrato.class);
-        org.mockito.Mockito.verify(movimientoRepository).save(captor.capture());
+        verify(movimientoRepository).save(captor.capture());
         return captor.getValue();
     }
 
     // =========================================================================
-    // A. Refrendo dentro de gracia -> sin sancion, IVA solo sobre interes
+    // C2 y C5: casos de COCAE de punta a punta
     // =========================================================================
 
-    @Test
-    void refrendo_dentroDeGracia_noAplicaSancion_ivaSoloSobreInteres() {
-        // Given: 2 dias de atraso, gracia 2 -> sancion = 0
-        Contrato c = contratoRef(2, 7);
-        PlazoParametro pp = paramVigente();
-        when(contratoRepository.findById(42L)).thenReturn(Optional.of(c));
-        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(1L, 1, 1))
-                .thenReturn(Optional.of(pp));
+    @Nested
+    class CasosCocae {
 
-        // When
-        MovimientoResponse resp = service.refrendar(refrendoRequest(BigDecimal.ZERO), "cajero1");
+        @Test
+        void c2_refrendoNormal_cobra95_92_yElNuevoPeriodoEmpiezaElDiaQueVencia() {
+            Contrato c = contratoC2();
 
-        // Then
-        MovimientoContrato mov = capturarMovimiento();
-        assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.REFRENDO);
-        assertThat(mov.getSancion()).isEqualByComparingTo("0.00");
-        assertThat(mov.getSemanasVencidas()).isZero();
+            MovimientoResponse resp = service.registrar(request(TipoOperacion.REFRENDO, efectivo("95.92")), "cajero1");
 
-        // interes total (interes + almacen + gastos) = 1000 * (3+2+1)/100 = 60.00
-        assertThat(mov.getInteres()).isEqualByComparingTo("60.00");
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RF);
+            // 1,195 × 1.73% × 4 = 82.69; IVA 16% truncado = 13.23; sin gastos admin
+            assertThat(mov.getInteres()).isEqualByComparingTo("82.69");
+            assertThat(mov.getSancion()).isEqualByComparingTo("0.00");
+            assertThat(mov.getIva()).isEqualByComparingTo("13.23");
+            assertThat(mov.getMonto()).isEqualByComparingTo("95.92");
+            assertThat(mov.getInteresPorPeriodo()).isCloseTo(new BigDecimal("20.67"), within(new BigDecimal("0.01")));
+            assertThat(mov.getPeriodosNormales()).isEqualTo(4);
+            assertThat(mov.getSemanasVencidas()).isZero();
+            assertThat(mov.getDiasGraciaUsados()).isZero();
+            assertThat(mov.getAbonoCapital()).isEqualByComparingTo("0");
 
-        // baseIva = 60 (sin sancion); IVA = 60 * 16/100 = 9.60
-        // total = 60 + 9.60 + abono(0) = 69.60
-        assertThat(mov.getMonto()).isEqualByComparingTo("69.60");
-        assertThat(resp.getSancion()).isEqualByComparingTo("0.00");
+            // RN-20: fecha y hora del servidor, turno, usuario y estado antes/después
+            assertThat(mov.getFecha()).isEqualTo(LocalDateTime.of(2026, 8, 11, 12, 30));
+            assertThat(mov.getTurno()).isSameAs(turno);
+            assertThat(mov.getUsuario().getNombreUsuario()).isEqualTo("cajero1");
+            assertThat(mov.getFechaContratoAnterior()).isEqualTo(LocalDate.of(2026, 7, 16));
+            assertThat(mov.getFechaVencAnterior()).isEqualTo(LocalDate.of(2026, 8, 13));
+            assertThat(mov.getSaldoAnterior()).isEqualByComparingTo("1195.00");
+            assertThat(mov.getNumRefrendosAnterior()).isZero();
+            assertThat(mov.getFechaContratoNueva()).isEqualTo(LocalDate.of(2026, 8, 13));
+            assertThat(mov.getFechaVencNueva()).isEqualTo(LocalDate.of(2026, 9, 10));
+            assertThat(mov.getSaldoNuevo()).isEqualByComparingTo("1195.00");
+            assertThat(mov.getEstatusNuevo()).isEqualTo(EstatusContrato.VIGENTE);
+            assertThat(mov.getRequestId()).isEqualTo("req-1");
+
+            // RN-06: el nuevo periodo empieza el día que vencía; comercialización = vencimiento + 15
+            assertThat(c.getFechaContrato()).isEqualTo(LocalDate.of(2026, 8, 13));
+            assertThat(c.getFechaVencimiento()).isEqualTo(LocalDate.of(2026, 9, 10));
+            assertThat(c.getFechaComercializacion()).isEqualTo(LocalDate.of(2026, 9, 25));
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("1195.00");
+            assertThat(c.getNumRefrendos()).isEqualTo(1);
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
+            verify(contratoRepository).save(c);
+
+            // Folio de nota consecutivo de la sucursal (RN-25)
+            assertThat(mov.getFolioNota()).isEqualTo(27323);
+            assertThat(folio.getUltimoFolio()).isEqualTo(27323);
+            assertThat(resp.getFolioNota()).isEqualTo(27323);
+            assertThat(resp.getTipo()).isEqualTo(TipoMovimiento.RF);
+            assertThat(resp.getMonto()).isEqualByComparingTo("95.92");
+        }
+
+        @Test
+        void c5_refrendoEnGracia_esRpgSinSancion_yNoRegalaLosDiasDeGracia() {
+            service = servicioEn(LocalDate.of(2023, 6, 9));
+            Contrato c = contrato1493(LocalDate.of(2023, 5, 10), LocalDate.of(2023, 6, 7), paramAlhajas());
+
+            service.registrar(request(TipoOperacion.REFRENDO, efectivo("95.92")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RPG);
+            assertThat(mov.getMonto()).isEqualByComparingTo("95.92");
+            assertThat(mov.getSancion()).isEqualByComparingTo("0.00");
+            assertThat(mov.getPeriodosNormales()).isEqualTo(4);
+            assertThat(mov.getDiasGraciaUsados()).isEqualTo(2);
+            // Regla única RN-06: vencía el 07/06 y pagó el 09/06 → el periodo empieza el 07/06
+            assertThat(c.getFechaContrato()).isEqualTo(LocalDate.of(2023, 6, 7));
+            assertThat(c.getFechaVencimiento()).isEqualTo(LocalDate.of(2023, 7, 5));
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
+        }
+
+        @Test
+        void c2_conSnapshot_usaLasTasasDelContratoNoLaConfigVigente() {
+            PlazoParametro disparatado = paramAlhajas();
+            disparatado.setPorcInteres(new BigDecimal("999"));
+            disparatado.setPorcAlmacen(new BigDecimal("999"));
+            Contrato c = contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13), disparatado);
+            c.setSnapPorcInteres(new BigDecimal("1.1300"));
+            c.setSnapPorcAlmacen(new BigDecimal("0.6000"));
+            c.setSnapPorcGastosAdmin(new BigDecimal("1.0000"));
+            c.setSnapPorcSancionSemanal(new BigDecimal("2.0000"));
+            c.setSnapDiasGraciaSancion(2);
+            c.setSnapAplicarSancionPeriodo(true);
+            c.setSnapIvaPorcentaje(new BigDecimal("16.00"));
+
+            service.registrar(request(TipoOperacion.REFRENDO, efectivo("95.92")), "cajero1");
+
+            assertThat(capturarMovimiento().getMonto()).isEqualByComparingTo("95.92");
+        }
+
+        @Test
+        void c1_finiquito_cierraElContratoYLiberaLasPartidas() {
+            Contrato c = contratoC2();
+
+            service.registrar(request(TipoOperacion.FINIQUITO, efectivo("1290.92")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.FI);
+            assertThat(mov.getMonto()).isEqualByComparingTo("1290.92");
+            assertThat(mov.getSaldoNuevo()).isEqualByComparingTo("0");
+            assertThat(mov.getEstatusNuevo()).isEqualTo(EstatusContrato.FINIQUITADO);
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.FINIQUITADO);
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("0");
+            assertThat(c.getPartidas()).allMatch(p -> p.getEstatus() == EstatusPartida.FIN);
+            // El finiquito no es un refrendo y conserva las fechas del último periodo
+            assertThat(c.getNumRefrendos()).isZero();
+            assertThat(c.getFechaVencimiento()).isEqualTo(LocalDate.of(2026, 8, 13));
+        }
     }
 
     // =========================================================================
-    // B. Refrendo extemporaneo -> sancion>0, IVA sobre (interes + sancion) -- CAMBIO DE COBRO
+    // F4: Finiquito y descuento sobre intereses (RN-15, RN-27)
     // =========================================================================
 
-    @Test
-    void refrendo_extemporaneo10DiasAtraso_ivaAplicaSobreInteresMasSancion() {
-        // Given: 10 dias de atraso, gracia 2 -> diasAtraso=8 -> ceil(8/7)=2 semanas
-        Contrato c = contratoRef(10, 7);
-        PlazoParametro pp = paramVigente();
-        when(contratoRepository.findById(42L)).thenReturn(Optional.of(c));
-        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(1L, 1, 1))
-                .thenReturn(Optional.of(pp));
+    @Nested
+    class Finiquito {
 
-        // When
-        MovimientoResponse resp = service.refrendar(refrendoRequest(BigDecimal.ZERO), "cajero1");
+        /** Contrato C7 del plan: saldo 400 con 3 periodos transcurridos → finiquito vigente. */
+        private Contrato contratoC7(PlazoParametro param) {
+            service = servicioEn(LocalDate.of(2026, 9, 21));
+            param.setPorcInteres(new BigDecimal("0.9100"));
+            Contrato c = contrato1493(LocalDate.of(2026, 9, 3), LocalDate.of(2026, 10, 1), param);
+            c.setMontoPrestamo(new BigDecimal("400.00"));
+            c.setSaldoCapital(new BigDecimal("400.00"));
+            return c;
+        }
 
-        // Then
-        MovimientoContrato mov = capturarMovimiento();
-        assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.REFRENDO_EXTEMPORANEO);
-        assertThat(mov.getSemanasVencidas()).isEqualTo(2);
+        @Test
+        void c7_finiquitoVigenteSinDescuento_cierraElContratoYLiberaLasPartidas() {
+            Contrato c = contratoC7(paramAlhajas());
 
-        // sancion = 1000 * 2/100 * 2 = 40.00
-        assertThat(mov.getSancion()).isEqualByComparingTo("40.00");
-        // interes total = 60.00
-        assertThat(mov.getInteres()).isEqualByComparingTo("60.00");
+            // 400 × (0.91% + 0.60%) × 3 = 18.12; IVA 16% (DOWN) = 2.89; total = 400 + 18.12 + 2.89
+            service.registrar(request(TipoOperacion.FINIQUITO, efectivo("421.01")), "cajero1");
 
-        // baseIva = 60 + 40 = 100; IVA = 100 * 16/100 = 16.00 (aqui esta el CAMBIO DE COBRO: antes
-        // refrendar cobraba 100 sin IVA; ahora cobra 116.00)
-        // total = 60 + 40 + 16 + abono(0) = 116.00
-        assertThat(mov.getMonto()).isEqualByComparingTo("116.00");
-        assertThat(resp.getMonto()).isEqualByComparingTo("116.00");
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.FI);
+            assertThat(mov.getInteres()).isEqualByComparingTo("18.12");
+            assertThat(mov.getIva()).isEqualByComparingTo("2.89");
+            assertThat(mov.getMonto()).isEqualByComparingTo("421.01");
+            assertThat(mov.getPorcDescuentoInteres()).isEqualByComparingTo("0.00");
+            assertThat(mov.getImporteDescuento()).isEqualByComparingTo("0.00");
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.FINIQUITADO);
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("0");
+            assertThat(c.getPartidas()).allMatch(p -> p.getEstatus() == EstatusPartida.FIN);
+        }
+
+        @Test
+        void descuento10PorCiento_reduceInteresYSuIvaAntesDeCobrar() {
+            PlazoParametro param = paramAlhajas();
+            param.setPorcDescuentoInteres(new BigDecimal("10.0000"));
+            contratoC7(param);
+
+            // Interes bruto 18.12; descuento 10% = 1.81; base IVA = 18.12 − 1.81 = 16.31;
+            // IVA 16% (DOWN) = 2.60; total = 400 + 16.31 + 2.60 = 418.91
+            service.registrar(request(TipoOperacion.FINIQUITO, efectivo("418.91")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getInteres()).isEqualByComparingTo("18.12");
+            assertThat(mov.getImporteDescuento()).isEqualByComparingTo("1.81");
+            assertThat(mov.getPorcDescuentoInteres()).isEqualByComparingTo("10.00");
+            assertThat(mov.getIva()).isEqualByComparingTo("2.60");
+            assertThat(mov.getMonto()).isEqualByComparingTo("418.91");
+        }
+
+        @Test
+        void descuentoCero_esEquivalenteASinDescuento() {
+            PlazoParametro param = paramAlhajas();
+            param.setPorcDescuentoInteres(BigDecimal.ZERO);
+            contratoC7(param);
+
+            service.registrar(request(TipoOperacion.FINIQUITO, efectivo("421.01")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getImporteDescuento()).isEqualByComparingTo("0.00");
+            assertThat(mov.getMonto()).isEqualByComparingTo("421.01");
+        }
+
+        @Test
+        void descuento10PorCiento_tambienAplicaEnRefrendo() {
+            // RN-27 aplica a cualquier movimiento (refrendo, parcial, finiquito), no solo al finiquito.
+            PlazoParametro param = paramAlhajas();
+            param.setPorcDescuentoInteres(new BigDecimal("10.0000"));
+            contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13), param);
+
+            // C2 sin descuento: interes 82.69, IVA 13.23, total 95.92. Con 10%:
+            //   descuento = 8.27; base IVA = 74.42; IVA = 11.90 (DOWN); total = 86.32
+            service.registrar(request(TipoOperacion.REFRENDO, efectivo("86.32")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getInteres()).isEqualByComparingTo("82.69");
+            assertThat(mov.getImporteDescuento()).isEqualByComparingTo("8.27");
+            assertThat(mov.getPorcDescuentoInteres()).isEqualByComparingTo("10.00");
+            assertThat(mov.getIva()).isEqualByComparingTo("11.90");
+            assertThat(mov.getMonto()).isEqualByComparingTo("86.32");
+        }
+
+        @Test
+        void finiquitoEnVencido_seResuelveComoFx() {
+            // Un contrato vencido resuelve TipoOperacion.FINIQUITO como FX (F6). El botón "Finiquitar"
+            // del detalle está deshabilitado por accionesDisponibles; los tests de FX viven en F6.
+            service = servicioEn(LocalDate.of(2026, 8, 20));
+            contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13), paramAlhajas());
+
+            service.registrar(request(TipoOperacion.FINIQUITO, efectivo("2000.00")), "cajero1");
+
+            assertThat(capturarMovimiento().getTipo()).isEqualTo(TipoMovimiento.FX);
+        }
+
+        @Test
+        void finiquitoSinTurnoActivo_400_yNoTocaElContrato() {
+            Contrato c = contratoC7(paramAlhajas());
+            when(turnoRepository.findByActivo(true)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.registrar(
+                    request(TipoOperacion.FINIQUITO, efectivo("421.01")), "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("turno activo");
+            verify(movimientoRepository, never()).save(any());
+            verify(contratoRepository, never()).save(any());
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("400.00");
+            assertThat(c.getPartidas()).allMatch(p -> p.getEstatus() != EstatusPartida.FIN);
+        }
     }
 
     // =========================================================================
-    // C. El abono NO lleva IVA
+    // F6: Refrendo y finiquito extemporáneos (RN-05, RN-11, RN-16, RN-17)
     // =========================================================================
 
-    @Test
-    void refrendo_conAbonoCapital_elAbonoNoLlevaIva() {
-        Contrato c = contratoRef(0, 7); // sin atraso
-        PlazoParametro pp = paramVigente();
-        when(contratoRepository.findById(42L)).thenReturn(Optional.of(c));
-        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(1L, 1, 1))
-                .thenReturn(Optional.of(pp));
+    @Nested
+    class Extemporaneos {
 
-        // When: abono de 500
-        service.refrendar(refrendoRequest(new BigDecimal("500.00")), "cajero1");
+        /**
+         * Contrato 448 (COCAE): saldo 2,050, tasas 1.016% + 0.60%, sanción 2% semanal, gracia 2 días.
+         * Con fecha_contrato 30/06 y venc 28/07, operado el 11/08: 14 días de atraso → 2 semanas ext,
+         * 6 periodos transcurridos (4 normales + 2 extemp).
+         */
+        private Contrato contrato448() {
+            service = servicioEn(LocalDate.of(2026, 8, 11));
+            PlazoParametro param = paramAlhajas();
+            param.setPorcInteres(new BigDecimal("1.0160"));
+            Contrato c = contrato1493(LocalDate.of(2026, 6, 30), LocalDate.of(2026, 7, 28), param);
+            c.setMontoPrestamo(new BigDecimal("2050.00"));
+            c.setSaldoCapital(new BigDecimal("2050.00"));
+            return c;
+        }
 
-        // Then: total = interes(60) + iva(9.60) + abono(500) = 569.60. El abono queda intacto.
-        MovimientoContrato mov = capturarMovimiento();
-        assertThat(mov.getMonto()).isEqualByComparingTo("569.60");
-        assertThat(mov.getAbonoCapital()).isEqualByComparingTo("500.00");
+        @Test
+        void c3_finiquitoExtemporaneo_cierraElContratoConSancionEIvaSobreInteresMasSancion() {
+            // C3: interés 198.77, sanción 82.00, IVA 44.92 sobre (198.77+82); total = capital + 325.69
+            Contrato c = contrato448();
+
+            service.registrar(request(TipoOperacion.FINIQUITO, efectivo("2375.69")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.FX);
+            assertThat(mov.getPeriodosNormales()).isEqualTo(4);
+            assertThat(mov.getSemanasVencidas()).isEqualTo(2);
+            assertThat(mov.getInteres()).isEqualByComparingTo("198.77");
+            assertThat(mov.getSancion()).isEqualByComparingTo("82.00");
+            assertThat(mov.getIva()).isEqualByComparingTo("44.92");
+            assertThat(mov.getMonto()).isEqualByComparingTo("2375.69");
+
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.FINIQUITADO);
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("0");
+            assertThat(c.getPartidas()).allMatch(p -> p.getEstatus() == EstatusPartida.FIN);
+        }
+
+        @Test
+        void c4_refrendoExtemporaneo_dejaContratoVigenteConFechasPorRn06() {
+            // C4: mismo desglose que C3 pero sin capital; total 325.69; fechas 30/06+6×7 = 11/08 → 08/09
+            Contrato c = contrato448();
+
+            service.registrar(request(TipoOperacion.REFRENDO, efectivo("325.69")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RX);
+            assertThat(mov.getPeriodosNormales()).isEqualTo(4);
+            assertThat(mov.getSemanasVencidas()).isEqualTo(2);
+            assertThat(mov.getInteres()).isEqualByComparingTo("198.77");
+            assertThat(mov.getSancion()).isEqualByComparingTo("82.00");
+            assertThat(mov.getIva()).isEqualByComparingTo("44.92");
+            assertThat(mov.getMonto()).isEqualByComparingTo("325.69");
+
+            assertThat(mov.getFechaContratoNueva()).isEqualTo(LocalDate.of(2026, 8, 11));
+            assertThat(mov.getFechaVencNueva()).isEqualTo(LocalDate.of(2026, 9, 8));
+            assertThat(c.getFechaContrato()).isEqualTo(LocalDate.of(2026, 8, 11));
+            assertThat(c.getFechaVencimiento()).isEqualTo(LocalDate.of(2026, 9, 8));
+            assertThat(c.getFechaComercializacion()).isEqualTo(LocalDate.of(2026, 9, 23));
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("2050.00");
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
+            assertThat(c.getNumRefrendos()).isEqualTo(1);
+        }
+
+        @Test
+        void c12_atraso8Dias_dosSemanasSancionables_registraRx() {
+            // C12 (GAP-04): 8 días de atraso NO se descuenta la gracia una vez rebasada; son 2 semanas.
+            // Saldo 5,030, tasas 1.13% + 0.60%. 6 periodos (4 normales + 2 ext). Interés 522.11, sanción
+            // 201.20, IVA 115.72 (DOWN), total 839.03 (COCAE muestra 839.02 por su redondeo).
+            service = servicioEn(LocalDate.of(2026, 8, 11));
+            PlazoParametro param = paramAlhajas();
+            Contrato c = contrato1493(LocalDate.of(2026, 7, 6), LocalDate.of(2026, 8, 3), param);
+            c.setMontoPrestamo(new BigDecimal("5030.00"));
+            c.setSaldoCapital(new BigDecimal("5030.00"));
+
+            service.registrar(request(TipoOperacion.REFRENDO, efectivo("839.03")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RX);
+            assertThat(mov.getSemanasVencidas()).isEqualTo(2);
+            assertThat(mov.getInteres()).isEqualByComparingTo("522.11");
+            assertThat(mov.getSancion()).isEqualByComparingTo("201.20");
+            assertThat(mov.getIva()).isEqualByComparingTo("115.72");
+            assertThat(mov.getMonto()).isEqualByComparingTo("839.03");
+            // Fechas por RN-06: 06/07 + 6×7 = 17/08 → 14/09
+            assertThat(c.getFechaContrato()).isEqualTo(LocalDate.of(2026, 8, 17));
+            assertThat(c.getFechaVencimiento()).isEqualTo(LocalDate.of(2026, 9, 14));
+        }
+
+        @Test
+        void enVentaRecuperable_refrendoExtemporaneoDejaElContratoVigente() {
+            // Estatus persistido EN_VENTA (pase diario ya lo marcó) con partidas OP: se puede recuperar
+            // (RN-17). El refrendo lo devuelve a VIGENTE con las fechas por RN-06.
+            service = servicioEn(LocalDate.of(2026, 8, 11));
+            Contrato c = contrato448();
+            c.setEstatus(EstatusContrato.EN_VENTA);
+
+            service.registrar(request(TipoOperacion.REFRENDO, efectivo("325.69")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RX);
+            assertThat(mov.getEstatusAnterior()).isEqualTo(EstatusContrato.EN_VENTA);
+            assertThat(mov.getEstatusNuevo()).isEqualTo(EstatusContrato.VIGENTE);
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
+        }
+
+        @Test
+        void refrendoExtemporaneoConPartidaApartada_400() {
+            // RN-17: basta una partida apartada para bloquear todo el contrato.
+            Contrato c = contrato448();
+            c.getPartidas().get(0).setEstatus(EstatusPartida.APA);
+
+            assertThatThrownBy(() -> service.registrar(
+                    request(TipoOperacion.REFRENDO, efectivo("325.69")), "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("no está disponible");
+            verify(movimientoRepository, never()).save(any());
+            verify(contratoRepository, never()).save(any());
+        }
+
+        @Test
+        void finiquitoExtemporaneoConPartidaApartada_400() {
+            Contrato c = contrato448();
+            c.getPartidas().get(0).setEstatus(EstatusPartida.APA);
+
+            assertThatThrownBy(() -> service.registrar(
+                    request(TipoOperacion.FINIQUITO, efectivo("2375.69")), "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("no está disponible");
+            verify(movimientoRepository, never()).save(any());
+            verify(contratoRepository, never()).save(any());
+            assertThat(c.getEstatus()).isNotEqualTo(EstatusContrato.FINIQUITADO);
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("2050.00");
+        }
+
+        @Test
+        void refrendoExtemporaneoConContratoVendido_400() {
+            // Contrato con estatus VENDIDO (una prenda ya se vendió): fuera de operación.
+            Contrato c = contrato448();
+            c.setEstatus(EstatusContrato.VENDIDO);
+            c.getPartidas().get(0).setEstatus(EstatusPartida.VEN);
+
+            assertThatThrownBy(() -> service.registrar(
+                    request(TipoOperacion.REFRENDO, efectivo("325.69")), "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("no está disponible");
+            verify(movimientoRepository, never()).save(any());
+        }
+
+        @Test
+        void finiquitoExtemporaneoConContratoVendido_400() {
+            Contrato c = contrato448();
+            c.setEstatus(EstatusContrato.VENDIDO);
+            c.getPartidas().get(0).setEstatus(EstatusPartida.VEN);
+
+            assertThatThrownBy(() -> service.registrar(
+                    request(TipoOperacion.FINIQUITO, efectivo("2375.69")), "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("no está disponible");
+            verify(movimientoRepository, never()).save(any());
+        }
     }
 
     // =========================================================================
-    // D. Snapshot del contrato tiene prioridad sobre config vigente
+    // F5: Abono a capital (RN-13)
     // =========================================================================
 
-    @Test
-    void refrendo_conSnapshot_usaValoresDelSnapshotNoLaConfigVigente() {
-        // Given: contrato con snapshot al 2%/2dias/16IVA, pero config vigente cambio a 999% / 0 gracia
-        Contrato c = contratoRef(10, 7);
-        c.setSnapPorcInteres(new BigDecimal("3.0000"));
-        c.setSnapPorcAlmacen(new BigDecimal("2.0000"));
-        c.setSnapPorcGastosAdmin(new BigDecimal("1.0000"));
-        c.setSnapPorcSancionSemanal(new BigDecimal("2.0000"));
-        c.setSnapDiasGraciaSancion(2);
-        c.setSnapAplicarSancionPeriodo(true);
-        c.setSnapIvaPorcentaje(new BigDecimal("16.00"));
+    @Nested
+    class AbonoCapital {
 
-        PlazoParametro ppVigenteMuyDistinto = new PlazoParametro();
-        ppVigenteMuyDistinto.setPorcInteres(new BigDecimal("999.0000"));
-        ppVigenteMuyDistinto.setPorcAlmacen(new BigDecimal("999.0000"));
-        ppVigenteMuyDistinto.setPorcGastosAdmin(new BigDecimal("999.0000"));
-        ppVigenteMuyDistinto.setPorcSancionSemanal(new BigDecimal("999.0000"));
-        ppVigenteMuyDistinto.setDiasGraciaSinInteres(0);
-        ppVigenteMuyDistinto.setAplicarSancionPorPeriodo(false);
-        // El cache mockeado sigue devolviendo 16 (default del setUp), pero como el snapshot tambien es
-        // 16 no hay ruido; lo importante es que se use el snapshot.
+        /** Contrato C8 del plan: 21-sep, saldo 400, 3 periodos transcurridos (tasa 0.91% + 0.60%). */
+        private Contrato contratoC8(PlazoParametro param) {
+            service = servicioEn(LocalDate.of(2026, 9, 21));
+            param.setPorcInteres(new BigDecimal("0.9100"));
+            Contrato c = contrato1493(LocalDate.of(2026, 9, 3), LocalDate.of(2026, 10, 1), param);
+            c.setMontoPrestamo(new BigDecimal("400.00"));
+            c.setSaldoCapital(new BigDecimal("400.00"));
+            return c;
+        }
 
-        when(contratoRepository.findById(42L)).thenReturn(Optional.of(c));
-        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(1L, 1, 1))
-                .thenReturn(Optional.of(ppVigenteMuyDistinto));
+        private MovimientoRequest requestConAbono(String abono, PagoRequest pago) {
+            MovimientoRequest r = new MovimientoRequest();
+            r.setContratoId(42L);
+            r.setTipoOperacion(TipoOperacion.ABONO_CAPITAL);
+            r.setAbonoCapital(new BigDecimal(abono));
+            r.setPago(pago);
+            r.setRequestId("req-abono");
+            return r;
+        }
 
-        // When
-        service.refrendar(refrendoRequest(BigDecimal.ZERO), "cajero1");
+        @Test
+        void c8_abono20SobreSaldo400_registraRcSinIvaSobreElAbono_saldoNuevo380() {
+            Contrato c = contratoC8(paramAlhajas());
 
-        // Then: usa snapshot -> mismo resultado que test B (total 116.00) pese a la config disparatada
-        MovimientoContrato mov = capturarMovimiento();
-        assertThat(mov.getSancion()).isEqualByComparingTo("40.00");
-        assertThat(mov.getMonto()).isEqualByComparingTo("116.00");
+            // 400 × (0.91% + 0.60%) × 3 = 18.12; IVA 16% (DOWN) = 2.89; +20 abono = 41.01
+            service.registrar(requestConAbono("20.00", efectivo("41.01")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RC);
+            assertThat(mov.getInteres()).isEqualByComparingTo("18.12");
+            assertThat(mov.getSancion()).isEqualByComparingTo("0.00");
+            // RN-13: IVA solo sobre intereses; el abono NO lleva IVA
+            assertThat(mov.getIva()).isEqualByComparingTo("2.89");
+            assertThat(mov.getAbonoCapital()).isEqualByComparingTo("20.00");
+            assertThat(mov.getMonto()).isEqualByComparingTo("41.01");
+            // Saldo nuevo = 400 − 20 = 380 (aplica al siguiente movimiento)
+            assertThat(mov.getSaldoAnterior()).isEqualByComparingTo("400.00");
+            assertThat(mov.getSaldoNuevo()).isEqualByComparingTo("380.00");
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("380.00");
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
+            // RN-06: nueva fecha de contrato = fecha anterior + 3 periodos (21 días)
+            assertThat(c.getFechaContrato()).isEqualTo(LocalDate.of(2026, 9, 24));
+            assertThat(c.getFechaVencimiento()).isEqualTo(LocalDate.of(2026, 10, 22));
+        }
+
+        @Test
+        void c13_abonoEnPeriodoDeGracia_permitidoYCobra4Periodos() {
+            // Contrato 3513 (F5, GAP-08): venció el 10/08, hoy 11/08 → 1 día de gracia
+            service = servicioEn(LocalDate.of(2026, 8, 11));
+            PlazoParametro param = paramAlhajas();
+            Contrato c = contrato1493(LocalDate.of(2026, 7, 13), LocalDate.of(2026, 8, 10), param);
+            c.setMontoPrestamo(new BigDecimal("1510.00"));
+            c.setSaldoCapital(new BigDecimal("1510.00"));
+
+            // Con abono 0 (modal abierto, aún sin capturar): total = importe por refrendo = 121.20
+            service.registrar(requestConAbono("0", efectivo("121.20")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RC);
+            assertThat(mov.getPeriodosNormales()).isEqualTo(4);
+            // 1 día de gracia usado (no 5 periodos: cobra 4 como refrendo normal)
+            assertThat(mov.getDiasGraciaUsados()).isEqualTo(1);
+            assertThat(mov.getInteres()).isEqualByComparingTo("104.49");
+            assertThat(mov.getIva()).isEqualByComparingTo("16.71");
+            assertThat(mov.getAbonoCapital()).isEqualByComparingTo("0");
+            assertThat(mov.getMonto()).isEqualByComparingTo("121.20");
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("1510.00");
+            // Fechas por RN-06: nueva fecha contrato = la que vencía (10/08), no la del pago
+            assertThat(c.getFechaContrato()).isEqualTo(LocalDate.of(2026, 8, 10));
+            assertThat(c.getFechaVencimiento()).isEqualTo(LocalDate.of(2026, 9, 7));
+        }
+
+        @Test
+        void abonoMenorAMinimo_400_yNoTocaElContrato() {
+            Contrato c = contratoC8(paramAlhajas());
+
+            assertThatThrownBy(() -> service.registrar(
+                    requestConAbono("15.00", efectivo("36.01")), "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("20");
+            verify(movimientoRepository, never()).save(any());
+            verify(contratoRepository, never()).save(any());
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("400.00");
+        }
+
+        @Test
+        void abonoIgualAlSaldo_400ConMensajeUseFiniquitar() {
+            Contrato c = contratoC8(paramAlhajas());
+
+            assertThatThrownBy(() -> service.registrar(
+                    requestConAbono("400.00", efectivo("421.01")), "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("Finiquitar");
+            verify(movimientoRepository, never()).save(any());
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("400.00");
+        }
+
+        @Test
+        void abonoEnContratoVencido_400_porMatrizRn16() {
+            // Contrato C2 pero operado 10 días después del vencimiento → VENCIDO, sin ABONO_CAPITAL
+            service = servicioEn(LocalDate.of(2026, 8, 23));
+            Contrato c = contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13), paramAlhajas());
+
+            assertThatThrownBy(() -> service.registrar(
+                    requestConAbono("100.00", efectivo("500.00")), "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("no está disponible");
+            verify(movimientoRepository, never()).save(any());
+            verify(contratoRepository, never()).save(any());
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("1195.00");
+        }
+
+        @Test
+        void abonoLuegoRefrendo_elSegundoUsaElSaldoNuevo() {
+            // 1) Abono 100 en el contrato C8 (saldo 400 → 300, fechas 24/09 → 22/10)
+            Contrato c = contratoC8(paramAlhajas());
+            // 400 × 1.51% × 3 = 18.12, IVA 2.89 → refrendo 21.01 + 100 abono = 121.01
+            service.registrar(requestConAbono("100.00", efectivo("121.01")), "cajero1");
+            MovimientoContrato primero = capturarMovimiento();
+            assertThat(primero.getTipo()).isEqualTo(TipoMovimiento.RC);
+            assertThat(primero.getSaldoNuevo()).isEqualByComparingTo("300.00");
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("300.00");
+            assertThat(c.getFechaContrato()).isEqualTo(LocalDate.of(2026, 9, 24));
+            assertThat(c.getFechaVencimiento()).isEqualTo(LocalDate.of(2026, 10, 22));
+
+            // 2) Refrendo el día del nuevo vencimiento: 4 periodos sobre el SALDO NUEVO 300
+            //    300 × (0.91% + 0.60%) × 4 = 18.12; IVA 16% (DOWN) = 2.89; total = 21.01
+            service = servicioEn(LocalDate.of(2026, 10, 22));
+            MovimientoRequest req = request(TipoOperacion.REFRENDO, efectivo("21.01"));
+            req.setRequestId("req-segundo");
+            service.registrar(req, "cajero1");
+
+            ArgumentCaptor<MovimientoContrato> captor = ArgumentCaptor.forClass(MovimientoContrato.class);
+            verify(movimientoRepository, times(2)).save(captor.capture());
+            MovimientoContrato segundo = captor.getAllValues().get(1);
+            assertThat(segundo.getTipo()).isEqualTo(TipoMovimiento.RF);
+            assertThat(segundo.getSaldoAnterior()).isEqualByComparingTo("300.00");
+            // El interés del segundo se calcula sobre 300, no sobre 400 (RN-13: el nuevo saldo aplica al siguiente movimiento)
+            assertThat(segundo.getInteres()).isEqualByComparingTo("18.12");
+            assertThat(segundo.getIva()).isEqualByComparingTo("2.89");
+            assertThat(segundo.getMonto()).isEqualByComparingTo("21.01");
+            // El refrendo no reduce el saldo
+            assertThat(segundo.getSaldoNuevo()).isEqualByComparingTo("300.00");
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("300.00");
+            assertThat(c.getNumRefrendos()).isEqualTo(2);
+        }
     }
 
     // =========================================================================
-    // E. Consistencia refrendar <-> PDF en plazo QUINCENAL (diasPorPeriodo=15)
-    //    Antes divergian aqui: PDF usaba k como multiplicador de semanas (=1 y 2), refrendar
-    //    usaba ceil(dias/7). Con quincenal, k=1 (15 dias) daba 1 semana en PDF, pero refrendar
-    //    daba ceil(15/7)=3. Ahora ambos usan la misma formula via el motor.
+    // Ventana de Cobro (RN-24)
     // =========================================================================
 
-    @Test
-    void consistenciaRefrendarVsMotor_plazoQuincenal_15DiasAtraso() {
-        Contrato c = contratoRef(15, 15); // quincenal, 15 dias de atraso
-        PlazoParametro pp = paramVigente();
-        when(contratoRepository.findById(42L)).thenReturn(Optional.of(c));
-        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(1L, 1, 1))
-                .thenReturn(Optional.of(pp));
+    @Nested
+    class VentanaDeCobro {
 
-        // Snapshot del desglose ANTES de refrendar (refrendar muta fechaVencimiento sumandole
-        // diasPorPeriodo, lo que anula el atraso y falsearia la comparacion posterior).
-        LocalDate fechaPago = LocalDate.now();
-        var expected = calculoContratoService.calcularCobroPeriodo(c, pp, fechaPago, 1);
+        @Test
+        void pagoMixto_efectivoMasTarjetaIgualAlTotal_guardaSoloLosUltimos4DeLaTarjeta() {
+            contratoC2();
 
-        service.refrendar(refrendoRequest(BigDecimal.ZERO), "cajero1");
+            service.registrar(request(TipoOperacion.REFRENDO, mixto("50.00", "45.92")), "cajero1");
 
-        MovimientoContrato mov = capturarMovimiento();
-        // 15 dias atraso - 2 gracia = 13 dias -> ceil(13/7) = 2 semanas
-        assertThat(mov.getSemanasVencidas()).isEqualTo(2);
-        assertThat(mov.getSancion()).isEqualByComparingTo("40.00"); // 1000*2/100*2
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getImporteEfectivo()).isEqualByComparingTo("50.00");
+            assertThat(mov.getImporteTarjeta()).isEqualByComparingTo("45.92");
+            assertThat(mov.getCambioEntregado()).isEqualByComparingTo("0.00");
+            assertThat(mov.getTipoTarjeta()).isEqualTo(TipoTarjeta.DEBITO);
+            assertThat(mov.getTarjetaUltimos4()).isEqualTo("1234");
+            assertThat(mov.getBancoEmisor().getNombre()).isEqualTo("BBVA");
+            assertThat(mov.getAutorizacionBanco()).isEqualTo("A1B2C3");
+        }
 
-        // Consistencia: el motor y el refrendar producen el mismo desglose para el mismo insumo.
-        // Si divergieran (como antes de Pasada 2 en plazos ≠ 7 dias), este assert fallaria.
-        assertThat(mov.getSancion()).isEqualByComparingTo(expected.sancion());
-        assertThat(mov.getInteres()).isEqualByComparingTo(
-                expected.interes().add(expected.almacen()).add(expected.gastosAdmin()));
-        assertThat(mov.getMonto()).isEqualByComparingTo(expected.total());
+        @Test
+        void efectivoMayorAlTotal_calculaElCambio() {
+            contratoC2();
+
+            MovimientoResponse resp = service.registrar(request(TipoOperacion.REFRENDO, efectivo("100.00")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getImporteEfectivo()).isEqualByComparingTo("100.00");
+            assertThat(mov.getCambioEntregado()).isEqualByComparingTo("4.08");
+            assertThat(mov.getImporteTarjeta()).isEqualByComparingTo("0");
+            assertThat(mov.getTarjetaUltimos4()).isNull();
+            assertThat(resp.getCambioEntregado()).isEqualByComparingTo("4.08");
+        }
+
+        @Test
+        void pagoMixtoConCambio_elCambioSaleDelEfectivo() {
+            contratoC2();
+
+            service.registrar(request(TipoOperacion.REFRENDO, mixto("60.00", "45.92")), "cajero1");
+
+            assertThat(capturarMovimiento().getCambioEntregado()).isEqualByComparingTo("10.00");
+        }
+
+        @Test
+        void tarjetaMayorAlTotal_400() {
+            contratoC2();
+
+            assertThatThrownBy(() -> service.registrar(
+                    request(TipoOperacion.REFRENDO, mixto("0", "100.00")), "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("tarjeta");
+            verify(movimientoRepository, never()).save(any());
+            verify(contratoRepository, never()).save(any());
+        }
+
+        @Test
+        void tarjetaSinAutorizacion_400() {
+            contratoC2();
+            PagoRequest pago = mixto("0", "95.92");
+            pago.setAutorizacion(" ");
+
+            assertThatThrownBy(() -> service.registrar(request(TipoOperacion.REFRENDO, pago), "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("autorización");
+            verify(movimientoRepository, never()).save(any());
+        }
+
+        @Test
+        void tarjetaConBancoInactivo_400() {
+            contratoC2();
+            Banco inactivo = new Banco();
+            inactivo.setId(2);
+            inactivo.setActivo(false);
+            when(bancoRepository.findById(2)).thenReturn(Optional.of(inactivo));
+            PagoRequest pago = mixto("0", "95.92");
+            pago.setBancoEmisorId(2);
+
+            assertThatThrownBy(() -> service.registrar(request(TipoOperacion.REFRENDO, pago), "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("banco");
+        }
+
+        @Test
+        void pagoQueNoCubreElTotal_400() {
+            contratoC2();
+
+            assertThatThrownBy(() -> service.registrar(request(TipoOperacion.REFRENDO, efectivo("95.91")), "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("no cubre");
+            verify(movimientoRepository, never()).save(any());
+        }
     }
 
     // =========================================================================
-    // F. Regla del maximo de refrendos preservada
+    // Idempotencia, turno, cotización previa y máximo de refrendos
     // =========================================================================
 
-    @Test
-    void refrendo_alcanzoMaximoRefrendos_lanzaBadRequest() {
-        Contrato c = contratoRef(0, 7);
-        c.setNumRefrendos(5);
-        PlazoParametro pp = paramVigente();
-        pp.setNumMaxRefrendos(5);
-        when(contratoRepository.findById(42L)).thenReturn(Optional.of(c));
-        when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(1L, 1, 1))
-                .thenReturn(Optional.of(pp));
+    @Nested
+    class Validaciones {
 
-        assertThat(org.junit.jupiter.api.Assertions.assertThrows(
-                com.ignis.prestamil.exception.BadRequestException.class,
-                () -> service.refrendar(refrendoRequest(BigDecimal.ZERO), "cajero1")
-        )).hasMessageContaining("maximo de refrendos");
+        @Test
+        void requestIdRepetido_devuelveElMismoMovimientoSinCobrarDosVeces() {
+            Contrato c = contratoC2();
+            MovimientoRequest req = request(TipoOperacion.REFRENDO, efectivo("95.92"));
 
-        // No debe haberse guardado ningun movimiento
-        org.mockito.Mockito.verify(movimientoRepository, org.mockito.Mockito.never())
-                .save(any(MovimientoContrato.class));
+            MovimientoResponse primero = service.registrar(req, "cajero1");
+            MovimientoContrato registrado = capturarMovimiento();
+            // Doble clic: la segunda petición llega con el mismo requestId
+            when(movimientoRepository.findByRequestId("req-1")).thenReturn(Optional.of(registrado));
+            MovimientoResponse segundo = service.registrar(req, "cajero1");
+
+            verify(movimientoRepository, times(1)).save(any());
+            assertThat(segundo.getFolioNota()).isEqualTo(primero.getFolioNota());
+            assertThat(segundo.getMonto()).isEqualByComparingTo(primero.getMonto());
+            // El contrato se refrendó una sola vez
+            assertThat(c.getNumRefrendos()).isEqualTo(1);
+            assertThat(c.getFechaContrato()).isEqualTo(LocalDate.of(2026, 8, 13));
+            assertThat(folio.getUltimoFolio()).isEqualTo(27323);
+        }
+
+        @Test
+        void requestIdUsadoEnOtroContrato_400() {
+            contratoC2();
+            Contrato otro = new Contrato();
+            otro.setId(99L);
+            MovimientoContrato ajeno = new MovimientoContrato();
+            ajeno.setContrato(otro);
+            when(movimientoRepository.findByRequestId("req-1")).thenReturn(Optional.of(ajeno));
+
+            assertThatThrownBy(() -> service.registrar(request(TipoOperacion.REFRENDO, efectivo("95.92")), "cajero1"))
+                    .isInstanceOf(BadRequestException.class);
+            verify(movimientoRepository, never()).save(any());
+        }
+
+        @Test
+        void sinTurnoActivo_400_yNoTocaElContrato() {
+            Contrato c = contratoC2();
+            when(turnoRepository.findByActivo(true)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.registrar(request(TipoOperacion.REFRENDO, efectivo("95.92")), "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("turno activo");
+            verify(movimientoRepository, never()).save(any());
+            verify(contratoRepository, never()).save(any());
+            assertThat(c.getFechaContrato()).isEqualTo(LocalDate.of(2026, 7, 16));
+            assertThat(folio.getUltimoFolio()).isEqualTo(27322);
+        }
+
+        @Test
+        void contratoInexistente_404() {
+            when(contratoRepository.findWithLockById(42L)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.registrar(request(TipoOperacion.REFRENDO, efectivo("95.92")), "cajero1"))
+                    .isInstanceOf(ResourceNotFoundException.class);
+        }
+
+        @Test
+        void importeDistintoAlCotizado_409_paraVolverACotizar() {
+            // D-01: distinguir del 400 ("mal payload") del 409 ("estado del contrato cambió").
+            contratoC2();
+            MovimientoRequest req = request(TipoOperacion.REFRENDO, efectivo("100.00"));
+            req.setTotalCotizado(new BigDecimal("90.00"));
+
+            assertThatThrownBy(() -> service.registrar(req, "cajero1"))
+                    .isInstanceOf(ConflictException.class)
+                    .hasMessageContaining("Vuelva a cotizar");
+            verify(movimientoRepository, never()).save(any());
+        }
+
+        @Test
+        void refrendoParcialConPeriodosDistintosAlCotizado_409() {
+            // D-01: si el usuario envía 10 periodos pero el motor los recorta a 2 (max transcurridos − 1),
+            // devolver 409 en lugar de aplicar el valor en silencio.
+            service = servicioEn(LocalDate.of(2026, 9, 21));
+            PlazoParametro pp = paramAlhajas();
+            pp.setPorcInteres(new BigDecimal("0.9100"));
+            contrato1493(LocalDate.of(2026, 9, 3), LocalDate.of(2026, 10, 1), pp);
+
+            MovimientoRequest r = new MovimientoRequest();
+            r.setContratoId(42L);
+            r.setTipoOperacion(TipoOperacion.REFRENDO_PARCIAL);
+            r.setPeriodos(10);
+            r.setRequestId("req-conflict");
+            r.setPago(efectivo("200.00"));
+            // El usuario cotizó algo distinto a lo que el motor habría aplicado hoy
+            r.setTotalCotizado(new BigDecimal("200.00"));
+
+            assertThatThrownBy(() -> service.registrar(r, "cajero1"))
+                    .isInstanceOf(ConflictException.class)
+                    .hasMessageContaining("10")
+                    .hasMessageContaining("2");
+            verify(movimientoRepository, never()).save(any());
+        }
+
+        @Test
+        void importeIgualAlCotizado_registra() {
+            contratoC2();
+            MovimientoRequest req = request(TipoOperacion.REFRENDO, efectivo("95.92"));
+            req.setTotalCotizado(new BigDecimal("95.92"));
+
+            service.registrar(req, "cajero1");
+
+            assertThat(capturarMovimiento().getMonto()).isEqualByComparingTo("95.92");
+        }
+
+        @Test
+        void refrendoFueraDeLaMatriz_400() {
+            Contrato c = contratoC2();
+            c.getPartidas().get(0).setEstatus(EstatusPartida.APA);
+
+            assertThatThrownBy(() -> service.registrar(request(TipoOperacion.REFRENDO, efectivo("95.92")), "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("no está disponible");
+        }
+
+        @Test
+        void maximoDeRefrendosAlcanzado_400_soloSePuedeFiniquitar() {
+            PlazoParametro electronicos = paramAlhajas();
+            electronicos.setNumMaxRefrendos(5);
+            Contrato c = contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13), electronicos);
+            c.setNumRefrendos(5);
+
+            assertThatThrownBy(() -> service.registrar(request(TipoOperacion.REFRENDO, efectivo("95.92")), "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("máximo de refrendos");
+            verify(movimientoRepository, never()).save(any());
+
+            // El finiquito sigue disponible
+            service.registrar(request(TipoOperacion.FINIQUITO, efectivo("1290.92")), "cajero1");
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.FINIQUITADO);
+        }
+
+        @Test
+        void maximoDeRefrendosCero_esSinLimite() {
+            Contrato c = contratoC2();
+            c.setNumRefrendos(80);
+
+            service.registrar(request(TipoOperacion.REFRENDO, efectivo("95.92")), "cajero1");
+
+            assertThat(c.getNumRefrendos()).isEqualTo(81);
+        }
+    }
+
+    // =========================================================================
+    // Endpoint deprecado /refrendo
+    // =========================================================================
+
+    @Nested
+    @SuppressWarnings("deprecation")
+    class RefrendoDeprecado {
+
+        @Test
+        void conAbono_registraRcPagadoEnEfectivoExacto() {
+            Contrato c = contratoC2();
+            RefrendoRequest r = new RefrendoRequest();
+            r.setIdContrato(42L);
+            r.setAbonoCapital(new BigDecimal("100.00"));
+
+            service.refrendar(r, "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RC);
+            // El abono no lleva IVA ni reduce el interés del periodo en que se paga (RN-13)
+            assertThat(mov.getMonto()).isEqualByComparingTo("195.92");
+            assertThat(mov.getImporteEfectivo()).isEqualByComparingTo("195.92");
+            assertThat(mov.getCambioEntregado()).isEqualByComparingTo("0");
+            assertThat(mov.getRequestId()).isNotBlank();
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("1095.00");
+        }
+
+        @Test
+        void sinAbono_registraRefrendo() {
+            contratoC2();
+            RefrendoRequest r = new RefrendoRequest();
+            r.setIdContrato(42L);
+
+            MovimientoResponse resp = service.refrendar(r, "cajero1");
+
+            assertThat(resp.getTipo()).isEqualTo(TipoMovimiento.RF);
+            assertThat(resp.getMonto()).isEqualByComparingTo("95.92");
+        }
+    }
+
+    // =========================================================================
+    // Cotización (F1): solo lectura, valida la acción contra la matriz RN-16
+    // =========================================================================
+
+    @Nested
+    class Cotizacion {
+
+        /** Contrato semanal de 4 periodos, préstamo = saldo = 1000, tasas 3% + 2% (+1% gastos admin). */
+        private Contrato contratoCotizable(int diasAtraso) {
+            PlazoParametro pp = paramAlhajas();
+            pp.setPorcInteres(new BigDecimal("3.0000"));
+            pp.setPorcAlmacen(new BigDecimal("2.0000"));
+            LocalDate vencimiento = HOY.minusDays(diasAtraso);
+            Contrato c = contrato1493(vencimiento.minusDays(28), vencimiento, pp);
+            c.setFolio("CTR-000042");
+            c.setMontoPrestamo(new BigDecimal("1000.00"));
+            c.setSaldoCapital(new BigDecimal("1000.00"));
+            return c;
+        }
+
+        private CotizacionRequest request(TipoOperacion operacion) {
+            CotizacionRequest r = new CotizacionRequest();
+            r.setContratoId(42L);
+            r.setTipoOperacion(operacion);
+            return r;
+        }
+
+        @Test
+        void refrendoVigente_devuelveLaCotizacionYNoPersisteNada() {
+            // Vence en 5 dias: 23 dias transcurridos → 4 periodos
+            contratoCotizable(-5);
+
+            CotizacionMovimientoResponse resp = service.cotizar(request(TipoOperacion.REFRENDO));
+
+            assertThat(resp.getContratoId()).isEqualTo(42L);
+            assertThat(resp.getFolio()).isEqualTo("CTR-000042");
+            assertThat(resp.getTipoMovimiento()).isEqualTo(TipoMovimiento.RF);
+            assertThat(resp.getEstatusActual()).isEqualTo(EstatusOperativo.VIGENTE);
+            assertThat(resp.getAccionesDisponibles()).contains(AccionContrato.REFRENDO, AccionContrato.FINIQUITO);
+            assertThat(resp.getPeriodosTranscurridos()).isEqualTo(4);
+            // 1000 × (3% + 2%) × 4 = 200; IVA 32; sin gastos admin (GAP-09)
+            assertThat(resp.getInteresTotal()).isEqualByComparingTo("200.00");
+            assertThat(resp.getSubtotal()).isEqualByComparingTo("200.00");
+            assertThat(resp.getIva()).isEqualByComparingTo("32.00");
+            assertThat(resp.getTotal()).isEqualByComparingTo("232.00");
+            assertThat(resp.getTotalConLetra()).isEqualTo("DOSCIENTOS TREINTA Y DOS PESOS 00/100 M.N.");
+
+            verify(movimientoRepository, never()).save(any());
+            verify(contratoRepository, never()).save(any());
+        }
+
+        @Test
+        void finiquitoEnContratoVencido_cotizaComoFxConSancion() {
+            // F6: TipoOperacion.FINIQUITO en un contrato vencido resuelve a FX. Vence hace 10 días
+            // (gracia 2, sancionables 10 → ceil(10/7) = 2 semanas): 4 periodos normales + 2 extemp.
+            contratoCotizable(10);
+
+            CotizacionMovimientoResponse resp = service.cotizar(request(TipoOperacion.FINIQUITO));
+
+            assertThat(resp.getTipoMovimiento()).isEqualTo(TipoMovimiento.FX);
+            assertThat(resp.getEstatusActual()).isEqualTo(EstatusOperativo.VENCIDO);
+            assertThat(resp.getAccionesDisponibles()).contains(AccionContrato.FINIQUITO_EXTEMPORANEO);
+            assertThat(resp.getPeriodosExtemporaneos()).isEqualTo(2);
+            assertThat(resp.getSancion()).isPositive();
+            verify(movimientoRepository, never()).save(any());
+        }
+
+        @Test
+        void abonoEnContratoVencido_rechaza() {
+            contratoCotizable(10);
+            CotizacionRequest r = request(TipoOperacion.ABONO_CAPITAL);
+            r.setAbonoCapital(new BigDecimal("100.00"));
+
+            assertThatThrownBy(() -> service.cotizar(r)).isInstanceOf(BadRequestException.class);
+        }
+
+        @Test
+        void refrendoConUnaPartidaApartada_rechaza() {
+            Contrato c = contratoCotizable(10);
+            c.getPartidas().get(0).setEstatus(EstatusPartida.APA);
+
+            assertThatThrownBy(() -> service.cotizar(request(TipoOperacion.REFRENDO)))
+                    .isInstanceOf(BadRequestException.class);
+        }
+
+        @Test
+        void conElMaximoDeRefrendosAlcanzado_soloOfreceFiniquitar() {
+            Contrato c = contratoCotizable(-5);
+            c.setNumRefrendos(3);
+            PlazoParametro conMaximo = paramAlhajas();
+            conMaximo.setNumMaxRefrendos(3);
+            when(plazoParametroRepository.findByPlazoIdAndTipoPrendaIdAndSucursalId(1L, 1, 1))
+                    .thenReturn(Optional.of(conMaximo));
+
+            CotizacionMovimientoResponse resp = service.cotizar(request(TipoOperacion.FINIQUITO));
+
+            assertThat(resp.getAccionesDisponibles())
+                    .contains(AccionContrato.FINIQUITO)
+                    .doesNotContain(AccionContrato.REFRENDO, AccionContrato.ABONO_CAPITAL,
+                            AccionContrato.REFRENDO_PARCIAL);
+            assertThatThrownBy(() -> service.cotizar(request(TipoOperacion.REFRENDO)))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("máximo de refrendos");
+        }
+
+        @Test
+        void contratoInexistente_404() {
+            when(contratoRepository.findById(42L)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.cotizar(request(TipoOperacion.REFRENDO)))
+                    .isInstanceOf(ResourceNotFoundException.class);
+        }
+    }
+
+    // =========================================================================
+    // F8: Consulta de partidas y movimientos (getMovimientos)
+    // =========================================================================
+
+    /** El historial es la vista de auditoría del contrato: cronológico, incluyendo cancelados. */
+    @Nested
+    class Historial {
+
+        private MovimientoContrato mov(Long id, TipoMovimiento tipo, LocalDateTime cuando, boolean cancelado) {
+            Usuario u = new Usuario();
+            u.setNombreUsuario("cajero1");
+            MovimientoContrato m = new MovimientoContrato();
+            m.setId(id);
+            m.setTipo(tipo);
+            m.setFecha(cuando);
+            m.setMonto(BigDecimal.ZERO);
+            m.setInteres(BigDecimal.ZERO);
+            m.setSancion(BigDecimal.ZERO);
+            m.setAbonoCapital(BigDecimal.ZERO);
+            m.setIva(BigDecimal.ZERO);
+            m.setSemanasVencidas(0);
+            m.setUsuario(u);
+            m.setCancelado(cancelado);
+            return m;
+        }
+
+        @Test
+        void devuelveMovimientosEnOrdenCronologicoIncluyendoCancelados() {
+            Contrato c = contratoC2();
+            MovimientoContrato emp = mov(1L, TipoMovimiento.EMP, LocalDateTime.of(2026, 7, 16, 10, 0), false);
+            MovimientoContrato rfCancelado = mov(2L, TipoMovimiento.RF, LocalDateTime.of(2026, 8, 11, 12, 30), true);
+            rfCancelado.setMotivoCancelacion("Se capturó el plazo equivocado");
+            MovimientoContrato rf = mov(3L, TipoMovimiento.RF, LocalDateTime.of(2026, 8, 11, 12, 45), false);
+            when(movimientoRepository.findByContratoIdOrderByFechaAsc(42L))
+                    .thenReturn(List.of(emp, rfCancelado, rf));
+
+            List<MovimientoResponse> resp = service.getMovimientos(42L);
+
+            assertThat(resp).extracting(MovimientoResponse::getId).containsExactly(1L, 2L, 3L);
+            assertThat(resp).extracting(MovimientoResponse::getTipo)
+                    .containsExactly(TipoMovimiento.EMP, TipoMovimiento.RF, TipoMovimiento.RF);
+            assertThat(resp.get(1).getCancelado()).isTrue();
+            assertThat(resp.get(1).getMotivoCancelacion()).isEqualTo("Se capturó el plazo equivocado");
+            assertThat(resp.get(2).getCancelado()).isFalse();
+            // El folio del contrato viaja en cada fila (para armar el título del modal sin otra llamada)
+            assertThat(resp).allMatch(r -> "1493".equals(r.getFolioContrato()));
+        }
+
+        @Test
+        void contratoSinMovimientosDevuelveListaVacia() {
+            contratoC2();
+            when(movimientoRepository.findByContratoIdOrderByFechaAsc(42L)).thenReturn(List.of());
+
+            assertThat(service.getMovimientos(42L)).isEmpty();
+        }
+
+        @Test
+        void contratoInexistente_404() {
+            when(contratoRepository.findById(42L)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.getMovimientos(42L))
+                    .isInstanceOf(ResourceNotFoundException.class);
+        }
+    }
+
+    // =========================================================================
+    // F9: Reposición / reimpresión de contrato (RN-25, Jorge 2026-09-26)
+    // =========================================================================
+
+    @Nested
+    class Reposicion {
+
+        /** IDs de rol del seed: Sistemas = 1, Cajero = 3, Gerente = 5. */
+        private static final int ROL_SISTEMAS = 1;
+        private static final int ROL_CAJERO = 3;
+        private static final int ROL_GERENTE = 5;
+
+        private void configuracionRolesExentar(String csv) {
+            Configuracion c = new Configuracion();
+            c.setConfiguracion(Constantes.ROLES_PERMITIDOS_EXENTAR_REPOSICION);
+            c.setValorCadena(csv);
+            lenient().when(configuracionRepository.findByConfiguracion(Constantes.ROLES_PERMITIDOS_EXENTAR_REPOSICION))
+                    .thenReturn(Optional.of(c));
+        }
+
+        private Usuario usuarioConRol(String nombreUsuario, int idRol) {
+            Usuario u = new Usuario();
+            u.setNombreUsuario(nombreUsuario);
+            Rol r = new Rol();
+            r.setId(idRol);
+            u.setRol(r);
+            lenient().when(usuarioRepository.findByNombreUsuario(nombreUsuario)).thenReturn(Optional.of(u));
+            return u;
+        }
+
+        private PlazoParametro reposicionPorPorcentaje(String porc) {
+            PlazoParametro p = paramAlhajas();
+            p.setCobrarReposicionContrato(true);
+            p.setReposicionEsPorcentaje(true);
+            p.setPorcReposicion(new BigDecimal(porc));
+            p.setMontoReposicion(BigDecimal.ZERO);
+            return p;
+        }
+
+        private PlazoParametro reposicionPorMontoFijo(String monto) {
+            PlazoParametro p = paramAlhajas();
+            p.setCobrarReposicionContrato(true);
+            p.setReposicionEsPorcentaje(false);
+            p.setPorcReposicion(BigDecimal.ZERO);
+            p.setMontoReposicion(new BigDecimal(monto));
+            return p;
+        }
+
+        private ReposicionRequest request(PagoRequest pago) {
+            ReposicionRequest r = new ReposicionRequest();
+            r.setPago(pago);
+            r.setRequestId("req-repo-1");
+            return r;
+        }
+
+        private ReposicionRequest requestExento(String comentario) {
+            ReposicionRequest r = new ReposicionRequest();
+            r.setNoCobrar(true);
+            r.setComentario(comentario);
+            r.setRequestId("req-repo-exento");
+            return r;
+        }
+
+        @Test
+        void cobrada_porPorcentajeSobrePrestamo_registraReConFolioYPago() {
+            // 1,195 × 3% = 35.85. Cajero puede cobrar (no exentar), rol no importa.
+            usuarioConRol("cajero1", ROL_CAJERO);
+            contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13), reposicionPorPorcentaje("3.0000"));
+
+            MovimientoResponse resp = service.cobrarReposicion(42L, request(efectivo("35.85")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RE);
+            assertThat(mov.getMonto()).isEqualByComparingTo("35.85");
+            assertThat(mov.getInteres()).isEqualByComparingTo("0");
+            assertThat(mov.getSancion()).isEqualByComparingTo("0");
+            assertThat(mov.getIva()).isEqualByComparingTo("0");
+            assertThat(mov.getImporteEfectivo()).isEqualByComparingTo("35.85");
+            assertThat(mov.getCambioEntregado()).isEqualByComparingTo("0.00");
+            assertThat(mov.getFolioNota()).isEqualTo(27323);
+            assertThat(mov.getRequestId()).isEqualTo("req-repo-1");
+            assertThat(mov.getTurno()).isSameAs(turno);
+            assertThat(mov.getUsuario().getNombreUsuario()).isEqualTo("cajero1");
+            assertThat(resp.getTipo()).isEqualTo(TipoMovimiento.RE);
+            assertThat(resp.getFolioNota()).isEqualTo(27323);
+        }
+
+        @Test
+        void cobrada_porMontoFijo_desglosaIvaIncluidoPorDefecto_C04() {
+            // C-04: $50 fijo con bandera default (incluye IVA) → subtotal 43.10 + IVA 6.90 = 50.00
+            usuarioConRol("cajero1", ROL_CAJERO);
+            contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13), reposicionPorMontoFijo("50.00"));
+
+            service.cobrarReposicion(42L, request(efectivo("50.00")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RE);
+            assertThat(mov.getMonto()).isEqualByComparingTo("50.00");
+            assertThat(mov.getIva()).isEqualByComparingTo("6.90");
+            assertThat(mov.getMonto().subtract(mov.getIva())).isEqualByComparingTo("43.10");
+            assertThat(mov.getImporteEfectivo()).isEqualByComparingTo("50.00");
+            assertThat(mov.getFolioNota()).isEqualTo(27323);
+        }
+
+        @Test
+        void cobrada_porMontoFijo_sinBanderaIncluyeIva_sumaIvaEncima_C04() {
+            // C-04: $50 fijo con bandera false → base $50 + IVA $8 = total $58
+            when(parametrosSistemaCache.isReposicionIncluyeIva()).thenReturn(false);
+            usuarioConRol("cajero1", ROL_CAJERO);
+            contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13), reposicionPorMontoFijo("50.00"));
+
+            service.cobrarReposicion(42L, request(efectivo("58.00")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RE);
+            assertThat(mov.getMonto()).isEqualByComparingTo("58.00");
+            assertThat(mov.getIva()).isEqualByComparingTo("8.00");
+            assertThat(mov.getMonto().subtract(mov.getIva())).isEqualByComparingTo("50.00");
+            assertThat(mov.getImporteEfectivo()).isEqualByComparingTo("58.00");
+        }
+
+        @Test
+        void exentaPorGerente_montoCero_registraMovimientoConUsuarioYComentario() {
+            // El usuario que exentó queda en mov.usuario; el comentario en observaciones.
+            configuracionRolesExentar("1,5");
+            usuarioConRol("gerente1", ROL_GERENTE);
+            Contrato c = contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13), reposicionPorPorcentaje("3.0000"));
+
+            MovimientoResponse resp = service.cobrarReposicion(
+                    42L, requestExento("Cortesía por cliente frecuente"), "gerente1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RE);
+            assertThat(mov.getMonto()).isEqualByComparingTo("0");
+            assertThat(mov.getUsuario().getNombreUsuario()).isEqualTo("gerente1");
+            assertThat(mov.getObservaciones()).contains("Cortesía por cliente frecuente");
+            assertThat(mov.getImporteEfectivo()).isEqualByComparingTo("0");
+            assertThat(mov.getImporteTarjeta()).isEqualByComparingTo("0");
+            assertThat(mov.getFolioNota()).isEqualTo(27323); // Aun exenta, el ticket lleva folio (RN-25)
+            assertThat(resp.getMonto()).isEqualByComparingTo("0");
+            // La reposición no cambia el contrato
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("1195.00");
+            assertThat(c.getFechaVencimiento()).isEqualTo(LocalDate.of(2026, 8, 13));
+        }
+
+        @Test
+        void exentaPorSistemas_permitida() {
+            configuracionRolesExentar("1,5");
+            usuarioConRol("sistemas1", ROL_SISTEMAS);
+            contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13), reposicionPorPorcentaje("3.0000"));
+
+            service.cobrarReposicion(42L, requestExento("Ajuste manual"), "sistemas1");
+
+            assertThat(capturarMovimiento().getMonto()).isEqualByComparingTo("0");
+        }
+
+        @Test
+        void cajeroIntentaNoCobrar_403_yNoRegistraNadaNiIncrementaFolio() {
+            configuracionRolesExentar("1,5");
+            usuarioConRol("cajero1", ROL_CAJERO);
+            Contrato c = contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13), reposicionPorPorcentaje("3.0000"));
+
+            assertThatThrownBy(() -> service.cobrarReposicion(42L, requestExento("Sin cobro"), "cajero1"))
+                    .isInstanceOf(ForbiddenException.class)
+                    .hasMessageContaining("permiso");
+
+            verify(movimientoRepository, never()).save(any());
+            assertThat(folio.getUltimoFolio()).isEqualTo(27322);
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("1195.00");
+        }
+
+        @Test
+        void requestIdRepetido_devuelveElMismoMovimiento_yNoCobraDosVeces() {
+            usuarioConRol("cajero1", ROL_CAJERO);
+            contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13), reposicionPorPorcentaje("3.0000"));
+
+            MovimientoResponse primero = service.cobrarReposicion(42L, request(efectivo("35.85")), "cajero1");
+            MovimientoContrato registrado = capturarMovimiento();
+            when(movimientoRepository.findByRequestId("req-repo-1")).thenReturn(Optional.of(registrado));
+
+            MovimientoResponse segundo = service.cobrarReposicion(42L, request(efectivo("35.85")), "cajero1");
+
+            verify(movimientoRepository, times(1)).save(any());
+            assertThat(segundo.getFolioNota()).isEqualTo(primero.getFolioNota());
+            assertThat(segundo.getMonto()).isEqualByComparingTo(primero.getMonto());
+            assertThat(folio.getUltimoFolio()).isEqualTo(27323);
+        }
+
+        @Test
+        void d15_plazoSinReposicionHabilitada_registraReEn0ConObservacionYPermiteReimpresion() {
+            // D-15: antes esto respondía 400 "El plazo no tiene habilitado el cobro de reposición".
+            // Ahora el servicio registra un RE en $0 con la observación "sin cobro de reposición
+            // configurado" para que el flujo de C-02 pueda emitir el PDF del contrato igual
+            // (COCAE tenía la reposición "inhabilitada en cero" y aun así reimprimía).
+            usuarioConRol("cajero1", ROL_CAJERO);
+            PlazoParametro sinCobro = paramAlhajas();
+            sinCobro.setCobrarReposicionContrato(false);
+            contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13), sinCobro);
+
+            service.cobrarReposicion(42L, request(efectivo("0.00")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RE);
+            assertThat(mov.getMonto()).isEqualByComparingTo("0.00");
+            assertThat(mov.getIva()).isEqualByComparingTo("0.00");
+            assertThat(mov.getObservaciones()).contains("sin cobro de reposición configurado");
+            // RE en $0 no mueve caja, pero sí persiste y emite folio para el ticket.
+            assertThat(mov.getFolioNota()).isEqualTo(27323);
+        }
+
+        @Test
+        void sinTurnoActivo_400() {
+            usuarioConRol("cajero1", ROL_CAJERO);
+            contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13), reposicionPorPorcentaje("3.0000"));
+            when(turnoRepository.findByActivo(true)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.cobrarReposicion(42L, request(efectivo("35.85")), "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("turno activo");
+            verify(movimientoRepository, never()).save(any());
+        }
+
+        // D-08: casos explícitos del plan.
+
+        @Test
+        void d08_cobrarReposicion40Fijo_cobraYRegistraMovimientoRE() {
+            // Plan D-08: "capturamos reposición de $40 fijo y queremos verla cobrarse".
+            // $40 incluye IVA (default): subtotal 34.48 + IVA 5.52 = 40.00.
+            usuarioConRol("cajero1", ROL_CAJERO);
+            contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13), reposicionPorMontoFijo("40.00"));
+
+            service.cobrarReposicion(42L, request(efectivo("40.00")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RE);
+            assertThat(mov.getMonto()).isEqualByComparingTo("40.00");
+            assertThat(mov.getIva()).isEqualByComparingTo("5.52");
+            assertThat(mov.getImporteEfectivo()).isEqualByComparingTo("40.00");
+            assertThat(mov.getFolioNota()).isEqualTo(27323);
+        }
+
+        @Test
+        void d15_contratoEN_VENTA_sinConfigReposicion_registraReEn0() {
+            // D-15: contrato EN_VENTA sin reposición configurada en el plazo → RE en $0 con
+            // observación específica, para que la reimpresión del contrato siga disponible.
+            usuarioConRol("cajero1", ROL_CAJERO);
+            PlazoParametro sinCobro = paramAlhajas();
+            sinCobro.setCobrarReposicionContrato(false);
+            Contrato c = contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13), sinCobro);
+            c.setEstatus(EstatusContrato.EN_VENTA);
+            c.getPartidas().forEach(p -> p.setEstatus(EstatusPartida.OP));
+
+            service.cobrarReposicion(42L, request(efectivo("0.00")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RE);
+            assertThat(mov.getMonto()).isEqualByComparingTo("0.00");
+            assertThat(mov.getObservaciones()).contains("sin cobro de reposición configurado");
+        }
+
+        @Test
+        void d15_contratoEN_VENTA_conPartidaApartada_rechazaConMotivoReal() {
+            // D-15: una prenda APA desvía el estatus derivado a APARTADO (RN-17). El mensaje
+            // debe decir el motivo real, no el genérico "plazo no tiene reposición".
+            usuarioConRol("cajero1", ROL_CAJERO);
+            Contrato c = contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13),
+                    reposicionPorMontoFijo("40.00"));
+            c.setEstatus(EstatusContrato.EN_VENTA);
+            c.getPartidas().get(0).setEstatus(EstatusPartida.APA);
+
+            assertThatThrownBy(() -> service.cobrarReposicion(42L, request(efectivo("40.00")), "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("apartada");
+            verify(movimientoRepository, never()).save(any());
+        }
+
+        @Test
+        void d15_contratoFINIQUITADO_rechazaConMotivoReal() {
+            // D-15: finiquitado no permite reimprimir (solo consulta y reimpresión del último ticket).
+            usuarioConRol("cajero1", ROL_CAJERO);
+            Contrato c = contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13),
+                    reposicionPorMontoFijo("40.00"));
+            c.setEstatus(EstatusContrato.FINIQUITADO);
+
+            assertThatThrownBy(() -> service.cobrarReposicion(42L, request(efectivo("40.00")), "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("finiquitado");
+            verify(movimientoRepository, never()).save(any());
+        }
+
+        @Test
+        void d08_contratoEN_VENTA_sinPartidasVendidasOApartadas_permiteReposicion() {
+            // D-08 + RN-16: la reposición también se permite con el contrato en venta,
+            // siempre que ninguna prenda esté vendida o apartada. El servicio lee el PlazoParametro
+            // del plazo + tipoPrenda de la primera partida del contrato (obtenerParametro).
+            usuarioConRol("cajero1", ROL_CAJERO);
+            Contrato c = contrato1493(LocalDate.of(2026, 7, 16), LocalDate.of(2026, 8, 13),
+                    reposicionPorMontoFijo("40.00"));
+            c.setEstatus(EstatusContrato.EN_VENTA);
+            // Partidas en operación (NO vendidas ni apartadas): el EstatusContratoResolver
+            // resolveria el contrato a EN_VENTA (no VENDIDO/APARTADO), que es la precondicion.
+            c.getPartidas().forEach(p -> p.setEstatus(EstatusPartida.OP));
+
+            service.cobrarReposicion(42L, request(efectivo("40.00")), "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RE);
+            assertThat(mov.getMonto()).isEqualByComparingTo("40.00");
+            // El movimiento NO cambia el estatus del contrato (reposición solo imprime).
+            assertThat(mov.getEstatusAnterior()).isEqualTo(EstatusContrato.EN_VENTA);
+            assertThat(mov.getEstatusNuevo()).isEqualTo(EstatusContrato.EN_VENTA);
+        }
+    }
+
+    // =========================================================================
+    // F10: Cancelación de movimientos (RN-20, RN-26)
+    // =========================================================================
+
+    /**
+     * Cancelación genérica: cada movimiento guarda su estado anterior, así que revertir es restaurar
+     * los {@code *Anterior} y marcar el movimiento como cancelado. Nunca se borra (auditoría).
+     */
+    @Nested
+    class Cancelacion {
+
+        private static final int ROL_SISTEMAS = 1;
+        private static final int ROL_CAJERO = 3;
+        private static final int ROL_GERENTE = 5;
+
+        private void configuracionRolesCancelar(String csv) {
+            Configuracion c = new Configuracion();
+            c.setConfiguracion(Constantes.ROLES_PERMITIDOS_CANCELAR_MOVIMIENTO);
+            c.setValorCadena(csv);
+            lenient().when(configuracionRepository.findByConfiguracion(Constantes.ROLES_PERMITIDOS_CANCELAR_MOVIMIENTO))
+                    .thenReturn(Optional.of(c));
+        }
+
+        private Usuario usuarioConRol(String nombreUsuario, int idRol) {
+            Usuario u = new Usuario();
+            u.setNombreUsuario(nombreUsuario);
+            Rol r = new Rol();
+            r.setId(idRol);
+            u.setRol(r);
+            lenient().when(usuarioRepository.findByNombreUsuario(nombreUsuario)).thenReturn(Optional.of(u));
+            return u;
+        }
+
+        /** Registra un movimiento del tipo pedido usando el flujo real de F3 y lo devuelve. */
+        private MovimientoContrato registrarMovimiento(TipoOperacion op, String monto, String requestId,
+                                                        BigDecimal abono) {
+            MovimientoRequest r = new MovimientoRequest();
+            r.setContratoId(42L);
+            r.setTipoOperacion(op);
+            r.setAbonoCapital(abono);
+            r.setRequestId(requestId);
+            r.setPago(efectivo(monto));
+            service.registrar(r, "cajero1");
+            ArgumentCaptor<MovimientoContrato> captor = ArgumentCaptor.forClass(MovimientoContrato.class);
+            verify(movimientoRepository, org.mockito.Mockito.atLeastOnce()).save(captor.capture());
+            List<MovimientoContrato> saved = captor.getAllValues();
+            return saved.get(saved.size() - 1);
+        }
+
+        private MovimientoContrato registrarMovimiento(TipoOperacion op, String monto, String requestId) {
+            return registrarMovimiento(op, monto, requestId, null);
+        }
+
+        /** Enlaza un movimiento como "el último no cancelado" del contrato para la validación de RN-26. */
+        private void ultimoMovimiento(Long contratoId, MovimientoContrato mov) {
+            // Nuevo método tras C-03: ignora los RE al elegir el último cancelable
+            lenient().when(movimientoRepository
+                    .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(contratoId, TipoMovimiento.RE))
+                    .thenReturn(Optional.of(mov));
+            lenient().when(movimientoRepository.findById(mov.getId())).thenReturn(Optional.of(mov));
+        }
+
+        /** Setup por defecto: gerente con turno activo idéntico al del movimiento. */
+        private Usuario gerentePorDefecto() {
+            configuracionRolesCancelar("5");
+            Usuario g = usuarioConRol("gerente1", ROL_GERENTE);
+            return g;
+        }
+
+        private CancelarMovimientoRequest motivo(String texto) {
+            CancelarMovimientoRequest r = new CancelarMovimientoRequest();
+            r.setMotivo(texto);
+            return r;
+        }
+
+        // ------------------------------------------------------------------
+        // Un test por tipo de movimiento: guardar → cancelar → estado previo
+        // ------------------------------------------------------------------
+
+        @Test
+        void cancelarRefrendoRf_restauraSaldoFechasEstatusYNumRefrendos() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato rf = registrarMovimiento(TipoOperacion.REFRENDO, "95.92", "req-rf");
+            // Fijar id manualmente (el mock save devuelve el argumento sin id)
+            rf.setId(101L);
+            ultimoMovimiento(42L, rf);
+
+            service.cancelar(101L, motivo("Se capturó el plazo equivocado"), "gerente1");
+
+            // Contrato regresa al estado previo al refrendo
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("1195.00");
+            assertThat(c.getFechaContrato()).isEqualTo(LocalDate.of(2026, 7, 16));
+            assertThat(c.getFechaVencimiento()).isEqualTo(LocalDate.of(2026, 8, 13));
+            assertThat(c.getFechaComercializacion()).isEqualTo(LocalDate.of(2026, 8, 28));
+            assertThat(c.getNumRefrendos()).isZero();
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
+
+            // Movimiento marcado, no borrado
+            assertThat(rf.getCancelado()).isTrue();
+            assertThat(rf.getMotivoCancelacion()).isEqualTo("Se capturó el plazo equivocado");
+            assertThat(rf.getUsuarioCancela().getNombreUsuario()).isEqualTo("gerente1");
+            assertThat(rf.getFechaCancelacion()).isEqualTo(LocalDateTime.of(2026, 8, 11, 12, 30));
+            verify(bitacoraRepository).save(any(Bitacora.class));
+        }
+
+        @Test
+        void cancelarRefrendoEnGraciaRpg_restauraFechasOriginalesYSinSancion() {
+            service = servicioEn(LocalDate.of(2023, 6, 9));
+            Contrato c = contrato1493(LocalDate.of(2023, 5, 10), LocalDate.of(2023, 6, 7), paramAlhajas());
+            gerentePorDefecto();
+            MovimientoContrato rpg = registrarMovimiento(TipoOperacion.REFRENDO, "95.92", "req-rpg");
+            rpg.setId(102L);
+            assertThat(rpg.getTipo()).isEqualTo(TipoMovimiento.RPG);
+            ultimoMovimiento(42L, rpg);
+
+            service.cancelar(102L, motivo("Corrección de captura"), "gerente1");
+
+            assertThat(c.getFechaContrato()).isEqualTo(LocalDate.of(2023, 5, 10));
+            assertThat(c.getFechaVencimiento()).isEqualTo(LocalDate.of(2023, 6, 7));
+            assertThat(c.getNumRefrendos()).isZero();
+            assertThat(rpg.getCancelado()).isTrue();
+        }
+
+        @Test
+        void cancelarAbonoCapitalRc_restauraSaldoAnterior() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoRequest r = new MovimientoRequest();
+            r.setContratoId(42L);
+            r.setTipoOperacion(TipoOperacion.ABONO_CAPITAL);
+            r.setAbonoCapital(new BigDecimal("100.00"));
+            r.setRequestId("req-rc");
+            r.setPago(efectivo("195.92"));
+            service.registrar(r, "cajero1");
+            MovimientoContrato rc = capturarMovimiento();
+            rc.setId(103L);
+            assertThat(rc.getTipo()).isEqualTo(TipoMovimiento.RC);
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("1095.00");
+            ultimoMovimiento(42L, rc);
+
+            service.cancelar(103L, motivo("Abono aplicado al contrato equivocado"), "gerente1");
+
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("1195.00");
+            assertThat(rc.getCancelado()).isTrue();
+        }
+
+        @Test
+        void cancelarRefrendoParcialRp_restauraFechasYNumRefrendos() {
+            // Contrato con 3 periodos transcurridos, paga 1 → RP
+            service = servicioEn(LocalDate.of(2026, 9, 21));
+            PlazoParametro pp = paramAlhajas();
+            pp.setPorcInteres(new BigDecimal("0.9100"));
+            Contrato c = contrato1493(LocalDate.of(2026, 9, 3), LocalDate.of(2026, 10, 1), pp);
+            c.setMontoPrestamo(new BigDecimal("400.00"));
+            c.setSaldoCapital(new BigDecimal("400.00"));
+            gerentePorDefecto();
+
+            MovimientoRequest r = new MovimientoRequest();
+            r.setContratoId(42L);
+            r.setTipoOperacion(TipoOperacion.REFRENDO_PARCIAL);
+            r.setPeriodos(1);
+            r.setRequestId("req-rp");
+            r.setPago(efectivo("7.01"));
+            service.registrar(r, "cajero1");
+            MovimientoContrato rp = capturarMovimiento();
+            rp.setId(104L);
+            assertThat(rp.getTipo()).isEqualTo(TipoMovimiento.RP);
+            LocalDate contratoAnterior = LocalDate.of(2026, 9, 3);
+            LocalDate vencAnterior = LocalDate.of(2026, 10, 1);
+            assertThat(c.getFechaContrato()).isNotEqualTo(contratoAnterior);
+            ultimoMovimiento(42L, rp);
+
+            service.cancelar(104L, motivo("Se cobró un periodo de más"), "gerente1");
+
+            assertThat(c.getFechaContrato()).isEqualTo(contratoAnterior);
+            assertThat(c.getFechaVencimiento()).isEqualTo(vencAnterior);
+            assertThat(c.getNumRefrendos()).isZero();
+            assertThat(rp.getCancelado()).isTrue();
+        }
+
+        @Test
+        void cancelarRefrendoExtemporaneoRx_restauraSaldoFechasYEstatus() {
+            // Contrato 448: RX el 11/08, restaurar a estado 30/06 → 28/07 con saldo 2050
+            service = servicioEn(LocalDate.of(2026, 8, 11));
+            PlazoParametro param = paramAlhajas();
+            param.setPorcInteres(new BigDecimal("1.0160"));
+            Contrato c = contrato1493(LocalDate.of(2026, 6, 30), LocalDate.of(2026, 7, 28), param);
+            c.setMontoPrestamo(new BigDecimal("2050.00"));
+            c.setSaldoCapital(new BigDecimal("2050.00"));
+            gerentePorDefecto();
+
+            MovimientoContrato rx = registrarMovimiento(TipoOperacion.REFRENDO, "325.69", "req-rx");
+            rx.setId(105L);
+            assertThat(rx.getTipo()).isEqualTo(TipoMovimiento.RX);
+            ultimoMovimiento(42L, rx);
+
+            service.cancelar(105L, motivo("El cliente iba a finiquitar"), "gerente1");
+
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("2050.00");
+            assertThat(c.getFechaContrato()).isEqualTo(LocalDate.of(2026, 6, 30));
+            assertThat(c.getFechaVencimiento()).isEqualTo(LocalDate.of(2026, 7, 28));
+            assertThat(c.getNumRefrendos()).isZero();
+            assertThat(rx.getCancelado()).isTrue();
+        }
+
+        @Test
+        void cancelarRefrendoParcialExtemporaneoRpx_restauraFechasVencidas() {
+            // Contrato 448 vencido, parcial paga 5 (3 norm + 2 ext) → RPX
+            service = servicioEn(LocalDate.of(2026, 8, 11));
+            PlazoParametro param = paramAlhajas();
+            param.setPorcInteres(new BigDecimal("1.0160"));
+            Contrato c = contrato1493(LocalDate.of(2026, 6, 30), LocalDate.of(2026, 7, 28), param);
+            c.setMontoPrestamo(new BigDecimal("2050.00"));
+            c.setSaldoCapital(new BigDecimal("2050.00"));
+            gerentePorDefecto();
+
+            MovimientoRequest r = new MovimientoRequest();
+            r.setContratoId(42L);
+            r.setTipoOperacion(TipoOperacion.REFRENDO_PARCIAL);
+            r.setPeriodos(5);
+            r.setRequestId("req-rpx");
+            r.setPago(efectivo("300.00"));
+            service.registrar(r, "cajero1");
+            MovimientoContrato rpx = capturarMovimiento();
+            rpx.setId(106L);
+            assertThat(rpx.getTipo()).isEqualTo(TipoMovimiento.RPX);
+            LocalDate contratoAntes = LocalDate.of(2026, 6, 30);
+            LocalDate vencAntes = LocalDate.of(2026, 7, 28);
+            ultimoMovimiento(42L, rpx);
+
+            service.cancelar(106L, motivo("Se ajustaron mal los periodos ext"), "gerente1");
+
+            assertThat(c.getFechaContrato()).isEqualTo(contratoAntes);
+            assertThat(c.getFechaVencimiento()).isEqualTo(vencAntes);
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("2050.00");
+            assertThat(rpx.getCancelado()).isTrue();
+        }
+
+        @Test
+        void cancelarFiniquitoFi_devuelveContratoAVigenteYPartidasAOp() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato fi = registrarMovimiento(TipoOperacion.FINIQUITO, "1290.92", "req-fi");
+            fi.setId(107L);
+            assertThat(fi.getTipo()).isEqualTo(TipoMovimiento.FI);
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.FINIQUITADO);
+            assertThat(c.getPartidas()).allMatch(p -> p.getEstatus() == EstatusPartida.FIN);
+            ultimoMovimiento(42L, fi);
+
+            service.cancelar(107L, motivo("El cliente no traía el dinero completo"), "gerente1");
+
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("1195.00");
+            assertThat(c.getPartidas()).allMatch(p -> p.getEstatus() == EstatusPartida.OP);
+            assertThat(fi.getCancelado()).isTrue();
+        }
+
+        @Test
+        void cancelarFiniquitoExtemporaneoFx_devuelveContratoAVigenteYPartidasAOp() {
+            service = servicioEn(LocalDate.of(2026, 8, 11));
+            PlazoParametro param = paramAlhajas();
+            param.setPorcInteres(new BigDecimal("1.0160"));
+            Contrato c = contrato1493(LocalDate.of(2026, 6, 30), LocalDate.of(2026, 7, 28), param);
+            c.setMontoPrestamo(new BigDecimal("2050.00"));
+            c.setSaldoCapital(new BigDecimal("2050.00"));
+            EstatusContrato estatusPrevio = c.getEstatus();
+            gerentePorDefecto();
+
+            MovimientoContrato fx = registrarMovimiento(TipoOperacion.FINIQUITO, "2375.69", "req-fx");
+            fx.setId(108L);
+            assertThat(fx.getTipo()).isEqualTo(TipoMovimiento.FX);
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.FINIQUITADO);
+            ultimoMovimiento(42L, fx);
+
+            service.cancelar(108L, motivo("Se cobró finiquito por error"), "gerente1");
+
+            assertThat(c.getEstatus()).isEqualTo(estatusPrevio);
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("2050.00");
+            assertThat(c.getPartidas()).allMatch(p -> p.getEstatus() == EstatusPartida.OP);
+            assertThat(fx.getCancelado()).isTrue();
+        }
+
+        /** C-03: las reposiciones no se cancelan — ni gerente ni sistemas pueden revertirlas. */
+        @Test
+        void cancelarReposicionRe_rechazadaConGerente_400() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato re = reposicionDeHoy(109L, c);
+
+            assertThatThrownBy(() -> service.cancelar(109L, motivo("Cobro de reposición duplicado"), "gerente1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("Las reposiciones de contrato no se pueden cancelar");
+            assertThat(re.getCancelado()).isFalse();
+        }
+
+        @Test
+        void cancelarReposicionRe_rechazadaConSistemas_400() {
+            // Aunque "sistemas" sea rol permitido, por ahora RE queda bloqueado para todos
+            Contrato c = contratoC2();
+            configuracionRolesCancelar("1,5");
+            usuarioConRol("sistemas1", ROL_SISTEMAS);
+            MovimientoContrato re = reposicionDeHoy(110L, c);
+
+            assertThatThrownBy(() -> service.cancelar(110L, motivo("Reversión extraordinaria por falla"), "sistemas1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("Las reposiciones de contrato no se pueden cancelar");
+            assertThat(re.getCancelado()).isFalse();
+        }
+
+        /**
+         * C-03: una reposición posterior al EMP no bloquea cancelar el EMP. El RE se ignora al
+         * decidir cuál es el último movimiento cancelable y sigue vigente tras cancelar el EMP.
+         */
+        @Test
+        void empSeguidoDeRe_puedeCancelarElEmpYElReSigueVigente() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato emp = empDeHoy(111L, c);
+            emp.setMonto(new BigDecimal("1195.00"));
+            MovimientoContrato re = reposicionDeHoy(112L, c);
+            // El repositorio excluye los RE: el "último cancelable" es el EMP, no el RE
+            lenient().when(movimientoRepository
+                    .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(42L, TipoMovimiento.RE))
+                    .thenReturn(Optional.of(emp));
+
+            service.cancelar(111L, motivo("Cliente se arrepintió del empeño"), "gerente1");
+
+            assertThat(emp.getCancelado()).isTrue();
+            assertThat(re.getCancelado()).isFalse();
+            // El EMP guardaba el estado "pre-contrato" (saldo 0, estatus CANCELADO al revertir)
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.CANCELADO);
+            // C-06: partidas devueltas al cliente → CAN; entrada de caja por el préstamo
+            assertThat(c.getPartidas()).allSatisfy(
+                    p -> assertThat(p.getEstatus()).isEqualTo(EstatusPartida.CAN));
+            verify(movimientoCajaService).registrar(any(Turno.class), eq(1),
+                    eq(com.ignis.prestamil.model.TipoMovimientoCaja.ENTRADA),
+                    org.mockito.ArgumentMatchers.contains("CANCELACIÓN DE CONTRATO"),
+                    org.mockito.ArgumentMatchers.argThat(
+                            (BigDecimal m) -> m != null && m.compareTo(new BigDecimal("1195.00")) == 0),
+                    any(Usuario.class), eq(emp));
+        }
+
+        // ------------------------------------------------------------------
+        // C-06: cancelación de contrato recién creado
+        // ------------------------------------------------------------------
+
+        /**
+         * Criterio 1 de C-06: contrato creado hoy → cancelar el EMP deja el contrato en
+         * CANCELADO, todas las partidas en CAN y registra una ENTRADA de caja por el
+         * préstamo devuelto. La reposición no se revierte: ver `empSeguidoDeRe...`.
+         */
+        @Test
+        void cancelarEmpDelDia_contratoCANCELADO_partidasCAN_yEntradaEnCaja() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato emp = empDeHoy(401L, c);
+            emp.setMonto(new BigDecimal("1195.00"));
+            lenient().when(movimientoRepository
+                    .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(42L, TipoMovimiento.RE))
+                    .thenReturn(Optional.of(emp));
+
+            service.cancelar(401L, motivo("El cliente se arrepintió"), "gerente1");
+
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.CANCELADO);
+            assertThat(c.getPartidas()).allSatisfy(
+                    p -> assertThat(p.getEstatus()).isEqualTo(EstatusPartida.CAN));
+            assertThat(emp.getCancelado()).isTrue();
+            assertThat(emp.getMotivoCancelacion()).isEqualTo("El cliente se arrepintió");
+            assertThat(emp.getUsuarioCancela().getNombreUsuario()).isEqualTo("gerente1");
+            assertThat(emp.getFechaCancelacion()).isEqualTo(LocalDateTime.of(2026, 8, 11, 12, 30));
+            verify(movimientoCajaService).registrar(any(Turno.class), eq(1),
+                    eq(com.ignis.prestamil.model.TipoMovimientoCaja.ENTRADA),
+                    org.mockito.ArgumentMatchers.contains("CANCELACIÓN DE CONTRATO 1493"),
+                    org.mockito.ArgumentMatchers.argThat(
+                            (BigDecimal m) -> m != null && m.compareTo(new BigDecimal("1195.00")) == 0),
+                    any(Usuario.class), eq(emp));
+            verify(bitacoraRepository).save(any(Bitacora.class));
+        }
+
+        /** Criterio 2 de C-06: un EMP de ayer → 400 (misma regla que el resto de tipos). */
+        @Test
+        void cancelarEmpDeAyer_400_sinTocarCaja() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato emp = empDeHoy(402L, c);
+            emp.setFecha(LocalDateTime.of(2026, 8, 10, 12, 0));
+            lenient().when(movimientoRepository
+                    .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(42L, TipoMovimiento.RE))
+                    .thenReturn(Optional.of(emp));
+
+            assertThatThrownBy(() -> service.cancelar(402L, motivo("Cancelación tardía"), "gerente1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("día");
+            assertThat(emp.getCancelado()).isFalse();
+            assertThat(c.getPartidas()).allSatisfy(
+                    p -> assertThat(p.getEstatus()).isEqualTo(EstatusPartida.OP));
+            verify(movimientoCajaService, never()).registrar(any(), any(), any(), any(), any(), any(), any());
+        }
+
+        /** Criterio 3 de C-06: un cajero no puede cancelar un EMP → 403. */
+        @Test
+        void cancelarEmpConCajero_403_sinTocarCaja() {
+            Contrato c = contratoC2();
+            configuracionRolesCancelar("5");
+            usuarioConRol("cajero1", ROL_CAJERO);
+            MovimientoContrato emp = empDeHoy(403L, c);
+            lenient().when(movimientoRepository
+                    .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(42L, TipoMovimiento.RE))
+                    .thenReturn(Optional.of(emp));
+
+            assertThatThrownBy(() -> service.cancelar(403L, motivo("Cajero intenta cancelar"), "cajero1"))
+                    .isInstanceOf(ForbiddenException.class);
+            assertThat(emp.getCancelado()).isFalse();
+            assertThat(c.getPartidas()).allSatisfy(
+                    p -> assertThat(p.getEstatus()).isEqualTo(EstatusPartida.OP));
+            verify(movimientoCajaService, never()).registrar(any(), any(), any(), any(), any(), any(), any());
+        }
+
+        /** Criterio 4 de C-06: motivo obligatorio → 400 sin motivo (ni caja ni partidas tocadas). */
+        @Test
+        void cancelarEmpSinMotivo_400_sinTocarCaja() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato emp = empDeHoy(404L, c);
+            lenient().when(movimientoRepository
+                    .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(42L, TipoMovimiento.RE))
+                    .thenReturn(Optional.of(emp));
+
+            assertThatThrownBy(() -> service.cancelar(404L, motivo(""), "gerente1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("motivo");
+            assertThat(emp.getCancelado()).isFalse();
+            assertThat(c.getPartidas()).allSatisfy(
+                    p -> assertThat(p.getEstatus()).isEqualTo(EstatusPartida.OP));
+            verify(movimientoCajaService, never()).registrar(any(), any(), any(), any(), any(), any(), any());
+        }
+
+        // ------------------------------------------------------------------
+        // C-07: devolución al cancelar un cobro (SALIDA de caja)
+        // ------------------------------------------------------------------
+
+        /**
+         * C-07, test 1 (efectivo): cancelar un refrendo pagado 100% en efectivo registra una SALIDA
+         * de caja por el total devuelto; concepto sin referencia a tarjeta.
+         */
+        @Test
+        void cancelarCobroEfectivo_registraSalidaDeCajaPorElTotal() {
+            contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato rf = registrarMovimiento(TipoOperacion.REFRENDO, "95.92", "req-rf-c07a");
+            rf.setId(301L);
+            rf.setFolioNota(27323);
+            ultimoMovimiento(42L, rf);
+
+            service.cancelar(301L, motivo("Se capturó el plazo equivocado"), "gerente1");
+
+            verify(movimientoCajaService).registrar(any(Turno.class), eq(1),
+                    eq(com.ignis.prestamil.model.TipoMovimientoCaja.SALIDA),
+                    org.mockito.ArgumentMatchers.argThat((String s) ->
+                            s != null && s.contains("DEVOLUCIÓN POR CANCELACIÓN")
+                                    && s.contains("27323")
+                                    && !s.contains("TARJETA")),
+                    org.mockito.ArgumentMatchers.argThat(
+                            (BigDecimal m) -> m != null && m.compareTo(new BigDecimal("95.92")) == 0),
+                    any(Usuario.class), eq(rf));
+        }
+
+        /**
+         * C-07, test 2 (mixto): un refrendo cobrado con efectivo + tarjeta se cancela con una SALIDA
+         * por el total devuelto en efectivo; el concepto deja constancia de la parte con tarjeta
+         * (últimos 4, autorización e importe) para el corte de caja y la auditoría.
+         */
+        @Test
+        void cancelarCobroMixto_registraSalidaPorElTotal_conceptoIncluyeTarjeta() {
+            contratoC2();
+            gerentePorDefecto();
+            MovimientoRequest r = new MovimientoRequest();
+            r.setContratoId(42L);
+            r.setTipoOperacion(TipoOperacion.REFRENDO);
+            r.setRequestId("req-rf-c07b");
+            r.setPago(mixto("50.00", "45.92"));
+            service.registrar(r, "cajero1");
+            MovimientoContrato rf = capturarMovimiento();
+            rf.setId(302L);
+            rf.setFolioNota(27324);
+            ultimoMovimiento(42L, rf);
+
+            service.cancelar(302L, motivo("Se cobró con tarjeta por error"), "gerente1");
+
+            verify(movimientoCajaService).registrar(any(Turno.class), eq(1),
+                    eq(com.ignis.prestamil.model.TipoMovimientoCaja.SALIDA),
+                    org.mockito.ArgumentMatchers.argThat((String s) ->
+                            s != null && s.contains("DEVOLUCIÓN POR CANCELACIÓN")
+                                    && s.contains("27324")
+                                    && s.contains("TARJETA ****1234")
+                                    && s.contains("A1B2C3")
+                                    && s.contains("45.92")),
+                    org.mockito.ArgumentMatchers.argThat(
+                            (BigDecimal m) -> m != null && m.compareTo(new BigDecimal("95.92")) == 0),
+                    any(Usuario.class), eq(rf));
+        }
+
+        /**
+         * Construye un movimiento RE del día actual, con turno activo, listo para ser cancelado.
+         */
+        private MovimientoContrato reposicionDeHoy(long id, Contrato c) {
+            MovimientoContrato re = new MovimientoContrato();
+            re.setId(id);
+            re.setContrato(c);
+            re.setTipo(TipoMovimiento.RE);
+            re.setFecha(LocalDateTime.of(HOY, java.time.LocalTime.of(12, 30)));
+            re.setCancelado(false);
+            re.setTurno(turno);
+            lenient().when(movimientoRepository.findById(id)).thenReturn(Optional.of(re));
+            return re;
+        }
+
+        /** Construye un movimiento EMP del día actual con snapshot "pre-contrato" para revertir. */
+        private MovimientoContrato empDeHoy(long id, Contrato c) {
+            MovimientoContrato emp = new MovimientoContrato();
+            emp.setId(id);
+            emp.setContrato(c);
+            emp.setTipo(TipoMovimiento.EMP);
+            emp.setFecha(LocalDateTime.of(HOY, java.time.LocalTime.of(12, 0)));
+            emp.setCancelado(false);
+            emp.setTurno(turno);
+            // Snapshot pre-contrato: saldo 0, sin fechas, estatus CANCELADO (contrato deshecho)
+            emp.setSaldoAnterior(BigDecimal.ZERO);
+            emp.setEstatusAnterior(EstatusContrato.CANCELADO);
+            emp.setNumRefrendosAnterior(0);
+            lenient().when(movimientoRepository.findById(id)).thenReturn(Optional.of(emp));
+            return emp;
+        }
+
+        // ------------------------------------------------------------------
+        // Validaciones (RN-26)
+        // ------------------------------------------------------------------
+
+        @Test
+        void cancelarNoEsElUltimoMovimiento_400() {
+            contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato rf = registrarMovimiento(TipoOperacion.REFRENDO, "95.92", "req-rf-1");
+            rf.setId(201L);
+            // El "último" es otro, más reciente
+            MovimientoContrato otro = new MovimientoContrato();
+            otro.setId(202L);
+            otro.setContrato(rf.getContrato());
+            otro.setFecha(LocalDateTime.of(2026, 8, 11, 13, 0));
+            otro.setCancelado(false);
+            lenient().when(movimientoRepository
+                    .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(42L, TipoMovimiento.RE))
+                    .thenReturn(Optional.of(otro));
+            lenient().when(movimientoRepository.findById(201L)).thenReturn(Optional.of(rf));
+
+            assertThatThrownBy(() -> service.cancelar(201L, motivo("Motivo cualquiera válido"), "gerente1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("último");
+            assertThat(rf.getCancelado()).isFalse();
+        }
+
+        @Test
+        void cancelarUnMovimientoYaCancelado_400() {
+            contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato rf = registrarMovimiento(TipoOperacion.REFRENDO, "95.92", "req-rf-2");
+            rf.setId(203L);
+            rf.setCancelado(true);
+            rf.setMotivoCancelacion("Ya se canceló antes");
+            // Cuando ya está cancelado, findFirst devuelve otro o vacío
+            lenient().when(movimientoRepository
+                    .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(42L, TipoMovimiento.RE))
+                    .thenReturn(Optional.empty());
+            lenient().when(movimientoRepository.findById(203L)).thenReturn(Optional.of(rf));
+
+            assertThatThrownBy(() -> service.cancelar(203L, motivo("Motivo suficiente aquí"), "gerente1"))
+                    .isInstanceOf(BadRequestException.class);
+        }
+
+        @Test
+        void cancelarMovimientoDeAyer_400() {
+            contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato rf = registrarMovimiento(TipoOperacion.REFRENDO, "95.92", "req-rf-3");
+            rf.setId(204L);
+            // El movimiento se registró ayer; el reloj del servicio sigue en HOY (11/08/2026 12:30)
+            rf.setFecha(LocalDateTime.of(2026, 8, 10, 12, 30));
+            ultimoMovimiento(42L, rf);
+
+            assertThatThrownBy(() -> service.cancelar(204L, motivo("Correción tardía"), "gerente1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("día");
+            assertThat(rf.getCancelado()).isFalse();
+        }
+
+        @Test
+        void cancelarConTurnoDelMovimientoCerrado_400() {
+            contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato rf = registrarMovimiento(TipoOperacion.REFRENDO, "95.92", "req-rf-4");
+            rf.setId(205L);
+            // El turno donde se cobró ya se cerró (cierre de día = un turno por sucursal)
+            rf.getTurno().setActivo(false);
+            ultimoMovimiento(42L, rf);
+
+            assertThatThrownBy(() -> service.cancelar(205L, motivo("Corrección después del cierre"), "gerente1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("turno");
+            assertThat(rf.getCancelado()).isFalse();
+        }
+
+        @Test
+        void cancelarSinRolGerente_403() {
+            contratoC2();
+            configuracionRolesCancelar("5");
+            usuarioConRol("cajero1", ROL_CAJERO);
+            MovimientoContrato rf = registrarMovimiento(TipoOperacion.REFRENDO, "95.92", "req-rf-5");
+            rf.setId(206L);
+            ultimoMovimiento(42L, rf);
+
+            assertThatThrownBy(() -> service.cancelar(206L, motivo("Cajero intenta cancelar"), "cajero1"))
+                    .isInstanceOf(ForbiddenException.class);
+            assertThat(rf.getCancelado()).isFalse();
+        }
+
+        @Test
+        void cancelarConMotivoVacio_400() {
+            contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato rf = registrarMovimiento(TipoOperacion.REFRENDO, "95.92", "req-rf-6");
+            rf.setId(207L);
+            ultimoMovimiento(42L, rf);
+
+            assertThatThrownBy(() -> service.cancelar(207L, motivo("   "), "gerente1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("motivo");
+            assertThat(rf.getCancelado()).isFalse();
+        }
+
+        @Test
+        void cancelarConMotivoMuyCorto_400() {
+            contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato rf = registrarMovimiento(TipoOperacion.REFRENDO, "95.92", "req-rf-7");
+            rf.setId(208L);
+            ultimoMovimiento(42L, rf);
+
+            assertThatThrownBy(() -> service.cancelar(208L, motivo("Error"), "gerente1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("motivo");
+        }
+
+        // ------------------------------------------------------------------
+        // D-11: cancelación de contrato por POST /api/contratos/{id}/cancelar
+        // ------------------------------------------------------------------
+
+        /** Devuelve la lista de movimientos del contrato ordenada cronológicamente para `cancelarContrato`. */
+        private void listarMovimientos(Long contratoId, MovimientoContrato... movs) {
+            lenient().when(movimientoRepository.findByContratoIdOrderByFechaAsc(contratoId))
+                    .thenReturn(List.of(movs));
+        }
+
+        /** Test 1 de D-11: contrato creado hoy → cancelado, partidas CAN, EMP marcado, ENTRADA de caja. */
+        @Test
+        void cancelarContratoDelDia_contratoCANCELADO_partidasCAN_entradaDeCajaIgualAlPrestamo() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato emp = empDeHoy(501L, c);
+            emp.setMonto(new BigDecimal("1195.00"));
+            listarMovimientos(42L, emp);
+            lenient().when(movimientoRepository
+                    .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(42L, TipoMovimiento.RE))
+                    .thenReturn(Optional.of(emp));
+
+            MovimientoResponse resp = service.cancelarContrato(
+                    42L, motivo("El cliente se arrepintió del empeño"), "gerente1");
+
+            // Contrato cerrado y sin saldo
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.CANCELADO);
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("0");
+            // Partidas devueltas al cliente
+            assertThat(c.getPartidas()).allSatisfy(
+                    p -> assertThat(p.getEstatus()).isEqualTo(EstatusPartida.CAN));
+            // EMP marcado (no borrado) con usuario, fecha y motivo
+            assertThat(emp.getCancelado()).isTrue();
+            assertThat(emp.getMotivoCancelacion()).isEqualTo("El cliente se arrepintió del empeño");
+            assertThat(emp.getUsuarioCancela().getNombreUsuario()).isEqualTo("gerente1");
+            assertThat(emp.getFechaCancelacion()).isEqualTo(LocalDateTime.of(2026, 8, 11, 12, 30));
+            // ENTRADA de caja por el monto del préstamo, ligada al EMP → el saldo del turno queda
+            // compensado respecto a la SALIDA de la creación (préstamo entregado): neto = 0.
+            verify(movimientoCajaService).registrar(any(Turno.class), eq(1),
+                    eq(com.ignis.prestamil.model.TipoMovimientoCaja.ENTRADA),
+                    org.mockito.ArgumentMatchers.contains("CANCELACIÓN DE CONTRATO 1493"),
+                    org.mockito.ArgumentMatchers.argThat(
+                            (BigDecimal m) -> m != null && m.compareTo(new BigDecimal("1195.00")) == 0),
+                    any(Usuario.class), eq(emp));
+            // Bitácora obligatoria
+            verify(bitacoraRepository).save(any(Bitacora.class));
+            // El id devuelto es el EMP cancelado — el frontend lo usa para pedir el ticket
+            assertThat(resp.getId()).isEqualTo(501L);
+            assertThat(resp.getCancelado()).isTrue();
+        }
+
+        /**
+         * Test 2 de D-11: con una reposición del día previa, se cancela el contrato y el RE sigue
+         * vigente. Solo se registra la ENTRADA de la cancelación — los $40 de la reposición no se
+         * tocan en caja.
+         */
+        @Test
+        void cancelarContratoConReposicionDelDia_cancelaContrato_reVigente_cajaConservaReposicion() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato emp = empDeHoy(502L, c);
+            emp.setMonto(new BigDecimal("1195.00"));
+            MovimientoContrato re = reposicionDeHoy(503L, c);
+            re.setMonto(new BigDecimal("40.00"));
+            listarMovimientos(42L, emp, re);
+            // El repositorio excluye los RE: el "último cancelable" es el EMP
+            lenient().when(movimientoRepository
+                    .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(42L, TipoMovimiento.RE))
+                    .thenReturn(Optional.of(emp));
+
+            service.cancelarContrato(42L, motivo("Cliente se arrepintió, el RE no se revierte"), "gerente1");
+
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.CANCELADO);
+            assertThat(emp.getCancelado()).isTrue();
+            // RE sigue vigente (C-03): no se cancela ni se devuelve
+            assertThat(re.getCancelado()).isFalse();
+            // Caja: solo la ENTRADA de la cancelación por los $1195; los $40 del RE se quedan
+            verify(movimientoCajaService, times(1)).registrar(any(Turno.class), eq(1),
+                    eq(com.ignis.prestamil.model.TipoMovimientoCaja.ENTRADA),
+                    org.mockito.ArgumentMatchers.contains("CANCELACIÓN DE CONTRATO"),
+                    org.mockito.ArgumentMatchers.argThat(
+                            (BigDecimal m) -> m != null && m.compareTo(new BigDecimal("1195.00")) == 0),
+                    any(Usuario.class), eq(emp));
+            // Y no hay ninguna salida ligada al RE
+            verify(movimientoCajaService, never()).registrar(any(), any(),
+                    eq(com.ignis.prestamil.model.TipoMovimientoCaja.SALIDA),
+                    any(), any(), any(), any());
+        }
+
+        /** Test 3 de D-11: con un refrendo del día vigente → 400 "cancele primero el último". */
+        @Test
+        void cancelarContratoConCobroVigente_400_sinTocarEstado() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato emp = empDeHoy(504L, c);
+            // Un refrendo posterior al EMP, vigente
+            MovimientoContrato rf = new MovimientoContrato();
+            rf.setId(505L);
+            rf.setContrato(c);
+            rf.setTipo(TipoMovimiento.RF);
+            rf.setFecha(LocalDateTime.of(HOY, java.time.LocalTime.of(13, 0)));
+            rf.setCancelado(false);
+            rf.setTurno(turno);
+            listarMovimientos(42L, emp, rf);
+            lenient().when(movimientoRepository
+                    .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(42L, TipoMovimiento.RE))
+                    .thenReturn(Optional.of(rf));
+
+            assertThatThrownBy(() -> service.cancelarContrato(
+                    42L, motivo("Intento con cobro posterior"), "gerente1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("cancele primero el último");
+
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
+            assertThat(emp.getCancelado()).isFalse();
+            verify(movimientoCajaService, never()).registrar(any(), any(), any(), any(), any(), any(), any());
+            verify(bitacoraRepository, never()).save(any(Bitacora.class));
+        }
+
+        /** Test 4 de D-11: contrato de ayer → 400 "Solo se pueden cancelar contratos del día". */
+        @Test
+        void cancelarContratoDeAyer_400_sinTocarEstado() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato emp = empDeHoy(506L, c);
+            emp.setFecha(LocalDateTime.of(2026, 8, 10, 12, 0));
+            listarMovimientos(42L, emp);
+            lenient().when(movimientoRepository
+                    .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(42L, TipoMovimiento.RE))
+                    .thenReturn(Optional.of(emp));
+
+            assertThatThrownBy(() -> service.cancelarContrato(
+                    42L, motivo("Cancelación tardía"), "gerente1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("día");
+
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
+            assertThat(emp.getCancelado()).isFalse();
+            verify(movimientoCajaService, never()).registrar(any(), any(), any(), any(), any(), any(), any());
+        }
+
+        /** Test 5 de D-11: cajero → 403 (rol no permitido para cancelar). */
+        @Test
+        void cancelarContratoConCajero_403_sinTocarEstado() {
+            Contrato c = contratoC2();
+            configuracionRolesCancelar("5");
+            usuarioConRol("cajero1", ROL_CAJERO);
+            MovimientoContrato emp = empDeHoy(507L, c);
+            listarMovimientos(42L, emp);
+
+            assertThatThrownBy(() -> service.cancelarContrato(
+                    42L, motivo("Cajero intenta cancelar"), "cajero1"))
+                    .isInstanceOf(ForbiddenException.class);
+
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
+            assertThat(emp.getCancelado()).isFalse();
+            verify(movimientoCajaService, never()).registrar(any(), any(), any(), any(), any(), any(), any());
+        }
+
+        /** Test 6 de D-11: sin motivo → 400 "motivo obligatorio…" (texto libre, mínimo 10 caracteres). */
+        @Test
+        void cancelarContratoSinMotivo_400_sinTocarEstado() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato emp = empDeHoy(508L, c);
+            listarMovimientos(42L, emp);
+
+            assertThatThrownBy(() -> service.cancelarContrato(42L, motivo(""), "gerente1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("motivo");
+
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
+            assertThat(emp.getCancelado()).isFalse();
+        }
+
+        /** Test 7 de D-11: cancelar dos veces → 400 "ya está cancelado" en la segunda llamada. */
+        @Test
+        void cancelarContratoDosVeces_segundaLlamadaDa400YaEstaCancelado() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato emp = empDeHoy(509L, c);
+            emp.setMonto(new BigDecimal("1195.00"));
+            listarMovimientos(42L, emp);
+            lenient().when(movimientoRepository
+                    .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(42L, TipoMovimiento.RE))
+                    .thenReturn(Optional.of(emp));
+
+            service.cancelarContrato(42L, motivo("Primer intento de cancelación"), "gerente1");
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.CANCELADO);
+
+            // Segunda llamada: el contrato ya está CANCELADO — mensaje específico
+            assertThatThrownBy(() -> service.cancelarContrato(
+                    42L, motivo("Intento duplicado de cancelación"), "gerente1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("ya está cancelado");
+
+            // La ENTRADA de caja se registró una sola vez
+            verify(movimientoCajaService, times(1)).registrar(any(), any(),
+                    eq(com.ignis.prestamil.model.TipoMovimientoCaja.ENTRADA),
+                    any(), any(), any(), any());
+        }
+
+        /** Test 8 de D-11: contrato sin EMP → mensaje específico "contacte a Sistemas". */
+        @Test
+        void cancelarContratoSinEmp_400ConMensajeEspecificoDeSistemas() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            // Lista de movimientos vacía: contrato pre-F0 sin EMP
+            listarMovimientos(42L);
+
+            assertThatThrownBy(() -> service.cancelarContrato(
+                    42L, motivo("Cliente pide cancelar sin EMP"), "gerente1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("EMP")
+                    .hasMessageContaining("Sistemas");
+
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
+            verify(movimientoCajaService, never()).registrar(any(), any(), any(), any(), any(), any(), any());
+            verify(bitacoraRepository, never()).save(any(Bitacora.class));
+        }
+
+        /**
+         * Test 9 de D-11: fallo a mitad del proceso → nada cambia. Las validaciones corren antes de
+         * tocar partidas/EMP/caja/bitácora; una validación que rechaza (aquí: turno cerrado del EMP)
+         * no deja efectos secundarios. En producción `@Transactional` extiende esta garantía a los
+         * fallos tardíos (BD caída, etc.): el rollback revierte las entidades modificadas en memoria
+         * y la ENTRADA de caja no se escribe porque va en la misma transacción.
+         */
+        @Test
+        void cancelarContratoFallaMitadProceso_nadaCambia() {
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato emp = empDeHoy(510L, c);
+            // Turno del EMP ya cerrado — la validación falla a mitad del proceso
+            emp.getTurno().setActivo(false);
+            listarMovimientos(42L, emp);
+            lenient().when(movimientoRepository
+                    .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(42L, TipoMovimiento.RE))
+                    .thenReturn(Optional.of(emp));
+
+            assertThatThrownBy(() -> service.cancelarContrato(
+                    42L, motivo("Intento con turno ya cerrado"), "gerente1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("turno");
+
+            // Nada cambió
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo("1195.00");
+            assertThat(c.getPartidas()).allSatisfy(
+                    p -> assertThat(p.getEstatus()).isEqualTo(EstatusPartida.OP));
+            assertThat(emp.getCancelado()).isFalse();
+            verify(movimientoCajaService, never()).registrar(any(), any(), any(), any(), any(), any(), any());
+            verify(bitacoraRepository, never()).save(any(Bitacora.class));
+        }
+
+        @Test
+        void cancelarTresEnOrdenInverso_dejaElContratoComoAntesDelPrimero() {
+            // Estado antes de los tres refrendos
+            Contrato c = contratoC2();
+            gerentePorDefecto();
+            BigDecimal saldoInicial = c.getSaldoCapital();
+            LocalDate fechaContratoInicial = c.getFechaContrato();
+            LocalDate vencInicial = c.getFechaVencimiento();
+            int refrendosIniciales = c.getNumRefrendos();
+
+            // Tres refrendos consecutivos
+            MovimientoContrato r1 = registrarMovimiento(TipoOperacion.REFRENDO, "95.92", "req-r1");
+            r1.setId(301L);
+            MovimientoContrato r2 = registrarMovimiento(TipoOperacion.REFRENDO, "95.92", "req-r2");
+            r2.setId(302L);
+            MovimientoContrato r3 = registrarMovimiento(TipoOperacion.REFRENDO, "95.92", "req-r3");
+            r3.setId(303L);
+            assertThat(c.getNumRefrendos()).isEqualTo(3);
+
+            // Cancelar de más reciente hacia atrás
+            ultimoMovimiento(42L, r3);
+            service.cancelar(303L, motivo("Se debe cancelar en cascada"), "gerente1");
+            ultimoMovimiento(42L, r2);
+            service.cancelar(302L, motivo("Se debe cancelar en cascada"), "gerente1");
+            ultimoMovimiento(42L, r1);
+            service.cancelar(301L, motivo("Se debe cancelar en cascada"), "gerente1");
+
+            assertThat(c.getSaldoCapital()).isEqualByComparingTo(saldoInicial);
+            assertThat(c.getFechaContrato()).isEqualTo(fechaContratoInicial);
+            assertThat(c.getFechaVencimiento()).isEqualTo(vencInicial);
+            assertThat(c.getNumRefrendos()).isEqualTo(refrendosIniciales);
+            assertThat(r1.getCancelado()).isTrue();
+            assertThat(r2.getCancelado()).isTrue();
+            assertThat(r3.getCancelado()).isTrue();
+        }
+    }
+
+    // =========================================================================
+    // C-01: un solo movimiento por contrato por día (RN-29)
+    // =========================================================================
+
+    /**
+     * Si el contrato ya tuvo hoy un movimiento no cancelado cuyo tipo cuenta
+     * ({@link TipoMovimiento#CUENTAN_UNO_POR_DIA}), ningún cobro queda disponible: refrendo, abono,
+     * parcial, extemporáneos y finiquito responden 400 con el motivo. RE y PV no cuentan.
+     */
+    @Nested
+    class UnMovimientoPorDia {
+
+        /** Marca "ya hubo movimiento del día" en el repositorio: la implementación lo consulta así. */
+        private void yaHuboMovimientoHoy(boolean existe) {
+            lenient().when(movimientoRepository
+                    .existsByContratoIdAndCanceladoFalseAndTipoInAndFechaGreaterThanEqualAndFechaLessThan(
+                            anyLong(), anyCollection(), any(LocalDateTime.class), any(LocalDateTime.class)))
+                    .thenReturn(existe);
+        }
+
+        @Test
+        void refrendoHoy_abonoHoy_400ConElMotivoDeC01() {
+            // Criterio 1: tras un refrendo del día, el abono queda bloqueado con el mensaje acordado.
+            contratoC2();
+            yaHuboMovimientoHoy(true);
+            MovimientoRequest abono = request(TipoOperacion.ABONO_CAPITAL, efectivo("50.00"));
+            abono.setAbonoCapital(new BigDecimal("50.00"));
+
+            assertThatThrownBy(() -> service.registrar(abono, "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessage("Este contrato ya tuvo un movimiento hoy. Para hacer otro, cancele el anterior.");
+            verify(movimientoRepository, never()).save(any());
+        }
+
+        @Test
+        void cancelarElRefrendoDelDia_dejaElAbonoPermitido() {
+            // Criterio 2: al cancelar el movimiento del día (RF), el repo deja de reportar que lo hubo
+            // y el abono vuelve a quedar disponible. Total = refrendo 95.92 + abono 50 = 145.92.
+            contratoC2();
+            yaHuboMovimientoHoy(false);
+            MovimientoRequest abono = request(TipoOperacion.ABONO_CAPITAL, efectivo("145.92"));
+            abono.setAbonoCapital(new BigDecimal("50.00"));
+
+            service.registrar(abono, "cajero1");
+
+            MovimientoContrato mov = capturarMovimiento();
+            assertThat(mov.getTipo()).isEqualTo(TipoMovimiento.RC);
+            assertThat(mov.getAbonoCapital()).isEqualByComparingTo("50.00");
+        }
+
+        @Test
+        void contratoCreadoHoy_refrendoHoy_400() {
+            // Criterio 3: un EMP de hoy bloquea el refrendo del mismo día.
+            contratoC2();
+            yaHuboMovimientoHoy(true);
+
+            assertThatThrownBy(() -> service.registrar(request(TipoOperacion.REFRENDO, efectivo("95.92")), "cajero1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessage("Este contrato ya tuvo un movimiento hoy. Para hacer otro, cancele el anterior.");
+            verify(movimientoRepository, never()).save(any());
+        }
+
+        @Test
+        void reposicionHoy_refrendoHoy_permitido() {
+            // Criterio 4: RE no está en CUENTAN_UNO_POR_DIA. Si solo hubo una reposición, el refrendo del
+            // día procede: el service consulta el repo filtrando por tipos y el stub devuelve false.
+            contratoC2();
+            yaHuboMovimientoHoy(false);
+
+            service.registrar(request(TipoOperacion.REFRENDO, efectivo("95.92")), "cajero1");
+
+            assertThat(capturarMovimiento().getTipo()).isEqualTo(TipoMovimiento.RF);
+        }
+
+        @Test
+        void refrendoAyer_refrendoHoy_permitido() {
+            // Criterio 5: la ventana es solo el día actual; un movimiento de ayer no bloquea el de hoy.
+            contratoC2();
+            yaHuboMovimientoHoy(false);
+
+            service.registrar(request(TipoOperacion.REFRENDO, efectivo("95.92")), "cajero1");
+
+            assertThat(capturarMovimiento().getTipo()).isEqualTo(TipoMovimiento.RF);
+        }
+
+        @Test
+        void cotizarCuandoYaHuboMovimientoHoy_400ConElMotivoYNoPersiste() {
+            // La misma validación va en la cotización, así los botones del detalle y el intento de
+            // cobrar fallan por la misma razón.
+            contratoC2();
+            yaHuboMovimientoHoy(true);
+            CotizacionRequest c = new CotizacionRequest();
+            c.setContratoId(42L);
+            c.setTipoOperacion(TipoOperacion.REFRENDO);
+
+            assertThatThrownBy(() -> service.cotizar(c))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessage("Este contrato ya tuvo un movimiento hoy. Para hacer otro, cancele el anterior.");
+            verify(movimientoRepository, never()).save(any());
+        }
+
+        @Test
+        void tiposQueCuentanParaUnoPorDia_cubrenLosNueveDeC01() {
+            // La lista está en TipoMovimiento (un solo lugar) y es la que acordamos con Jorge.
+            assertThat(TipoMovimiento.CUENTAN_UNO_POR_DIA).containsExactlyInAnyOrder(
+                    TipoMovimiento.EMP, TipoMovimiento.RF, TipoMovimiento.RPG, TipoMovimiento.RC,
+                    TipoMovimiento.RP, TipoMovimiento.RPX, TipoMovimiento.RX,
+                    TipoMovimiento.FI, TipoMovimiento.FX);
+            // RE y PV se excluyen explícitamente (TODO G-01)
+            assertThat(TipoMovimiento.CUENTAN_UNO_POR_DIA).doesNotContain(
+                    TipoMovimiento.RE, TipoMovimiento.PV, TipoMovimiento.PVA, TipoMovimiento.RM);
+        }
     }
 }

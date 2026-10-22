@@ -51,6 +51,7 @@ public class PlazoParametroMapper {
         response.setComisionPorVentaPrenda(plazoParametro.getComisionPorVentaPrenda());
         response.setAplicarSancionPorPeriodo(plazoParametro.getAplicarSancionPorPeriodo());
         response.setPorcSancionSemanal(plazoParametro.getPorcSancionSemanal());
+        response.setPorcDescuentoInteres(plazoParametro.getPorcDescuentoInteres());
         response.setLey925(plazoParametro.getLey925());
         response.setLey725(plazoParametro.getLey725());
         response.setPrecioGramoPlata(plazoParametro.getPrecioGramoPlata());
@@ -89,6 +90,8 @@ public class PlazoParametroMapper {
         if (request.getComisionPorVentaPrenda() != null) entity.setComisionPorVentaPrenda(request.getComisionPorVentaPrenda());
         if (request.getAplicarSancionPorPeriodo() != null) entity.setAplicarSancionPorPeriodo(request.getAplicarSancionPorPeriodo());
         if (request.getPorcSancionSemanal() != null) entity.setPorcSancionSemanal(request.getPorcSancionSemanal());
+        // porcDescuentoInteres NO se mapea aqui: solo el rol Sistemas puede modificarlo. Ver
+        // PlazoService.guardarParametro para la validacion y el set condicional.
         if (request.getLey925() != null) entity.setLey925(request.getLey925());
         if (request.getLey725() != null) entity.setLey725(request.getLey725());
         if (request.getPrecioGramoPlata() != null) entity.setPrecioGramoPlata(request.getPrecioGramoPlata());
@@ -123,6 +126,7 @@ public class PlazoParametroMapper {
         plazoParametro.setComisionPorVentaPrenda(request.getComisionPorVentaPrenda() != null ? request.getComisionPorVentaPrenda() : BigDecimal.ZERO);
         plazoParametro.setAplicarSancionPorPeriodo(request.getAplicarSancionPorPeriodo() != null ? request.getAplicarSancionPorPeriodo() : false);
         plazoParametro.setPorcSancionSemanal(request.getPorcSancionSemanal() != null ? request.getPorcSancionSemanal() : new BigDecimal("2.0000"));
+        plazoParametro.setPorcDescuentoInteres(request.getPorcDescuentoInteres() != null ? request.getPorcDescuentoInteres() : BigDecimal.ZERO);
         plazoParametro.setLey925(request.getLey925() != null ? request.getLey925() : BigDecimal.ZERO);
         plazoParametro.setLey725(request.getLey725() != null ? request.getLey725() : BigDecimal.ZERO);
         plazoParametro.setPrecioGramoPlata(request.getPrecioGramoPlata() != null ? request.getPrecioGramoPlata() : BigDecimal.ZERO);

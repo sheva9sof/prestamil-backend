@@ -26,6 +26,13 @@ public class Contrato {
     @Column(name = "folio", length = 20, unique = true)
     private String folio;
 
+    /**
+     * Número de la bolsa donde se guardan las prendas (D-10). Consecutivo por sucursal e independiente
+     * del folio: se asigna al crear el contrato y no se reutiliza aunque el contrato se cancele.
+     */
+    @Column(name = "num_bolsa")
+    private Integer numBolsa;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "id_cliente", nullable = false)
     private Cliente cliente;
@@ -61,14 +68,32 @@ public class Contrato {
     @Column(name = "fecha_apertura", nullable = false)
     private LocalDateTime fechaApertura;
 
+    /**
+     * Inicio del periodo vigente (RN-02). Cambia con cada refrendo; la fecha de empeño original
+     * es {@link #fechaApertura} y nunca cambia.
+     */
+    @Column(name = "fecha_contrato", nullable = false)
+    private LocalDate fechaContrato;
+
     @Column(name = "fecha_vencimiento", nullable = false)
     private LocalDate fechaVencimiento;
+
+    /**
+     * Vencimiento + 15 días (RN-08). Antes de esta fecha la prenda no se puede vender (PROFECO).
+     * Se persiste para poder filtrar e indexar; se recalcula en cada movimiento.
+     */
+    @Column(name = "fecha_comercializacion")
+    private LocalDate fechaComercializacion;
 
     @Column(name = "monto_prestamo", nullable = false, precision = 18, scale = 2)
     private BigDecimal montoPrestamo;
 
     @Column(name = "monto_avaluo", nullable = false, precision = 18, scale = 2)
     private BigDecimal montoAvaluo;
+
+    /** Saldo de capital vigente: base del interés y la sanción (RN-09). Baja con cada abono a capital. */
+    @Column(name = "saldo_capital", nullable = false, precision = 18, scale = 2)
+    private BigDecimal saldoCapital;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "estatus", nullable = false, length = 20)

@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- CARTA RESPONSIVA (D-12). Se imprime al generar el contrato, entre el contrato y el ticket de bolsa.
+     Tamaño carta. Texto dinámico: número de contrato (código de barras y cuerpo), cliente, razón social
+     de la casa de empeño, identificación presentada y las prendas con su avalúo y préstamo. Las copias
+     de la credencial se escanean en la sucursal, por eso la carta no reserva espacio para ellas. -->
+<jasperReport xmlns="http://jasperreports.sourceforge.net/jasperreports" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://jasperreports.sourceforge.net/jasperreports http://jasperreports.sourceforge.net/xsd/jasperreport.xsd" name="carta-responsiva" pageWidth="612" pageHeight="792" whenNoDataType="AllSectionsNoDetail" columnWidth="532" leftMargin="40" rightMargin="40" topMargin="36" bottomMargin="36">
+	<property name="net.sf.jasperreports.awt.ignore.missing.font" value="true"/>
+	<style name="Base" isDefault="true" fontName="Arial" fontSize="9.5"/>
+	<parameter name="P_CONTRATO" class="java.lang.String"/>
+	<parameter name="P_CLIENTE" class="java.lang.String"/>
+	<parameter name="P_EMPRESA" class="java.lang.String"/>
+	<parameter name="P_IDENTIFICACION" class="java.lang.String"/>
+	<parameter name="P_DOCUMENTO_IDENTIFICACION" class="java.lang.String"/>
+	<parameter name="P_GENERO_IDENTIFICACION" class="java.lang.String"/>
+	<parameter name="P_VALUADOR" class="java.lang.String"/>
+	<field name="descripcion" class="java.lang.String"/>
+	<field name="avaluo" class="java.lang.String"/>
+	<field name="prestamo" class="java.lang.String"/>
+	<title>
+		<band height="160" splitType="Stretch">
+			<componentElement>
+				<reportElement x="372" y="0" width="160" height="50"/>
+				<jr:barbecue xmlns:jr="http://jasperreports.sourceforge.net/jasperreports/components" xsi:schemaLocation="http://jasperreports.sourceforge.net/jasperreports/components http://jasperreports.sourceforge.net/xsd/components.xsd" type="Code128" drawText="true" checksumRequired="false">
+					<jr:codeExpression><![CDATA[$P{P_CONTRATO}]]></jr:codeExpression>
+				</jr:barbecue>
+			</componentElement>
+			<staticText>
+				<reportElement x="0" y="54" width="532" height="26"/>
+				<textElement textAlignment="Center" verticalAlignment="Middle"><font size="20"/></textElement>
+				<text><![CDATA[CARTA RESPONSIVA]]></text>
+			</staticText>
+			<textField textAdjust="StretchHeight">
+				<reportElement positionType="Float" x="0" y="88" width="532" height="12"/>
+				<textElement><font size="10" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA["YO " + $P{P_CLIENTE} + "; CONSUMIDOR DE LA CASA DE EMPEÑO: \"" + $P{P_EMPRESA} + "\""]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight">
+				<reportElement positionType="Float" x="0" y="102" width="532" height="12"/>
+				<textElement textAlignment="Justified"/>
+				<textFieldExpression><![CDATA["IDENTIFICÁNDOME CON " + $P{P_IDENTIFICACION} + ", MISM" + $P{P_GENERO_IDENTIFICACION}
+	+ " QUE EN ESTE CASO SE EXHIBE EN ORIGINAL Y COPIA SIMPLE Y QUE PREVIO COTEJO, SOLICITO ME SEA DEVUELT"
+	+ $P{P_GENERO_IDENTIFICACION} + " POR SER DE UTILIDAD."]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight">
+				<reportElement positionType="Float" x="0" y="124" width="532" height="12"/>
+				<textElement textAlignment="Justified"/>
+				<textFieldExpression><![CDATA["DE ESTA FORMA AL MOMENTO DE SOLICITAR EL SERVICIO DE LA CASA DE EMPEÑO PARA EFECTUAR UN TRÁMITE DE "
+	+ "PIGNORACIÓN SE ME HA NOTIFICADO DE LA RESPONSABILIDAD EN QUE INCURREN LAS PERSONAS QUE DECLARAN CON "
+	+ "FALSEDAD, Y MANIFIESTO TAMBIÉN DE DARME POR ENTERADO(A) DE LO QUE MARCA LA LEY FEDERAL PARA LA PREVENCIÓN "
+	+ "E IDENTIFICACIÓN DE OPERACIONES CON RECURSOS DE PROCEDENCIA ILÍCITA; POR LO QUE SI NO PRESENTO FACTURA O "
+	+ "NOTA DE COMPRA EN ESTE MOMENTO ES PORQUE NO CUENTO DE FORMA INMEDIATA CON ELLA, Y PARA EL CASO QUE "
+	+ "PUDIERA LOCALIZARLA O RECUPERARLA DE LUGAR QUE FUE ADQUIRIDO MI ARTÍCULO O PRENDA EN EMPEÑO SEÑALO QUE "
+	+ "LA(S) PRENDA(S)"]]></textFieldExpression>
+			</textField>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="146" width="372" height="11"/>
+				<textElement><font size="8" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[DESCRIPCIÓN]]></text>
+			</staticText>
+			<staticText>
+				<reportElement positionType="Float" x="372" y="146" width="80" height="11"/>
+				<textElement textAlignment="Right"><font size="8" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[AVALÚO]]></text>
+			</staticText>
+			<staticText>
+				<reportElement positionType="Float" x="452" y="146" width="80" height="11"/>
+				<textElement textAlignment="Right"><font size="8" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[PRÉSTAMO]]></text>
+			</staticText>
+			<line>
+				<reportElement positionType="Float" x="0" y="158" width="532" height="1"/>
+				<graphicElement><pen lineWidth="0.5"/></graphicElement>
+			</line>
+		</band>
+	</title>
+	<detail>
+		<band height="14" splitType="Prevent">
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement x="0" y="2" width="364" height="11"/>
+				<textElement><font size="9"/></textElement>
+				<textFieldExpression><![CDATA[$F{descripcion}]]></textFieldExpression>
+			</textField>
+			<textField isBlankWhenNull="true">
+				<reportElement x="372" y="2" width="80" height="11"/>
+				<textElement textAlignment="Right"><font size="9"/></textElement>
+				<textFieldExpression><![CDATA[$F{avaluo}]]></textFieldExpression>
+			</textField>
+			<textField isBlankWhenNull="true">
+				<reportElement x="452" y="2" width="80" height="11"/>
+				<textElement textAlignment="Right"><font size="9"/></textElement>
+				<textFieldExpression><![CDATA[$F{prestamo}]]></textFieldExpression>
+			</textField>
+		</band>
+	</detail>
+	<summary>
+		<band height="240" splitType="Stretch">
+			<line>
+				<reportElement x="0" y="2" width="532" height="1"/>
+				<graphicElement><pen lineWidth="0.5"/></graphicElement>
+			</line>
+			<staticText>
+				<reportElement positionType="Float" x="0" y="12" width="532" height="12"/>
+				<text><![CDATA[ADEMÁS DE DECLARAR QUE EL ARTÍCULO NO CUENTA CON REPORTE ALGUNO DE ROBO]]></text>
+			</staticText>
+			<textField textAdjust="StretchHeight">
+				<reportElement positionType="Float" x="0" y="24" width="532" height="12"/>
+				<textElement textAlignment="Justified"/>
+				<textFieldExpression><![CDATA["UNA VEZ MANIFESTADO LO ANTERIOR; DECLARO POR MI PROPIO DERECHO QUE CELEBRADO EN CONTRATO DE MUTUO CON "
+	+ "INTERESES Y GARANTÍA PRENDARIA Y SUJETÁNDOME AL ORDENAMIENTO DEL MISMO Y ESPECÍFICAMENTE A LA CLÁUSULA 13 "
+	+ "DEL CONTRATO CON NÚMERO: " + $P{P_CONTRATO} + " MISMO QUE DESCRIBE EL (LOS) ARTÍCULO(S) O PRENDA(S) QUE "
+	+ "DEJO PARA CUSTODIAR, PROTEGER, RESGUARDAR Y EVITAR SU DETERIORO POR PARTE DE LA CASA DE EMPEÑO "
+	+ "DENOMINADA \"" + $P{P_EMPRESA} + "\" EL CUAL ES DE MI PROPIEDAD Y REITERO QUE NO PRESENTA REPORTE DE "
+	+ "ROBO ALGUNO"]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight">
+				<reportElement positionType="Float" x="0" y="46" width="532" height="12"/>
+				<textElement textAlignment="Justified"/>
+				<textFieldExpression><![CDATA["Y OTORGANDO DESDE ESTE MOMENTO A LA PRESTADORA DEL SERVICIO DEL EMPEÑO DEL CUAL SOLICITÉ EL FINIQUITO "
+	+ "MÁS AMPLIO QUE EN EL DERECHO PROCEDA EN TODO LO QUE REFIERE AL CONTRATO DE MUTUO No. " + $P{P_CONTRATO}
+	+ " COMPROMETIÉNDOME EN SU CASO A RESARCIR CUALQUIER DAÑO O PERJUICIO QUE SE PUDIERA GENERAR POR LA "
+	+ "PRESENTE OPERACIÓN A LA EMPRESA " + $P{P_EMPRESA} + " O PERSONA FÍSICA O MORAL RELACIONADA CON ESTA."]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight">
+				<reportElement positionType="Float" x="0" y="68" width="532" height="12"/>
+				<textElement textAlignment="Justified"/>
+				<textFieldExpression><![CDATA["POR ESTE ESCRITO LIBERO DE TODA RESPONSABILIDAD PRESENTE O FUTURA DERIVADA DEL CONTRATO DE MUTUO YA "
+	+ "MULTICITADO Y ANEXÁNDOME AL PRESENTE ESCRITO TODOS MIS GENERALES Y COPIA DE MI "
+	+ $P{P_DOCUMENTO_IDENTIFICACION} + " ASÍ COMO COPIA DEL MISMO."]]></textFieldExpression>
+			</textField>
+			<!-- Firmas -->
+			<line>
+				<reportElement positionType="Float" x="20" y="170" width="210" height="1"/>
+				<graphicElement><pen lineWidth="0.75"/></graphicElement>
+			</line>
+			<textField textAdjust="StretchHeight">
+				<reportElement positionType="Float" x="20" y="174" width="210" height="11"/>
+				<textElement textAlignment="Center"><font size="9" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_CLIENTE}]]></textFieldExpression>
+			</textField>
+			<staticText>
+				<reportElement positionType="Float" x="20" y="186" width="210" height="10"/>
+				<textElement textAlignment="Center"><font size="8"/></textElement>
+				<text><![CDATA[EL CONSUMIDOR]]></text>
+			</staticText>
+			<line>
+				<reportElement positionType="Float" x="302" y="170" width="210" height="1"/>
+				<graphicElement><pen lineWidth="0.75"/></graphicElement>
+			</line>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="302" y="174" width="210" height="11"/>
+				<textElement textAlignment="Center"><font size="9" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_VALUADOR}]]></textFieldExpression>
+			</textField>
+			<staticText>
+				<reportElement positionType="Float" x="302" y="186" width="210" height="10"/>
+				<textElement textAlignment="Center"><font size="8"/></textElement>
+				<text><![CDATA[POR LA CASA DE EMPEÑO]]></text>
+			</staticText>
+		</band>
+	</summary>
+</jasperReport>

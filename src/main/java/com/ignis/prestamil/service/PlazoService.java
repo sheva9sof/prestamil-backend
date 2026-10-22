@@ -18,12 +18,16 @@ import com.ignis.prestamil.repository.ContratoRepository;
 import com.ignis.prestamil.repository.PlazoHechuraAlhajaRepository;
 import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.PlazoRepository;
+import com.ignis.prestamil.repository.UsuarioRepository;
 import com.ignis.prestamil.request.PlazoHechuraAlhajaRequest;
 import com.ignis.prestamil.request.PlazoParametroRequest;
 import com.ignis.prestamil.request.PlazoRequest;
+import com.ignis.prestamil.util.Constantes;
+import com.ignis.prestamil.model.Usuario;
 import com.ignis.prestamil.response.PlazoHechuraAlhajaResponse;
 import com.ignis.prestamil.response.PlazoParametroResponse;
 import com.ignis.prestamil.response.PlazoResponse;
+import com.ignis.prestamil.service.calculo.ParametrosSistemaCache;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -53,6 +57,8 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
     private final com.ignis.prestamil.repository.PrecioOroRepository precioOroRepository;
     private final OroTablaPrestamoRepository oroTablaPrestamoRepository;
     private final ContratoRepository contratoRepository;
+    private final UsuarioRepository usuarioRepository;
+    private final ParametrosSistemaCache parametrosSistemaCache;
 
     public PlazoService(PlazoRepository repository,
                         PlazoMapper plazoMapper,
@@ -63,7 +69,9 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
                         PlazoHechuraAlhajaMapper plazoHechuraAlhajaMapper,
                         com.ignis.prestamil.repository.PrecioOroRepository precioOroRepository,
                         OroTablaPrestamoRepository oroTablaPrestamoRepository,
-                        ContratoRepository contratoRepository) {
+                        ContratoRepository contratoRepository,
+                        UsuarioRepository usuarioRepository,
+                        ParametrosSistemaCache parametrosSistemaCache) {
         super(repository);
         this.plazoMapper = plazoMapper;
         this.tipoPrendaService = tipoPrendaService;
@@ -74,6 +82,8 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
         this.precioOroRepository = precioOroRepository;
         this.oroTablaPrestamoRepository = oroTablaPrestamoRepository;
         this.contratoRepository = contratoRepository;
+        this.usuarioRepository = usuarioRepository;
+        this.parametrosSistemaCache = parametrosSistemaCache;
     }
 
     /**
@@ -212,21 +222,77 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
      * @return PlazoParametroResponse con los datos guardados
      */
     public PlazoParametroResponse guardarParametro(Long plazoId, Integer tipoPrendaId,
-                                                    Integer sucursalId, PlazoParametroRequest request) {
+                                                    Integer sucursalId, PlazoParametroRequest request,
+                                                    String username) {
+        // D-07: validar el rango de porc_prestamo_s_avaluo ANTES de persistir. Este campo recorta
+        // el préstamo máximo (`avaluoReal × porc / 100`); un valor fuera de rango genera el error
+        // "supera el máximo autorizado 42.61" que vimos con el plazo de 3 quincenas (el `6` del plan
+        // D-13 debe ir en plazo_hechura_alhaja.porc_aumento, NO aquí). 0 se acepta como "sin tope
+        // extra" (semántica histórica del plazo Principal). Advertencia logeada entre 1 y 29 porque
+        // es una configuración inusual (debería ser 50–90), aunque técnicamente válida.
+        if (request != null && request.getPorcPrestamoSAvaluo() != null) {
+            BigDecimal val = request.getPorcPrestamoSAvaluo();
+            if (val.compareTo(BigDecimal.ZERO) < 0 || val.compareTo(CIEN) > 0) {
+                throw new BadRequestException(String.format(
+                        "El %% de préstamo sobre avalúo debe estar entre 0 y 100 (recibido %s). "
+                        + "El %% por hechura (típicamente 6 u 11) va en la tabla de %% Aumento, "
+                        + "no en este campo.", val));
+            }
+            if (val.compareTo(BigDecimal.ZERO) > 0 && val.compareTo(new BigDecimal("30")) < 0) {
+                log.warn("porc_prestamo_s_avaluo={} para plazo={}, tipoPrenda={}, sucursal={} es inusualmente bajo "
+                        + "(típico: 50–90). ¿Se confundió con el % por hechura?",
+                        val, plazoId, tipoPrendaId, sucursalId);
+            }
+        }
+
         PlazoParametroId id = new PlazoParametroId(plazoId, tipoPrendaId, sucursalId);
+        boolean nuevo = !plazoParametroRepository.existsById(id);
         PlazoParametro entity = plazoParametroRepository.findById(id)
                 .orElseGet(() -> {
                     // Crear nueva entidad con clave compuesta
-                    PlazoParametro nuevo = new PlazoParametro();
-                    nuevo.setPlazoId(plazoId);
-                    nuevo.setTipoPrendaId(tipoPrendaId);
-                    nuevo.setSucursalId(sucursalId);
-                    return nuevo;
+                    PlazoParametro n = new PlazoParametro();
+                    n.setPlazoId(plazoId);
+                    n.setTipoPrendaId(tipoPrendaId);
+                    n.setSucursalId(sucursalId);
+                    return n;
                 });
+        // D-14: porc_sancion_semanal es obligatorio al guardar. Si el request lo trae NULL (la
+        // pantalla no lo envió) y la fila es nueva, se usa el default de Parámetros Generales
+        // (id=19). En filas existentes, si el request lo trae NULL se conserva el valor previo —
+        // pero si quedó en 0 previamente, se corrige al default también para que el preview /
+        // PDF nunca muestren 0% con el gate removido.
+        if (request != null && request.getPorcSancionSemanal() == null) {
+            BigDecimal actual = entity.getPorcSancionSemanal();
+            if (nuevo || actual == null || actual.signum() == 0) {
+                request.setPorcSancionSemanal(parametrosSistemaCache.getPorcSancionSemanalDefault());
+            }
+        }
         // Actualizar campos editables desde el request
         plazoParametroMapper.actualizarDesdeRequest(entity, request);
+        // RN-27: el descuento sobre intereses SOLO lo modifica el rol Sistemas. Se maneja aparte
+        // del mapper para no exponer el campo a otros roles: si el request lo trae y el usuario no
+        // es Sistemas se rechaza (evita cambios silenciosos y hace visible el intento en logs);
+        // si no lo trae, se conserva el valor vigente sin importar el rol.
+        if (request != null && request.getPorcDescuentoInteres() != null) {
+            BigDecimal actual = entity.getPorcDescuentoInteres() != null
+                    ? entity.getPorcDescuentoInteres() : BigDecimal.ZERO;
+            if (request.getPorcDescuentoInteres().compareTo(actual) != 0) {
+                if (!esRolSistemas(username)) {
+                    throw new BadRequestException(
+                            "Solo el rol Sistemas puede modificar el descuento sobre intereses (RN-27)");
+                }
+                entity.setPorcDescuentoInteres(request.getPorcDescuentoInteres());
+            }
+        }
         PlazoParametro guardado = plazoParametroRepository.save(entity);
         return plazoParametroMapper.toPlazoParametroResponse(guardado);
+    }
+
+    private boolean esRolSistemas(String username) {
+        if (username == null) return false;
+        Usuario u = usuarioRepository.findByNombreUsuario(username).orElse(null);
+        return u != null && u.getRol() != null
+                && Constantes.ROL_SISTEMAS_ID.equals(u.getRol().getId());
     }
 
     // =========================================================================
@@ -241,10 +307,63 @@ public class PlazoService extends BaseService<Plazo, Long, PlazoRepository> {
      * @return lista de PlazoHechuraAlhajaResponse ordenada por kilataje y hechura
      */
     public List<PlazoHechuraAlhajaResponse> getTablaAlhajas(Integer idPlazo, Integer sucursalId) {
+        // %Prestamo de las 24 celdas de la sucursal, para exponer el precio de avalúo por gramo
+        // (el valor de la prenda) junto al precio de préstamo de cada fila.
+        Map<String, BigDecimal> porcPrestamoPorCelda = oroTablaPrestamoRepository
+                .findByIdSucursalId(sucursalId).stream()
+                .collect(Collectors.toMap(
+                        r -> r.getId().getKilataje() + "-" + r.getId().getHechura(),
+                        OroTablaPrestamo::getPorcPrestamo));
         return plazoHechuraAlhajaRepository.findByIdIdPlazoAndIdSucursalId(idPlazo, sucursalId)
                 .stream()
-                .map(plazoHechuraAlhajaMapper::toResponse)
+                .map(fila -> {
+                    PlazoHechuraAlhajaResponse r = plazoHechuraAlhajaMapper.toResponse(fila);
+                    BigDecimal porcPrestamo = porcPrestamoPorCelda.get(
+                            fila.getId().getKilataje() + "-" + fila.getId().getHechura());
+                    r.setPrecioAvaluo(precioAvaluoGramo(fila, porcPrestamo));
+                    return r;
+                })
                 .toList();
+    }
+
+    /**
+     * Precio de avalúo por gramo de una celda de la tabla de alhajas: el valor de la prenda
+     * (oro del kilataje × factor de hechura), ANTES del %Préstamo de la tabla de oro y del
+     * % de aumento del plazo. Es la base del avalúo real de una partida ALHAJA.
+     *
+     * Se obtiene deshaciendo esos dos porcentajes del precio de préstamo de la celda, así que
+     * siempre cuadra con la tabla vigente (ver recalcularRegistros):
+     *   precioAvaluo = precioPrestamo / (1 + porcAumento/100) / (%Prestamo/100)
+     *                = precioGramo / baseKilataje × kilataje × factorHechura/100
+     *
+     * @param fila celda kilataje/hechura del plazo y sucursal
+     * @return precio de avalúo por gramo, escala 4 (HALF_UP)
+     * @throws ResourceNotFoundException si la celda no tiene %Prestamo configurado en oro_tabla_prestamo
+     */
+    public BigDecimal calcularPrecioAvaluoGramo(PlazoHechuraAlhaja fila) {
+        BigDecimal porcPrestamo = oroTablaPrestamoRepository
+                .findById(new com.ignis.prestamil.model.OroTablaPrestamoId(
+                        fila.getId().getSucursalId(), fila.getId().getKilataje(), fila.getId().getHechura()))
+                .map(OroTablaPrestamo::getPorcPrestamo)
+                .orElse(null);
+        BigDecimal precioAvaluo = precioAvaluoGramo(fila, porcPrestamo);
+        if (precioAvaluo == null) {
+            throw new ResourceNotFoundException(
+                    "No hay %Prestamo configurado en la tabla de oro para "
+                    + fila.getId().getKilataje() + "K/" + fila.getId().getHechura());
+        }
+        return precioAvaluo;
+    }
+
+    /** Fórmula de {@link #calcularPrecioAvaluoGramo}; null si la celda no tiene %Prestamo (> 0). */
+    private static BigDecimal precioAvaluoGramo(PlazoHechuraAlhaja fila, BigDecimal porcPrestamo) {
+        if (fila.getPrecioPrestamo() == null || porcPrestamo == null || porcPrestamo.signum() <= 0) {
+            return null;
+        }
+        BigDecimal porcAumento = fila.getPorcAumento() != null ? fila.getPorcAumento() : BigDecimal.ZERO;
+        return fila.getPrecioPrestamo()
+                .divide(BigDecimal.ONE.add(porcAumento.divide(CIEN, 10, RoundingMode.HALF_UP)), 10, RoundingMode.HALF_UP)
+                .divide(porcPrestamo.divide(CIEN, 10, RoundingMode.HALF_UP), 4, RoundingMode.HALF_UP);
     }
 
     /**

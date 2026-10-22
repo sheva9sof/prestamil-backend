@@ -14,5 +14,6 @@ public class CatValorPrendaResponse {
     private String clave;
     private String descripcion;
     private Integer kilataje;
-    private Boolean contienePiedad;
+    private Boolean contienePiedra;
+    private Boolean pendienteRevision;
 }

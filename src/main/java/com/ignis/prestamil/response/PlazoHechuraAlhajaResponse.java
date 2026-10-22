@@ -16,4 +16,7 @@ public class PlazoHechuraAlhajaResponse {
     private BigDecimal precioBase;
     private BigDecimal porcAumento;
     private BigDecimal precioPrestamo;
+    // Valor de la prenda por gramo (oro del kilataje × factor de hechura), sin %Prestamo ni aumento.
+    // Solo lo llena GET /api/plazos/{id}/alhajas (PlazoService.getTablaAlhajas).
+    private BigDecimal precioAvaluo;
 }

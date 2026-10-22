@@ -14,6 +14,8 @@ import java.util.List;
 public class ContratoResponse {
     private Long id;
     private String folio;
+    /** Número de bolsa, consecutivo por sucursal (D-10). */
+    private Integer numBolsa;
     private Integer idCliente;
     private String nombreCliente;
     private Long idPlazo;
@@ -22,8 +24,11 @@ public class ContratoResponse {
     private String numIdentificacion;
     private String nombreBeneficiario;
     private LocalDateTime fechaApertura;
+    private LocalDate fechaContrato;
     private LocalDate fechaVencimiento;
+    private LocalDate fechaComercializacion;
     private BigDecimal montoPrestamo;
+    private BigDecimal saldoCapital;
     private BigDecimal montoAvaluo;
     private EstatusContrato estatus;
     private Integer numRefrendos;

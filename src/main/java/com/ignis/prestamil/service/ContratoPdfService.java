@@ -1,13 +1,15 @@
 package com.ignis.prestamil.service;
 
 import com.ignis.prestamil.exception.BadRequestException;
+import com.ignis.prestamil.exception.ConflictException;
 import com.ignis.prestamil.model.Cliente;
 import com.ignis.prestamil.model.Contrato;
-import com.ignis.prestamil.model.Direccion;
 import com.ignis.prestamil.model.PartidaContrato;
 import com.ignis.prestamil.model.Plazo;
 import com.ignis.prestamil.model.PlazoParametro;
 import com.ignis.prestamil.model.Sucursal;
+import com.ignis.prestamil.model.TipoMovimiento;
+import com.ignis.prestamil.repository.MovimientoContratoRepository;
 import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.SucursalRepository;
 import com.ignis.prestamil.response.VencimientoResponse;
@@ -15,6 +17,7 @@ import com.ignis.prestamil.service.calculo.CalculoContratoService;
 import com.ignis.prestamil.service.calculo.DesgloseCobro;
 import com.ignis.prestamil.service.calculo.ParametrosCalculo;
 import com.ignis.prestamil.service.calculo.ParametrosSistemaCache;
+import com.ignis.prestamil.util.FormatoDocumento;
 import com.ignis.prestamil.util.PagoExtemporaneoRow;
 import com.ignis.prestamil.util.PagoRow;
 import com.ignis.prestamil.util.PrendaRow;
@@ -35,8 +38,12 @@ import java.io.InputStream;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.text.DecimalFormat;
+import java.time.Clock;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -63,6 +70,8 @@ public class ContratoPdfService {
     private final SucursalRepository sucursalRepository;
     private final CalculoContratoService calculoContratoService;
     private final ParametrosSistemaCache parametrosSistemaCache;
+    private final MovimientoContratoRepository movimientoRepository;
+    private final Clock clock;
 
     private JasperReport reporte; // cacheado (la plantilla no cambia en runtime)
 
@@ -70,12 +79,40 @@ public class ContratoPdfService {
                               PlazoParametroRepository plazoParametroRepository,
                               SucursalRepository sucursalRepository,
                               CalculoContratoService calculoContratoService,
-                              ParametrosSistemaCache parametrosSistemaCache) {
+                              ParametrosSistemaCache parametrosSistemaCache,
+                              MovimientoContratoRepository movimientoRepository,
+                              Clock clock) {
         this.contratoService = contratoService;
         this.plazoParametroRepository = plazoParametroRepository;
         this.sucursalRepository = sucursalRepository;
         this.calculoContratoService = calculoContratoService;
         this.parametrosSistemaCache = parametrosSistemaCache;
+        this.movimientoRepository = movimientoRepository;
+        this.clock = clock;
+    }
+
+    /**
+     * Genera el PDF del contrato para una reposición/reimpresión (C-02). Exige un movimiento RE no
+     * cancelado para ese contrato con fecha de hoy, cobrado o exento ($0): el ticket debe haberse
+     * emitido antes del contrato para evitar que el personal entregue el contrato sin cobrar.
+     *
+     * @param contratoId id del contrato
+     * @return bytes del PDF del contrato
+     * @throws ConflictException 409 si no existe un RE no cancelado hoy
+     */
+    @Transactional(readOnly = true)
+    public byte[] generarPdfParaReposicion(Long contratoId) {
+        LocalDate hoy = LocalDate.now(clock);
+        LocalDateTime inicio = hoy.atStartOfDay();
+        LocalDateTime finExclusivo = hoy.plusDays(1).atStartOfDay();
+        boolean existeReHoy = movimientoRepository
+                .existsByContratoIdAndCanceladoFalseAndTipoInAndFechaGreaterThanEqualAndFechaLessThan(
+                        contratoId, EnumSet.of(TipoMovimiento.RE), inicio, finExclusivo);
+        if (!existeReHoy) {
+            throw new ConflictException(
+                    "El contrato no tiene una reposición registrada hoy; cobre la reposición antes de imprimir el contrato.");
+        }
+        return generarPdf(contratoId);
     }
 
     /**
@@ -127,9 +164,10 @@ public class ContratoPdfService {
         BigDecimal porcAlmacen  = pc.porcAlmacen();
         BigDecimal porcGastos   = pc.porcGastosAdmin();
         BigDecimal porcTotal    = porcInteres.add(porcAlmacen).add(porcGastos);
-        // La sancion solo entra al contrato si el plazo la tiene activada. Con el interruptor en NO
-        // el prestamo sigue generando interes y almacenaje, pero la sancion es 0.
-        BigDecimal porcSancion  = pc.aplicarSancion() ? pc.porcSancionSemanal() : BigDecimal.ZERO;
+        // D-14 (2026-10-08): la sanción se imprime siempre con el % configurado. Antes se
+        // apagaba con el toggle aplicarSancion y la tabla mostraba 0% aunque el cobro siguiera
+        // aplicando el 2% — divergencia PROFECO entre lo divulgado y lo cobrado.
+        BigDecimal porcSancion  = pc.porcSancionSemanal();
         BigDecimal porcIva      = pc.porcIva();
         BigDecimal comisionVenta = valOr(parametro != null ? parametro.getComisionPorVentaPrenda() : null);
 
@@ -263,7 +301,7 @@ public class ContratoPdfService {
                         .divide(p.getAvaluoContrato(), 2, RoundingMode.HALF_UP)
                     : BigDecimal.ZERO;
             filas.add(new PrendaRow(
-                    nz(p.getDescripcion()),
+                    FormatoDocumento.descripcionPartida(p),
                     caracteristicas.trim(),
                     money(p.getAvaluoContrato()),
                     money(p.getMontoPrestamo()),
@@ -272,7 +310,7 @@ public class ContratoPdfService {
         return filas;
     }
 
-    private List<PagoRow> buildPagos(List<VencimientoResponse> vencimientos, Contrato contrato) {
+    List<PagoRow> buildPagos(List<VencimientoResponse> vencimientos, Contrato contrato) {
         List<PagoRow> filas = new ArrayList<>();
         String mutuo = money(contrato.getMontoPrestamo());
         for (VencimientoResponse v : vencimientos) {
@@ -323,12 +361,12 @@ public class ContratoPdfService {
     /**
      * Filas del bloque "Pago Extemporaneo": los ~2 periodos siguientes al plazo, con la sancion por
      * extemporaneidad. Pasada 2: cada fila k=1,2 se calcula como si el cliente pagara en la fecha
-     * simulada {@code baseFecha + dias*k}; el motor computa {@code semanasVencidas = ceil((atraso - gracia)/7)}
-     * igual que el cobro real de refrendar (antes se usaba k directamente, correcto solo con
-     * plazo semanal). El IVA (truncado DOWN a 2 dec) se aplica sobre {@code interes + almacen +
-     * gastosAdmin + sancion}, misma base que en caja.
+     * simulada {@code baseFecha + dias*k}; el motor computa {@code semanasVencidas = ceil(atraso/7)} (la
+     * gracia rebasada no se descuenta) igual que el cobro real de refrendar (antes se usaba k directamente,
+     * correcto solo con plazo semanal). El IVA (truncado DOWN a 2 dec) se aplica sobre
+     * {@code interes + almacen + sancion}, misma base que en caja; los gastos admin no se cobran por periodo.
      */
-    private List<PagoExtemporaneoRow> buildPagosExtemporaneos(
+    List<PagoExtemporaneoRow> buildPagosExtemporaneos(
             Contrato contrato, PlazoParametro parametro, Plazo plazo, java.time.LocalDate baseFecha) {
         List<PagoExtemporaneoRow> filas = new ArrayList<>();
         BigDecimal prestamo = valOr(contrato.getMontoPrestamo());
@@ -347,12 +385,9 @@ public class ContratoPdfService {
             // filas coinciden con el cobro real en refrendar para cualquier plazo.
             DesgloseCobro d = calculoContratoService.calcularCobroPeriodo(
                     contrato, parametro, fechaSimulada, j);
-            BigDecimal interes  = d.interes();
             BigDecimal almacen  = d.almacen();
-            BigDecimal gastos   = d.gastosAdmin();
-            BigDecimal sancion  = d.sancion();
-            // El interes impreso lleva embebidos gastos admin y sancion (COCAE no les da columna aparte).
-            BigDecimal interesConSancion = interes.add(gastos).add(sancion);
+            // El interes impreso lleva embebida la sancion (COCAE no le da columna aparte).
+            BigDecimal interesConSancion = d.interes().add(d.sancion());
             BigDecimal iva = d.iva();
             BigDecimal refrendo = d.baseIva().add(iva);
             BigDecimal desempeno = prestamo.add(refrendo);
@@ -385,23 +420,15 @@ public class ContratoPdfService {
     }
 
     private String nombreCliente(Cliente c) {
-        if (c == null) return "";
-        return (nz(c.getNombre()) + " " + nz(c.getApellidoPaterno()) + " " + nz(c.getApellidoMaterno())).trim();
+        return FormatoDocumento.nombreCompleto(c);
     }
 
     private String direccionCliente(Cliente c) {
-        if (c == null || c.getDireccion() == null) return "";
-        Direccion d = c.getDireccion();
-        return (nz(d.getCalle()) + " " + nz(d.getNumeroExterior()) + ", " + nz(d.getColonia())
-                + ", " + nz(d.getCiudad()) + ", " + nz(d.getEstado()) + " C.P. " + nz(d.getCodigoPostal()))
-                .replaceAll("\\s+,", ",").trim();
+        return c != null ? FormatoDocumento.domicilio(c.getDireccion()) : "";
     }
 
     private String domicilioSucursal(Sucursal s) {
-        if (s == null) return "";
-        return (nz(s.getCalle()) + " " + nz(s.getNoExterior()) + ", " + nz(s.getColonia())
-                + ", " + nz(s.getMunicipio()) + ", " + nz(s.getEstado()) + " C.P. " + nz(s.getCp()))
-                .replaceAll("\\s+,", ",").trim();
+        return FormatoDocumento.domicilio(s);
     }
 
     private String ramo(PartidaContrato p) {
