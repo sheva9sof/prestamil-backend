@@ -49,5 +49,6 @@
     <include file="db/changelog/changes/042-catalogo-prendas-clave-repetible-contiene-piedra.sql"/>
     <include file="db/changelog/changes/043-bolsa-codigo-barras.sql"/>
     <include file="db/changelog/changes/044-backfill-emp-snapshot-pre-contrato.sql"/>
+    <include file="db/changelog/changes/075-roles-permitidos-pase-almoneda-otra-fecha.sql"/>
 
 </databaseChangeLog>

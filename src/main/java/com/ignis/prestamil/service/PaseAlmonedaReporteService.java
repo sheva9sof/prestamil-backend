@@ -2,18 +2,24 @@ package com.ignis.prestamil.service;
 
 import com.ignis.prestamil.exception.BadRequestException;
 import com.ignis.prestamil.model.Cliente;
+import com.ignis.prestamil.model.Configuracion;
 import com.ignis.prestamil.model.Contrato;
 import com.ignis.prestamil.model.Direccion;
 import com.ignis.prestamil.model.Empresa;
 import com.ignis.prestamil.model.PartidaContrato;
 import com.ignis.prestamil.model.PaseAlmonedaDetalle;
+import com.ignis.prestamil.model.Rol;
 import com.ignis.prestamil.model.Sucursal;
 import com.ignis.prestamil.model.TipoCambioPase;
+import com.ignis.prestamil.model.Usuario;
+import com.ignis.prestamil.repository.ConfiguracionRepository;
 import com.ignis.prestamil.repository.PaseAlmonedaDetalleRepository;
 import com.ignis.prestamil.repository.SucursalRepository;
+import com.ignis.prestamil.repository.UsuarioRepository;
 import com.ignis.prestamil.response.CarteraVencidaRow;
 import com.ignis.prestamil.response.PaseAVentaRow;
 import com.ignis.prestamil.response.ResultadosPaseAlmonedaResponse;
+import com.ignis.prestamil.util.Constantes;
 import com.ignis.prestamil.util.FormatoDocumento;
 import lombok.RequiredArgsConstructor;
 import net.sf.jasperreports.engine.JRException;
@@ -31,14 +37,18 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -54,33 +64,93 @@ public class PaseAlmonedaReporteService {
 
     private final PaseAlmonedaDetalleRepository detalleRepository;
     private final SucursalRepository sucursalRepository;
+    private final UsuarioRepository usuarioRepository;
+    private final ConfiguracionRepository configuracionRepository;
+    private final Clock clock;
 
     private JasperReport reporteCarteraVencida; // cacheado (la plantilla no cambia en runtime)
     private JasperReport reportePaseAVenta; // cacheado
 
     /**
      * Resultados de un pase (C-11). Si no se encuentran filas se devuelven listas vacias; la UI
-     * muestra entonces "sin movimientos".
+     * muestra entonces "sin movimientos". Si el usuario no puede elegir otra fecha (OTR-01) se
+     * ignora la recibida y se consulta la de hoy del servidor.
      *
-     * @param sucursalId sucursal
-     * @param fecha      fecha del pase (del selector de la pantalla)
-     * @return respuesta con las dos pestañas
+     * @param sucursalId      sucursal
+     * @param fechaSolicitada fecha del selector de la pantalla (puede ser nula)
+     * @param username        usuario que consulta
+     * @return respuesta con las dos pestañas, la fecha realmente consultada y si puede cambiarla
      */
     @Transactional(readOnly = true)
-    public ResultadosPaseAlmonedaResponse obtener(Integer sucursalId, LocalDate fecha) {
+    public ResultadosPaseAlmonedaResponse obtener(Integer sucursalId, LocalDate fechaSolicitada, String username) {
+        boolean puedeElegirFecha = puedeElegirFecha(username);
+        LocalDate fecha = puedeElegirFecha && fechaSolicitada != null ? fechaSolicitada : LocalDate.now(clock);
+        return new ResultadosPaseAlmonedaResponse(fecha, puedeElegirFecha,
+                carteraVencida(sucursalId, fecha), paseAVenta(sucursalId, fecha));
+    }
+
+    /**
+     * Fecha que el usuario puede consultar o exportar (OTR-01): la solicitada si su rol está en
+     * {@code ROLES_PERMITIDOS_PASE_ALMONEDA_OTRA_FECHA}; si no (o si no mandó fecha), la de hoy
+     * del servidor. No responde 403: el cajero simplemente ve el pase del día.
+     *
+     * @param username        usuario que consulta
+     * @param fechaSolicitada fecha recibida en la petición (puede ser nula)
+     * @return fecha efectiva de la consulta
+     */
+    @Transactional(readOnly = true)
+    public LocalDate fechaPermitida(String username, LocalDate fechaSolicitada) {
+        if (fechaSolicitada != null && puedeElegirFecha(username)) {
+            return fechaSolicitada;
+        }
+        return LocalDate.now(clock);
+    }
+
+    /**
+     * Indica si el rol del usuario está en {@code ROLES_PERMITIDOS_PASE_ALMONEDA_OTRA_FECHA}.
+     *
+     * @param username usuario autenticado
+     * @return {@code true} si puede consultar el pase de otra fecha
+     */
+    @Transactional(readOnly = true)
+    public boolean puedeElegirFecha(String username) {
+        Integer rolId = usuarioRepository.findByNombreUsuario(username)
+                .map(Usuario::getRol)
+                .map(Rol::getId)
+                .orElse(null);
+        return rolId != null && rolesPermitidosOtraFecha().contains(rolId);
+    }
+
+    /** CSV de ids de rol de la configuración; conjunto vacío = nadie elige otra fecha. */
+    private Set<Integer> rolesPermitidosOtraFecha() {
+        return configuracionRepository.findByConfiguracion(Constantes.ROLES_PERMITIDOS_PASE_ALMONEDA_OTRA_FECHA)
+                .map(Configuracion::getValorCadena)
+                .filter(csv -> csv != null && !csv.isBlank())
+                .map(csv -> Arrays.stream(csv.split(","))
+                        .map(String::trim)
+                        .filter(s -> !s.isEmpty())
+                        .map(Integer::parseInt)
+                        .collect(Collectors.toSet()))
+                .orElseGet(Collections::emptySet);
+    }
+
+    private List<CarteraVencidaRow> carteraVencida(Integer sucursalId, LocalDate fecha) {
         // TODO G-08: Jorge pidio que el contrato entre a "cartera vencida" el dia siguiente al
         // vencimiento, aunque siga en gracia ("en su dia 29"). Hoy el pase cambia el estatus
         // al rebasar la gracia (F11), asi que esta consulta refleja ese momento. Si se adopta
         // el criterio de Jorge, hay que ampliar la fuente para incluir contratos con
         // vencimiento = fecha - 1 aunque sigan en gracia.
-        List<CarteraVencidaRow> cartera = detalleRepository
+        return detalleRepository
                 .findByPaseSucursalIdAndPaseFechaAndTipoCambio(sucursalId, fecha, TipoCambioPase.VENCIDO)
                 .stream()
                 .map(this::toCarteraVencida)
                 .sorted(Comparator.comparing(CarteraVencidaRow::folioContrato,
                         Comparator.nullsLast(Comparator.naturalOrder())))
                 .collect(Collectors.toList());
-        List<PaseAVentaRow> venta = detalleRepository
+    }
+
+    private List<PaseAVentaRow> paseAVenta(Integer sucursalId, LocalDate fecha) {
+        return detalleRepository
                 .findByPaseSucursalIdAndPaseFechaAndTipoCambio(sucursalId, fecha, TipoCambioPase.EN_VENTA)
                 .stream()
                 .map(d -> toPaseAVenta(d, fecha))
@@ -90,15 +160,15 @@ public class PaseAlmonedaReporteService {
                         .thenComparing(PaseAVentaRow::numPartida,
                                 Comparator.nullsLast(Comparator.naturalOrder())))
                 .collect(Collectors.toList());
-        return new ResultadosPaseAlmonedaResponse(fecha, cartera, venta);
     }
 
     /**
      * CSV con BOM UTF-8 para que Excel abra bien los acentos. Columnas en el mismo orden que la
-     * pestaña de la pantalla.
+     * pestaña de la pantalla. La fecha ya viene filtrada por {@link #fechaPermitida}.
      */
+    @Transactional(readOnly = true)
     public byte[] exportarCarteraVencidaCsv(Integer sucursalId, LocalDate fecha) {
-        List<CarteraVencidaRow> filas = obtener(sucursalId, fecha).carteraVencida();
+        List<CarteraVencidaRow> filas = carteraVencida(sucursalId, fecha);
         StringBuilder sb = new StringBuilder();
         sb.append("Contrato,Cliente,Direccion,Telefono,Vencimiento,Saldo\n");
         for (CarteraVencidaRow f : filas) {
@@ -113,8 +183,9 @@ public class PaseAlmonedaReporteService {
         return conBom(sb.toString());
     }
 
+    @Transactional(readOnly = true)
     public byte[] exportarPaseAVentaCsv(Integer sucursalId, LocalDate fecha) {
-        List<PaseAVentaRow> filas = obtener(sucursalId, fecha).paseAVenta();
+        List<PaseAVentaRow> filas = paseAVenta(sucursalId, fecha);
         StringBuilder sb = new StringBuilder();
         sb.append("Contrato,Partida,Descripcion,Fecha de pase\n");
         for (PaseAVentaRow f : filas) {
@@ -137,7 +208,7 @@ public class PaseAlmonedaReporteService {
      */
     @Transactional(readOnly = true)
     public byte[] exportarCarteraVencidaPdf(Integer sucursalId, LocalDate fecha) {
-        List<CarteraVencidaRow> filas = obtener(sucursalId, fecha).carteraVencida();
+        List<CarteraVencidaRow> filas = carteraVencida(sucursalId, fecha);
         Map<String, Object> params = parametrosCarteraVencida(sucursalId, fecha, filas);
         List<Map<String, ?>> datos = filas.stream()
                 .<Map<String, ?>>map(f -> fila(
@@ -161,7 +232,7 @@ public class PaseAlmonedaReporteService {
      */
     @Transactional(readOnly = true)
     public byte[] exportarPaseAVentaPdf(Integer sucursalId, LocalDate fecha) {
-        List<PaseAVentaRow> filas = obtener(sucursalId, fecha).paseAVenta();
+        List<PaseAVentaRow> filas = paseAVenta(sucursalId, fecha);
         Map<String, Object> params = parametrosPaseAVenta(sucursalId, fecha, filas);
         List<Map<String, ?>> datos = filas.stream()
                 .<Map<String, ?>>map(f -> fila(
@@ -204,7 +275,7 @@ public class PaseAlmonedaReporteService {
                 + (sucursal.getNumeroSucursal() != null ? sucursal.getNumeroSucursal() + " " : "")
                 + nullSafe(sucursal.getNombre()) + " - " + FormatoDocumento.domicilio(sucursal));
         params.put("P_FECHA_PASE", "Fecha del pase: " + fecha.format(FECHA));
-        params.put("P_IMPRESO", "Impreso: " + LocalDateTime.now().format(FECHA_HORA));
+        params.put("P_IMPRESO", "Impreso: " + LocalDateTime.now(clock).format(FECHA_HORA));
         return params;
     }
 

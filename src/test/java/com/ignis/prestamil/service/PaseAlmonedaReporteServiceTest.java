@@ -1,27 +1,35 @@
 package com.ignis.prestamil.service;
 
 import com.ignis.prestamil.model.Cliente;
+import com.ignis.prestamil.model.Configuracion;
 import com.ignis.prestamil.model.Contrato;
 import com.ignis.prestamil.model.Direccion;
 import com.ignis.prestamil.model.PartidaContrato;
 import com.ignis.prestamil.model.PaseAlmoneda;
 import com.ignis.prestamil.model.PaseAlmonedaDetalle;
+import com.ignis.prestamil.model.Rol;
 import com.ignis.prestamil.model.Sucursal;
 import com.ignis.prestamil.model.TipoCambioPase;
+import com.ignis.prestamil.model.Usuario;
+import com.ignis.prestamil.repository.ConfiguracionRepository;
 import com.ignis.prestamil.repository.PaseAlmonedaDetalleRepository;
 import com.ignis.prestamil.repository.SucursalRepository;
+import com.ignis.prestamil.repository.UsuarioRepository;
 import com.ignis.prestamil.response.CarteraVencidaRow;
 import com.ignis.prestamil.response.PaseAVentaRow;
 import com.ignis.prestamil.response.ResultadosPaseAlmonedaResponse;
+import com.ignis.prestamil.util.Constantes;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -29,17 +37,22 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
  * Reporte "Resultados del pase de almoneda" (C-11). Verifica el mapeo a DTO, el fallback de fecha
- * sin pase, la serializacion CSV y los reportes PDF.
+ * sin pase, la serializacion CSV, los reportes PDF y la restriccion de fecha por rol (OTR-01).
  */
 @ExtendWith(MockitoExtension.class)
 class PaseAlmonedaReporteServiceTest {
 
     private static final int SUCURSAL = 1;
     private static final LocalDate FECHA = LocalDate.of(2026, 10, 6);
+    // "Hoy" del servidor en los tests de OTR-01; distinto de FECHA para distinguir cual se consulto.
+    private static final LocalDate HOY = LocalDate.of(2026, 10, 30);
 
     @Mock
     PaseAlmonedaDetalleRepository detalleRepository;
@@ -47,15 +60,35 @@ class PaseAlmonedaReporteServiceTest {
     @Mock
     SucursalRepository sucursalRepository;
 
-    @InjectMocks
+    @Mock
+    UsuarioRepository usuarioRepository;
+
+    @Mock
+    ConfiguracionRepository configuracionRepository;
+
     PaseAlmonedaReporteService service;
+
+    @BeforeEach
+    void setUp() {
+        Clock clock = Clock.fixed(HOY.atStartOfDay(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
+        service = new PaseAlmonedaReporteService(detalleRepository, sucursalRepository,
+                usuarioRepository, configuracionRepository, clock);
+
+        lenient().when(usuarioRepository.findByNombreUsuario("sistemas")).thenReturn(Optional.of(usuarioConRol(1)));
+        lenient().when(usuarioRepository.findByNombreUsuario("gerente")).thenReturn(Optional.of(usuarioConRol(5)));
+        lenient().when(usuarioRepository.findByNombreUsuario("cajero")).thenReturn(Optional.of(usuarioConRol(3)));
+        Configuracion roles = new Configuracion();
+        roles.setValorCadena("1");
+        lenient().when(configuracionRepository.findByConfiguracion(Constantes.ROLES_PERMITIDOS_PASE_ALMONEDA_OTRA_FECHA))
+                .thenReturn(Optional.of(roles));
+    }
 
     @Test
     void obtener_fechaSinPase_devuelveListasVacias() {
         when(detalleRepository.findByPaseSucursalIdAndPaseFechaAndTipoCambio(
                 eq(SUCURSAL), eq(FECHA), any())).thenReturn(List.of());
 
-        ResultadosPaseAlmonedaResponse res = service.obtener(SUCURSAL, FECHA);
+        ResultadosPaseAlmonedaResponse res = service.obtener(SUCURSAL, FECHA, "sistemas");
 
         assertThat(res.fecha()).isEqualTo(FECHA);
         assertThat(res.carteraVencida()).isEmpty();
@@ -80,7 +113,7 @@ class PaseAlmonedaReporteServiceTest {
         when(detalleRepository.findByPaseSucursalIdAndPaseFechaAndTipoCambio(
                 SUCURSAL, FECHA, TipoCambioPase.EN_VENTA)).thenReturn(List.of(enVenta));
 
-        ResultadosPaseAlmonedaResponse res = service.obtener(SUCURSAL, FECHA);
+        ResultadosPaseAlmonedaResponse res = service.obtener(SUCURSAL, FECHA, "sistemas");
 
         assertThat(res.carteraVencida()).singleElement().satisfies(fila -> {
             assertThat(fila.folioContrato()).isEqualTo("C-001");
@@ -96,6 +129,63 @@ class PaseAlmonedaReporteServiceTest {
             assertThat(fila.descripcion()).isEqualTo("Collar oro 18k");
             assertThat(fila.fechaPase()).isEqualTo(FECHA);
         });
+    }
+
+    @Test
+    void obtener_cajero_ignoraLaFechaRecibidaYConsultaHoy() {
+        when(detalleRepository.findByPaseSucursalIdAndPaseFechaAndTipoCambio(
+                eq(SUCURSAL), eq(HOY), any())).thenReturn(List.of());
+
+        ResultadosPaseAlmonedaResponse res = service.obtener(SUCURSAL, FECHA, "cajero");
+
+        assertThat(res.fecha()).isEqualTo(HOY);
+        assertThat(res.puedeElegirFecha()).isFalse();
+        verify(detalleRepository, never()).findByPaseSucursalIdAndPaseFechaAndTipoCambio(eq(SUCURSAL), eq(FECHA), any());
+    }
+
+    @Test
+    void obtener_sistemas_consultaLaFechaRecibida() {
+        when(detalleRepository.findByPaseSucursalIdAndPaseFechaAndTipoCambio(
+                eq(SUCURSAL), eq(FECHA), any())).thenReturn(List.of());
+
+        ResultadosPaseAlmonedaResponse res = service.obtener(SUCURSAL, FECHA, "sistemas");
+
+        assertThat(res.fecha()).isEqualTo(FECHA);
+        assertThat(res.puedeElegirFecha()).isTrue();
+    }
+
+    @Test
+    void obtener_sistemasSinFecha_consultaHoy() {
+        when(detalleRepository.findByPaseSucursalIdAndPaseFechaAndTipoCambio(
+                eq(SUCURSAL), eq(HOY), any())).thenReturn(List.of());
+
+        ResultadosPaseAlmonedaResponse res = service.obtener(SUCURSAL, null, "sistemas");
+
+        assertThat(res.fecha()).isEqualTo(HOY);
+        assertThat(res.puedeElegirFecha()).isTrue();
+    }
+
+    @Test
+    void fechaPermitida_soloSistemasPuedeElegirOtraFecha() {
+        assertThat(service.fechaPermitida("sistemas", FECHA)).isEqualTo(FECHA);
+        assertThat(service.fechaPermitida("cajero", FECHA)).isEqualTo(HOY);
+        // Cajero y gerente solo ven hoy (Jorge, 01:17:16).
+        assertThat(service.fechaPermitida("gerente", FECHA)).isEqualTo(HOY);
+    }
+
+    @Test
+    void fechaPermitida_sinConfiguracion_nadieEligeOtraFecha() {
+        when(configuracionRepository.findByConfiguracion(Constantes.ROLES_PERMITIDOS_PASE_ALMONEDA_OTRA_FECHA))
+                .thenReturn(Optional.empty());
+
+        assertThat(service.fechaPermitida("sistemas", FECHA)).isEqualTo(HOY);
+    }
+
+    @Test
+    void fechaPermitida_usuarioInexistente_usaHoy() {
+        when(usuarioRepository.findByNombreUsuario("fantasma")).thenReturn(Optional.empty());
+
+        assertThat(service.fechaPermitida("fantasma", FECHA)).isEqualTo(HOY);
     }
 
     @Test
@@ -117,8 +207,6 @@ class PaseAlmonedaReporteServiceTest {
         Contrato c1 = contrato(1L, "C-001", "1050.00");
         when(detalleRepository.findByPaseSucursalIdAndPaseFechaAndTipoCambio(
                 SUCURSAL, FECHA, TipoCambioPase.VENCIDO)).thenReturn(List.of(detalle(c1, null, TipoCambioPase.VENCIDO)));
-        when(detalleRepository.findByPaseSucursalIdAndPaseFechaAndTipoCambio(
-                SUCURSAL, FECHA, TipoCambioPase.EN_VENTA)).thenReturn(List.of());
         when(sucursalRepository.findById(SUCURSAL)).thenReturn(Optional.of(sucursal()));
 
         byte[] pdf = service.exportarCarteraVencidaPdf(SUCURSAL, FECHA);
@@ -131,8 +219,6 @@ class PaseAlmonedaReporteServiceTest {
         PartidaContrato partida = new PartidaContrato();
         partida.setNumPartida(1);
         partida.setDescripcion("Anillo oro 14k con piedra");
-        when(detalleRepository.findByPaseSucursalIdAndPaseFechaAndTipoCambio(
-                SUCURSAL, FECHA, TipoCambioPase.VENCIDO)).thenReturn(List.of());
         when(detalleRepository.findByPaseSucursalIdAndPaseFechaAndTipoCambio(
                 SUCURSAL, FECHA, TipoCambioPase.EN_VENTA))
                 .thenReturn(List.of(detalle(contrato(2L, "C-002", "0"), partida, TipoCambioPase.EN_VENTA)));
@@ -179,6 +265,14 @@ class PaseAlmonedaReporteServiceTest {
         assertThat(params.get("P_SIN_DATOS")).isEqualTo(true);
         assertThat(params.get("P_EMPRESA")).isEqualTo("PRESTAMIL");
         assertThat(params.get("P_SUCURSAL")).isEqualTo("");
+    }
+
+    private static Usuario usuarioConRol(int rolId) {
+        Rol rol = new Rol();
+        rol.setId(rolId);
+        Usuario usuario = new Usuario();
+        usuario.setRol(rol);
+        return usuario;
     }
 
     private Sucursal sucursal() {

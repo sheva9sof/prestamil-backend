@@ -40,6 +40,9 @@ public class Constantes {
     // Roles que pueden dar de alta, editar y borrar el catálogo de prendas (D-09, Q6).
     // CSV de ids de rol; por defecto solo Sistemas (1). Las sucursales solo consultan → 403.
     public static final String ROLES_PERMITIDOS_CATALOGO_PRENDAS = "ROLES_PERMITIDOS_CATALOGO_PRENDAS";
+    // Roles que pueden consultar el pase de almoneda de otra fecha (OTR-01, Jorge 01:17:16).
+    // CSV de ids de rol; por defecto solo Sistemas (1). El resto ve siempre el pase de hoy.
+    public static final String ROLES_PERMITIDOS_PASE_ALMONEDA_OTRA_FECHA = "ROLES_PERMITIDOS_PASE_ALMONEDA_OTRA_FECHA";
     public static final String NOMBRE_MENU_TURNO = "Turnos";
 
     // Contratos
