@@ -23,12 +23,14 @@ public class MovimientoContrato {
     @JoinColumn(name = "id_contrato", nullable = false)
     private Contrato contrato;
 
+    /** Nulo solo en el PV automatico del pase de almoneda, que puede correr sin turno (changeset 078). */
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "id_turno", nullable = false)
+    @JoinColumn(name = "id_turno")
     private Turno turno;
 
+    /** Nulo solo en el PV automatico del pase de almoneda (changeset 078). */
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "id_usuario", nullable = false)
+    @JoinColumn(name = "id_usuario")
     private Usuario usuario;
 
     @Enumerated(EnumType.STRING)

@@ -1876,6 +1876,29 @@ class MovimientoContratoServiceTest {
             assertThat(re.getCancelado()).isFalse();
         }
 
+        /** El PV lo registra el pase de almoneda: cancelarlo dejaba su fila huérfana en "Pase a venta". */
+        @Test
+        void cancelarPaseAVentaPv_rechazado_400() {
+            Contrato c = contratoC2();
+            c.setEstatus(EstatusContrato.EN_VENTA);
+            MovimientoContrato pv = new MovimientoContrato();
+            pv.setId(113L);
+            pv.setContrato(c);
+            pv.setTipo(TipoMovimiento.PV);
+            pv.setFecha(LocalDateTime.of(HOY, java.time.LocalTime.of(0, 5)));
+            pv.setCancelado(false);
+            pv.setEstatusAnterior(EstatusContrato.VENCIDO);
+            when(movimientoRepository.findById(113L)).thenReturn(Optional.of(pv));
+            lenient().when(usuarioRepository.findByNombreUsuario("gerente1")).thenReturn(Optional.of(new Usuario()));
+
+            assertThatThrownBy(() -> service.cancelar(113L, motivo("Cliente vino a refrendar"), "gerente1"))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessage("El pase a venta es automático y no se puede cancelar");
+            assertThat(pv.getCancelado()).isFalse();
+            assertThat(c.getEstatus()).isEqualTo(EstatusContrato.EN_VENTA);
+            verify(movimientoRepository, never()).save(any());
+        }
+
         /**
          * C-03: una reposición posterior al EMP no bloquea cancelar el EMP. El RE se ignora al
          * decidir cuál es el último movimiento cancelable y sigue vigente tras cancelar el EMP.

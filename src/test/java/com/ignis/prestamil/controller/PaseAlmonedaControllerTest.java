@@ -10,12 +10,14 @@ import com.ignis.prestamil.repository.PaseAlmonedaDetalleRepository;
 import com.ignis.prestamil.repository.SucursalRepository;
 import com.ignis.prestamil.repository.UsuarioRepository;
 import com.ignis.prestamil.service.PaseAlmonedaReporteService;
+import com.ignis.prestamil.service.PaseAlmonedaService;
 import com.ignis.prestamil.service.SucursalService;
 import com.ignis.prestamil.util.Constantes;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.converter.ByteArrayHttpMessageConverter;
@@ -35,9 +37,11 @@ import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -65,6 +69,7 @@ class PaseAlmonedaControllerTest {
     @Mock UsuarioRepository usuarioRepository;
     @Mock ConfiguracionRepository configuracionRepository;
     @Mock SucursalService sucursalService;
+    @Mock PaseAlmonedaService paseAlmonedaService;
 
     MockMvc mockMvc;
 
@@ -73,7 +78,7 @@ class PaseAlmonedaControllerTest {
         Clock clock = Clock.fixed(HOY.atStartOfDay(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
         PaseAlmonedaReporteService service = new PaseAlmonedaReporteService(detalleRepository,
                 sucursalRepository, usuarioRepository, configuracionRepository, clock);
-        PaseAlmonedaController controller = new PaseAlmonedaController(service, sucursalService);
+        PaseAlmonedaController controller = new PaseAlmonedaController(service, paseAlmonedaService, sucursalService);
         // Mismo ObjectMapper que Spring Boot: fechas como "yyyy-MM-dd", no como arreglo.
         MappingJackson2HttpMessageConverter json = new MappingJackson2HttpMessageConverter(
                 Jackson2ObjectMapperBuilder.json()
@@ -105,6 +110,24 @@ class PaseAlmonedaControllerTest {
                 .andExpect(jsonPath("$.puedeElegirFecha").value(false));
 
         verify(detalleRepository, never()).findByPaseSucursalIdAndPaseFechaAndTipoCambio(eq(SUCURSAL), eq(OTRA_FECHA), any());
+    }
+
+    @Test
+    void resultados_ponenAlDiaElPaseAntesDeConsultar() throws Exception {
+        mockMvc.perform(get("/api/pase-almoneda/resultados").principal(CAJERO))
+                .andExpect(status().isOk());
+
+        InOrder orden = inOrder(paseAlmonedaService, detalleRepository);
+        orden.verify(paseAlmonedaService).ejecutarPendientes();
+        orden.verify(detalleRepository, atLeastOnce()).findByPaseSucursalIdAndPaseFechaAndTipoCambio(any(), any(), any());
+    }
+
+    @Test
+    void exportaciones_noCorrenElPase() throws Exception {
+        mockMvc.perform(get("/api/pase-almoneda/cartera-vencida/excel").principal(CAJERO))
+                .andExpect(status().isOk());
+
+        verifyNoInteractions(paseAlmonedaService);
     }
 
     @Test

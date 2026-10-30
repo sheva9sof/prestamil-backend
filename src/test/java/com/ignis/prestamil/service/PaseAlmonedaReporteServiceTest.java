@@ -132,6 +132,27 @@ class PaseAlmonedaReporteServiceTest {
     }
 
     @Test
+    void obtener_carteraVencida_muestraVencimientoYSaldoDelDiaDelPase() {
+        // El contrato se refrendo despues del pase: hoy vence en noviembre y debe menos.
+        Contrato c = contrato(1L, "C-001", "400.00");
+        c.setFechaVencimiento(LocalDate.of(2026, 11, 3));
+        PaseAlmonedaDetalle vencido = detalle(c, null, TipoCambioPase.VENCIDO);
+        vencido.setFechaVencimiento(LocalDate.of(2026, 10, 1));
+        vencido.setSaldoCapital(new BigDecimal("1050.00"));
+        when(detalleRepository.findByPaseSucursalIdAndPaseFechaAndTipoCambio(
+                SUCURSAL, FECHA, TipoCambioPase.VENCIDO)).thenReturn(List.of(vencido));
+        when(detalleRepository.findByPaseSucursalIdAndPaseFechaAndTipoCambio(
+                SUCURSAL, FECHA, TipoCambioPase.EN_VENTA)).thenReturn(List.of());
+
+        ResultadosPaseAlmonedaResponse res = service.obtener(SUCURSAL, FECHA, "sistemas");
+
+        assertThat(res.carteraVencida()).singleElement().satisfies(fila -> {
+            assertThat(fila.fechaVencimiento()).isEqualTo(LocalDate.of(2026, 10, 1));
+            assertThat(fila.saldoCapital()).isEqualByComparingTo("1050.00");
+        });
+    }
+
+    @Test
     void obtener_cajero_ignoraLaFechaRecibidaYConsultaHoy() {
         when(detalleRepository.findByPaseSucursalIdAndPaseFechaAndTipoCambio(
                 eq(SUCURSAL), eq(HOY), any())).thenReturn(List.of());

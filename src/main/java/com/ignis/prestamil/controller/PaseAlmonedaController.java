@@ -4,6 +4,7 @@ import com.ignis.prestamil.exception.ResourceNotFoundException;
 import com.ignis.prestamil.model.Sucursal;
 import com.ignis.prestamil.response.ResultadosPaseAlmonedaResponse;
 import com.ignis.prestamil.service.PaseAlmonedaReporteService;
+import com.ignis.prestamil.service.PaseAlmonedaService;
 import com.ignis.prestamil.service.SucursalService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -19,13 +20,15 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.LocalDate;
 
 /**
- * Pantalla "Resultados del pase de almoneda" (C-11). Solo lectura: la ejecucion del pase sigue
- * siendo automatica al abrir el primer turno (F11); aqui unicamente se consultan y exportan los
- * resultados.
+ * Pantalla "Resultados del pase de almoneda" (C-11). La ejecucion del pase es automatica
+ * ({@link PaseAlmonedaService#ejecutarPendientes()}); aqui se consultan y exportan los resultados.
  *
  * <p>OTR-01: solo los roles de {@code ROLES_PERMITIDOS_PASE_ALMONEDA_OTRA_FECHA} (Sistemas) pueden
  * pedir otra fecha. Para el resto, todas las rutas ignoran {@code fecha} y usan la de hoy del
  * servidor, tambien en las exportaciones.</p>
+ *
+ * <p>Consultar resultados pone al dia el pase antes de leerlo, por si ningun otro disparador
+ * (arranque, 00:05, abrir turno) ha corrido hoy.</p>
  */
 @RestController
 @RequestMapping("/api/pase-almoneda")
@@ -33,6 +36,7 @@ import java.time.LocalDate;
 public class PaseAlmonedaController {
 
     private final PaseAlmonedaReporteService reporteService;
+    private final PaseAlmonedaService paseAlmonedaService;
     private final SucursalService sucursalService;
 
     /** Resultados de un pase: cartera vencida + pase a venta. Si no corrio ese dia: listas vacias. */
@@ -40,6 +44,7 @@ public class PaseAlmonedaController {
     public ResponseEntity<ResultadosPaseAlmonedaResponse> resultados(
             @RequestParam(value = "fecha", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fecha,
             Authentication authentication) {
+        paseAlmonedaService.ejecutarPendientes();
         return ResponseEntity.ok(reporteService.obtener(sucursalId(), fecha, authentication.getName()));
     }
 

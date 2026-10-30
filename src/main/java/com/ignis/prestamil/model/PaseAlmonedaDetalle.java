@@ -4,6 +4,9 @@ import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
+
 /**
  * Fila de detalle de un pase de almoneda (C-11). Una por contrato que paso a VENCIDO y una por
  * cada partida que paso a EN_VENTA. La pantalla "Resultados del pase de almoneda" lo consume para
@@ -36,4 +39,12 @@ public class PaseAlmonedaDetalle {
     @Enumerated(EnumType.STRING)
     @Column(name = "tipo_cambio", nullable = false, length = 10)
     private TipoCambioPase tipoCambio;
+
+    /** Vencimiento del contrato el dia del pase (changeset 076); "Cartera vencida" muestra este. */
+    @Column(name = "fecha_vencimiento")
+    private LocalDate fechaVencimiento;
+
+    /** Saldo capital del contrato el dia del pase (changeset 076). */
+    @Column(name = "saldo_capital", precision = 18, scale = 2)
+    private BigDecimal saldoCapital;
 }

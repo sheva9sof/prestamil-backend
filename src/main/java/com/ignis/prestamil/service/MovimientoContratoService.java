@@ -528,6 +528,12 @@ public class MovimientoContratoService {
         if (mov.getTipo() == TipoMovimiento.RE) {
             throw new BadRequestException("Las reposiciones de contrato no se pueden cancelar");
         }
+        // El PV lo registra el pase de almoneda diario. Cancelarlo regresaba el contrato a
+        // VIGENTE/VENCIDO pero dejaba su fila en "Pase a venta", y el pase del dia siguiente lo
+        // volvia a pasar a venta en otra fecha.
+        if (mov.getTipo() == TipoMovimiento.PV) {
+            throw new BadRequestException("El pase a venta es automático y no se puede cancelar");
+        }
 
         validarRolPuedeCancelar(usuario);
         validarMotivo(request.getMotivo());

@@ -327,8 +327,11 @@ public class PaseAlmonedaReporteService {
                 .cliente(nombreCompleto(cliente))
                 .direccion(direccionTexto(cliente != null ? cliente.getDireccion() : null))
                 .telefono(cliente != null ? cliente.getTelefono() : null)
-                .fechaVencimiento(c.getFechaVencimiento())
-                .saldoCapital(c.getSaldoCapital())
+                // Valores del dia del pase (changeset 076); los del contrato solo si la fila no los trae
+                .fechaVencimiento(detalle.getFechaVencimiento() != null
+                        ? detalle.getFechaVencimiento() : c.getFechaVencimiento())
+                .saldoCapital(detalle.getSaldoCapital() != null
+                        ? detalle.getSaldoCapital() : c.getSaldoCapital())
                 .build();
     }
 

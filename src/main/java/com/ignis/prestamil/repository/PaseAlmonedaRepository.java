@@ -4,6 +4,7 @@ import com.ignis.prestamil.model.PaseAlmoneda;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
+import java.util.Optional;
 
 @Repository
 public interface PaseAlmonedaRepository extends BaseRepository<PaseAlmoneda, Long> {
@@ -17,4 +18,13 @@ public interface PaseAlmonedaRepository extends BaseRepository<PaseAlmoneda, Lon
      * @return true si existe el registro
      */
     boolean existsBySucursalIdAndFecha(Integer sucursalId, LocalDate fecha);
+
+    /**
+     * Ultimo pase corrido en la sucursal; de ahi arranca la puesta al dia de
+     * {@code PaseAlmonedaService.ejecutarPendientes}.
+     *
+     * @param sucursalId sucursal evaluada
+     * @return el pase con la fecha mas reciente, si existe
+     */
+    Optional<PaseAlmoneda> findFirstBySucursalIdOrderByFechaDesc(Integer sucursalId);
 }

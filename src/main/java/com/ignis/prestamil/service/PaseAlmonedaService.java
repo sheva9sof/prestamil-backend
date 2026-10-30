@@ -3,26 +3,33 @@ package com.ignis.prestamil.service;
 import com.ignis.prestamil.model.Contrato;
 import com.ignis.prestamil.model.EstatusContrato;
 import com.ignis.prestamil.model.EstatusOperativo;
+import com.ignis.prestamil.model.EstatusPartida;
 import com.ignis.prestamil.model.MovimientoContrato;
 import com.ignis.prestamil.model.PartidaContrato;
 import com.ignis.prestamil.model.PaseAlmoneda;
 import com.ignis.prestamil.model.PaseAlmonedaDetalle;
 import com.ignis.prestamil.model.PlazoParametro;
+import com.ignis.prestamil.model.Sucursal;
 import com.ignis.prestamil.model.TipoCambioPase;
 import com.ignis.prestamil.model.TipoMovimiento;
-import com.ignis.prestamil.model.Turno;
 import com.ignis.prestamil.repository.ContratoRepository;
 import com.ignis.prestamil.repository.MovimientoContratoRepository;
 import com.ignis.prestamil.repository.PaseAlmonedaDetalleRepository;
 import com.ignis.prestamil.repository.PaseAlmonedaRepository;
 import com.ignis.prestamil.repository.PlazoParametroRepository;
+import com.ignis.prestamil.repository.SucursalRepository;
 import com.ignis.prestamil.service.calculo.EstatusContratoResolver;
 import com.ignis.prestamil.util.Constantes;
-import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.EnumSet;
@@ -30,20 +37,22 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Pase de almoneda diario (F11, RN-04 / RN-08). Al iniciar el primer turno del dia de la sucursal
- * se persisten los cambios de estatus que las fechas dictan:
+ * Pase de almoneda diario (F11, RN-04 / RN-08). Por cada dia de la sucursal se persisten los
+ * cambios de estatus que las fechas dictan:
  *
  * <ul>
  *   <li>VIGENTE con gracia vencida -> VENCIDO (sin movimiento; el cambio es de calendario).</li>
  *   <li>VENCIDO cuyo dia de comercializacion llego -> EN_VENTA con movimiento PV (RN-08).</li>
  * </ul>
  *
- * <p>Es idempotente: la clave unica {@code (id_sucursal, fecha)} en {@code pase_almoneda} impide
- * una segunda corrida el mismo dia. No expone endpoints y siempre opera sobre la fecha del
- * servidor; no se puede pedir el pase de otra fecha (Jorge, F11).</p>
+ * <p>No depende de que alguien abra turno: {@link #ejecutarPendientes()} corre al arrancar, a las
+ * 00:05, al abrir turno y al consultar resultados, y se pone al dia un dia a la vez desde el ultimo
+ * pase, cada uno con su fecha. Asi un contrato atrasado pasa por "cartera vencida" en su dia antes
+ * de "pase a venta". Cada dia es idempotente: la clave unica {@code (id_sucursal, fecha)} y el
+ * bloqueo de la sucursal impiden correrlo dos veces, aunque dos llamadas lleguen a la vez.</p>
  */
+@Slf4j
 @Service
-@RequiredArgsConstructor
 public class PaseAlmonedaService {
 
     private static final Set<EstatusContrato> ESTATUS_CANDIDATOS =
@@ -54,25 +63,100 @@ public class PaseAlmonedaService {
     private final PaseAlmonedaRepository paseAlmonedaRepository;
     private final PaseAlmonedaDetalleRepository paseAlmonedaDetalleRepository;
     private final PlazoParametroRepository plazoParametroRepository;
+    private final SucursalRepository sucursalRepository;
+    private final SucursalService sucursalService;
+    private final Clock clock;
+    // Un dia = una transaccion propia (REQUIRES_NEW): si un dia falla, los anteriores quedan
+    // guardados, y abrir turno no se cae por un error del pase.
+    private final TransactionTemplate transaccionPorDia;
+
+    public PaseAlmonedaService(ContratoRepository contratoRepository,
+                               MovimientoContratoRepository movimientoContratoRepository,
+                               PaseAlmonedaRepository paseAlmonedaRepository,
+                               PaseAlmonedaDetalleRepository paseAlmonedaDetalleRepository,
+                               PlazoParametroRepository plazoParametroRepository,
+                               SucursalRepository sucursalRepository,
+                               SucursalService sucursalService,
+                               Clock clock,
+                               PlatformTransactionManager transactionManager) {
+        this.contratoRepository = contratoRepository;
+        this.movimientoContratoRepository = movimientoContratoRepository;
+        this.paseAlmonedaRepository = paseAlmonedaRepository;
+        this.paseAlmonedaDetalleRepository = paseAlmonedaDetalleRepository;
+        this.plazoParametroRepository = plazoParametroRepository;
+        this.sucursalRepository = sucursalRepository;
+        this.sucursalService = sucursalService;
+        this.clock = clock;
+        this.transaccionPorDia = new TransactionTemplate(transactionManager);
+        this.transaccionPorDia.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    }
 
     /**
-     * Ejecuta el pase de almoneda del dia para la sucursal. Si ya corrio hoy no hace nada.
+     * Pone al dia el pase de almoneda de la sucursal configurada. No lanza excepcion: un error se
+     * registra en el log y se reintenta en la siguiente llamada (arranque, 00:05, turno o consulta).
      *
-     * @param sucursalId sucursal donde se dispara (de {@code SucursalService.findUnique()})
-     * @param turno      turno que origina la ejecucion (el que se acaba de abrir)
+     * @return dias que se corrieron en esta llamada (0 si ya estaba al dia o no hay sucursal)
      */
-    @Transactional
-    public void ejecutar(Integer sucursalId, Turno turno) {
-        LocalDate hoy = LocalDate.now();
-        if (paseAlmonedaRepository.existsBySucursalIdAndFecha(sucursalId, hoy)) {
-            return;
+    public int ejecutarPendientes() {
+        return sucursalService.findUnique()
+                .map(Sucursal::getId)
+                .map(this::ejecutarPendientes)
+                .orElse(0);
+    }
+
+    /**
+     * Corre un pase por cada dia desde el siguiente al ultimo pase de la sucursal hasta hoy, en
+     * orden y cada uno con su propia fecha. Si la sucursal nunca ha corrido un pase, solo corre el
+     * de hoy. Se detiene en el primer dia que falle para no saltarse dias.
+     *
+     * @param sucursalId sucursal a poner al dia
+     * @return dias que se corrieron en esta llamada
+     */
+    public int ejecutarPendientes(Integer sucursalId) {
+        LocalDate hoy = LocalDate.now(clock);
+        LocalDate desde = paseAlmonedaRepository.findFirstBySucursalIdOrderByFechaDesc(sucursalId)
+                .map(ultimo -> ultimo.getFecha().plusDays(1))
+                .orElse(hoy);
+        int corridos = 0;
+        for (LocalDate dia = desde; !dia.isAfter(hoy); dia = dia.plusDays(1)) {
+            LocalDate fecha = dia;
+            try {
+                if (Boolean.TRUE.equals(transaccionPorDia.execute(estado -> ejecutar(sucursalId, fecha)))) {
+                    corridos++;
+                }
+            } catch (RuntimeException e) {
+                log.error("Pase de almoneda de la sucursal {} del {} fallo; se reintenta en la siguiente llamada",
+                        sucursalId, fecha, e);
+                break;
+            }
+        }
+        if (corridos > 1) {
+            log.info("Pase de almoneda de la sucursal {} puesto al dia: {} dias hasta {}", sucursalId, corridos, hoy);
+        }
+        return corridos;
+    }
+
+    /**
+     * Ejecuta el pase de almoneda de un dia para la sucursal. Si ese dia ya corrio no hace nada.
+     * Debe correr dentro de una transaccion: bloquea la fila de la sucursal hasta el commit para que
+     * una segunda ejecucion simultanea espere y luego vea el dia ya registrado.
+     *
+     * @param sucursalId sucursal donde se corre
+     * @param fecha      dia del pase; el estatus de cada contrato se calcula contra esta fecha
+     * @return {@code true} si corrio, {@code false} si ese dia ya tenia pase
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public boolean ejecutar(Integer sucursalId, LocalDate fecha) {
+        sucursalRepository.findWithLockById(sucursalId);
+        if (paseAlmonedaRepository.existsBySucursalIdAndFecha(sucursalId, fecha)) {
+            return false;
         }
 
         // Crea primero la bitacora para poder referenciarla en pase_almoneda_detalle (C-11).
         PaseAlmoneda bitacora = new PaseAlmoneda();
         bitacora.setSucursalId(sucursalId);
-        bitacora.setFecha(hoy);
-        bitacora.setEjecutadoEn(LocalDateTime.now());
+        bitacora.setFecha(fecha);
+        bitacora.setEjecutadoEn(LocalDateTime.now(clock));
         bitacora.setContratosAVencido(0);
         bitacora.setContratosAVenta(0);
         bitacora.setMontoPasadoAVenta(BigDecimal.ZERO);
@@ -94,7 +178,7 @@ public class PaseAlmonedaService {
             if (!ESTATUS_CANDIDATOS.contains(contrato.getEstatus())) {
                 continue;
             }
-            EstatusOperativo deseado = estatusDerivadoPorFecha(contrato, hoy);
+            EstatusOperativo deseado = estatusDerivadoPorFecha(contrato, fecha);
             EstatusContrato origen = contrato.getEstatus();
             if (origen == EstatusContrato.VIGENTE && deseado == EstatusOperativo.VENCIDO) {
                 contrato.setEstatus(EstatusContrato.VENCIDO);
@@ -103,10 +187,15 @@ public class PaseAlmonedaService {
                 aVencido++;
             } else if (deseado == EstatusOperativo.EN_VENTA
                     && (origen == EstatusContrato.VIGENTE || origen == EstatusContrato.VENCIDO)) {
-                // Si un contrato VIGENTE llega tarde al pase (gracia + comercializacion ya pasados),
-                // tambien aterriza en EN_VENTA en una sola corrida: lo pide la nota de F11
-                // ("la siguiente ejecucion evalua todo contra la fecha actual").
-                registrarMovimientoPaseAVenta(contrato, turno, origen);
+                // Con la puesta al dia diaria un VIGENTE no deberia llegar aqui: pasa antes por
+                // VENCIDO en su dia. Si llega (primer pase de la sucursal, o una cancelacion que
+                // regreso fechas viejas), se registra tambien en cartera vencida para que no se
+                // brinque la lista de cobranza.
+                if (origen == EstatusContrato.VIGENTE) {
+                    registrarDetalleVencido(bitacora, contrato);
+                    aVencido++;
+                }
+                registrarMovimientoPaseAVenta(contrato, fecha, origen);
                 contrato.setEstatus(EstatusContrato.EN_VENTA);
                 contratoRepository.save(contrato);
                 registrarDetalleEnVenta(bitacora, contrato);
@@ -119,58 +208,62 @@ public class PaseAlmonedaService {
         bitacora.setContratosAVenta(aVenta);
         bitacora.setMontoPasadoAVenta(montoPasadoAVenta);
         paseAlmonedaRepository.save(bitacora);
+        return true;
     }
 
     /**
-     * Fila de "Cartera vencida" (C-11): a nivel contrato, sin partida. TODO G-08: Jorge dijo que el
-     * contrato entra en cartera vencida el dia siguiente al vencimiento ("en su dia 29"), aunque
-     * siga en gracia; hoy la transicion se dispara al rebasar la gracia (F11). Si se decide
-     * adoptar el criterio de Jorge, aqui tambien hay que insertar una fila cuando
-     * {@code hoy = vencimiento + 1} aunque el contrato siga en gracia.
+     * Fila de "Cartera vencida" (C-11): a nivel contrato, sin partida, con el vencimiento y el saldo
+     * de ese dia. TODO G-08: Jorge dijo que el contrato entra en cartera vencida el dia siguiente al
+     * vencimiento ("en su dia 29"), aunque siga en gracia; hoy la transicion se dispara al rebasar la
+     * gracia (F11). Si se decide adoptar el criterio de Jorge, aqui tambien hay que insertar una fila
+     * cuando {@code fecha = vencimiento + 1} aunque el contrato siga en gracia.
      */
     private void registrarDetalleVencido(PaseAlmoneda bitacora, Contrato contrato) {
-        PaseAlmonedaDetalle detalle = new PaseAlmonedaDetalle();
-        detalle.setPase(bitacora);
-        detalle.setContrato(contrato);
-        detalle.setTipoCambio(TipoCambioPase.VENCIDO);
-        paseAlmonedaDetalleRepository.save(detalle);
+        paseAlmonedaDetalleRepository.save(detalle(bitacora, contrato, null, TipoCambioPase.VENCIDO));
     }
 
     /**
-     * Filas de "Pase a venta" (C-11): una por cada partida del contrato (el gerente las saca de
-     * boveda). Si por algun motivo no hay partidas cargadas en la coleccion, se registra una fila
-     * sin partida para no perder trazabilidad del cambio de estatus.
+     * Filas de "Pase a venta" (C-11): una por cada partida en operacion (OP) del contrato, que son
+     * las que siguen en boveda y el gerente debe sacar. Si el contrato no trae partidas cargadas se
+     * registra una fila sin partida para no perder trazabilidad del cambio de estatus.
      */
     private void registrarDetalleEnVenta(PaseAlmoneda bitacora, Contrato contrato) {
         if (contrato.getPartidas() == null || contrato.getPartidas().isEmpty()) {
-            PaseAlmonedaDetalle detalle = new PaseAlmonedaDetalle();
-            detalle.setPase(bitacora);
-            detalle.setContrato(contrato);
-            detalle.setTipoCambio(TipoCambioPase.EN_VENTA);
-            paseAlmonedaDetalleRepository.save(detalle);
+            paseAlmonedaDetalleRepository.save(detalle(bitacora, contrato, null, TipoCambioPase.EN_VENTA));
             return;
         }
         for (PartidaContrato partida : contrato.getPartidas()) {
-            PaseAlmonedaDetalle detalle = new PaseAlmonedaDetalle();
-            detalle.setPase(bitacora);
-            detalle.setContrato(contrato);
-            detalle.setPartida(partida);
-            detalle.setTipoCambio(TipoCambioPase.EN_VENTA);
-            paseAlmonedaDetalleRepository.save(detalle);
+            if (partida.getEstatus() == EstatusPartida.OP) {
+                paseAlmonedaDetalleRepository.save(detalle(bitacora, contrato, partida, TipoCambioPase.EN_VENTA));
+            }
         }
+    }
+
+    /** Fila de detalle con el vencimiento y el saldo del contrato el dia del pase (changeset 076). */
+    private PaseAlmonedaDetalle detalle(PaseAlmoneda bitacora, Contrato contrato, PartidaContrato partida,
+                                        TipoCambioPase tipo) {
+        PaseAlmonedaDetalle detalle = new PaseAlmonedaDetalle();
+        detalle.setPase(bitacora);
+        detalle.setContrato(contrato);
+        detalle.setPartida(partida);
+        detalle.setTipoCambio(tipo);
+        detalle.setFechaVencimiento(contrato.getFechaVencimiento());
+        detalle.setSaldoCapital(contrato.getSaldoCapital());
+        return detalle;
     }
 
     /**
      * Estatus operativo que las fechas (vencimiento + gracia + comercializacion) dictan para el
-     * contrato. Delega en {@link EstatusContratoResolver#estatusPorFechas} para no duplicar reglas.
+     * contrato en el dia del pase. Delega en {@link EstatusContratoResolver#estatusPorFechas} para no
+     * duplicar reglas.
      */
-    private EstatusOperativo estatusDerivadoPorFecha(Contrato contrato, LocalDate hoy) {
+    private EstatusOperativo estatusDerivadoPorFecha(Contrato contrato, LocalDate fecha) {
         int diasGracia = resolverDiasGracia(contrato);
         LocalDate comercializacion = contrato.getFechaComercializacion() != null
                 ? contrato.getFechaComercializacion()
                 : contrato.getFechaVencimiento().plusDays(Constantes.DIAS_VENCIMIENTO_A_COMERCIALIZACION);
         return EstatusContratoResolver.estatusPorFechas(
-                contrato.getFechaVencimiento(), comercializacion, diasGracia, hoy);
+                contrato.getFechaVencimiento(), comercializacion, diasGracia, fecha);
     }
 
     /**
@@ -205,14 +298,13 @@ public class PaseAlmonedaService {
 
     /**
      * Movimiento PV (pase a venta, RN-25/RN-20). Importe en cero: solo documenta el cambio de
-     * estatus y las fechas de antes/despues. El estado nuevo se registra con EN_VENTA porque es
-     * el que queda tras este movimiento.
+     * estatus y las fechas de antes/despues. Es automatico: no lleva turno ni usuario (changeset
+     * 078) y no se puede cancelar. Su fecha es la del dia del pase; si es el pase de hoy, la hora
+     * real de la ejecucion.
      */
-    private void registrarMovimientoPaseAVenta(Contrato contrato, Turno turno, EstatusContrato origen) {
+    private void registrarMovimientoPaseAVenta(Contrato contrato, LocalDate fecha, EstatusContrato origen) {
         MovimientoContrato mov = new MovimientoContrato();
         mov.setContrato(contrato);
-        mov.setTurno(turno);
-        mov.setUsuario(turno.getUsuario());
         mov.setTipo(TipoMovimiento.PV);
         mov.setMonto(BigDecimal.ZERO);
         mov.setInteres(BigDecimal.ZERO);
@@ -224,7 +316,8 @@ public class PaseAlmonedaService {
         mov.setImporteDescuento(BigDecimal.ZERO);
         mov.setIva(BigDecimal.ZERO);
         mov.setCancelado(false);
-        mov.setFecha(LocalDateTime.now());
+        LocalDateTime ahora = LocalDateTime.now(clock);
+        mov.setFecha(fecha.equals(ahora.toLocalDate()) ? ahora : fecha.atStartOfDay());
 
         mov.setSaldoAnterior(contrato.getSaldoCapital());
         mov.setFechaContratoAnterior(contrato.getFechaContrato());

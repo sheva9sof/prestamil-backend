@@ -167,6 +167,9 @@
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
 				<configuration>
+					<!-- mvn spring-boot:run: zona de operacion de las sucursales, aunque el servidor este en UTC.
+					     Cubre los LocalDate.now()/LocalDateTime.now() que no usan el Clock de ClockConfig. -->
+					<jvmArguments>-Duser.timezone=America/Mexico_City</jvmArguments>
 					<excludes>
 						<exclude>
 							<groupId>org.projectlombok</groupId>
