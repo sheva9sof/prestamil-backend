@@ -6,6 +6,7 @@ import lombok.Setter;
 
 /**
  * Último folio de nota (ticket) emitido por sucursal (RN-25). Es distinto del número de contrato.
+ * <p>Pendiente de migrar a {@link FolioSecuencia} / {@code FolioService} (CAJ-01a); por ahora conserva su tabla.
  */
 @Entity
 @Table(name = "folio_nota")
