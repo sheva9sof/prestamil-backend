@@ -3,7 +3,6 @@ package com.ignis.prestamil.service;
 import com.ignis.prestamil.exception.ResourceNotFoundException;
 import com.ignis.prestamil.exception.ValidationException;
 import com.ignis.prestamil.mapper.TurnoMapper;
-import com.ignis.prestamil.model.Sucursal;
 import com.ignis.prestamil.model.Turno;
 import com.ignis.prestamil.model.Usuario;
 import com.ignis.prestamil.repository.TurnoRepository;
@@ -40,9 +39,6 @@ class TurnoServiceTest {
 
     @Mock
     TurnoMapper turnoMapper;
-
-    @Mock
-    SucursalService sucursalService;
 
     @Mock
     PaseAlmonedaService paseAlmonedaService;
@@ -100,7 +96,6 @@ class TurnoServiceTest {
         savedTurno.setFechaInicio(LocalDateTime.now());
         savedTurno.setActivo(true);
         when(turnoRepository.save(any(Turno.class))).thenReturn(savedTurno);
-        when(sucursalService.findUnique()).thenReturn(Optional.empty());
         TurnoResponse expectedResponse = new TurnoResponse();
         expectedResponse.setId(1);
         when(turnoMapper.toTurnoResponse(savedTurno)).thenReturn(expectedResponse);
@@ -121,8 +116,8 @@ class TurnoServiceTest {
     }
 
     @Test
-    void iniciarTurno_dispatchesPaseAlmoneda_whenSucursalExists() {
-        // Given — se abre el turno; el pase de almoneda se debe disparar automaticamente (F11)
+    void iniciarTurno_poneAlDiaElPaseAlmoneda() {
+        // Given — abrir turno es uno de los disparadores del pase de almoneda (F11)
         mockSecurityContext("admin");
         when(usuarioRepository.findByNombreUsuario("admin")).thenReturn(Optional.of(usuarioAdmin));
         when(turnoRepository.findByActivo(true)).thenReturn(Optional.empty());
@@ -132,16 +127,13 @@ class TurnoServiceTest {
         savedTurno.setFechaInicio(LocalDateTime.now());
         savedTurno.setActivo(true);
         when(turnoRepository.save(any(Turno.class))).thenReturn(savedTurno);
-        Sucursal sucursal = new Sucursal();
-        sucursal.setId(1);
-        when(sucursalService.findUnique()).thenReturn(Optional.of(sucursal));
         when(turnoMapper.toTurnoResponse(savedTurno)).thenReturn(new TurnoResponse());
 
         // When
         turnoService.iniciarTurno();
 
         // Then
-        verify(paseAlmonedaService).ejecutar(1, savedTurno);
+        verify(paseAlmonedaService).ejecutarPendientes();
     }
 
     @Test

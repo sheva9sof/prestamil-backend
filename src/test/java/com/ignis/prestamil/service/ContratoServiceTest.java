@@ -297,15 +297,17 @@ class ContratoServiceTest {
 
         contratoService.crearContrato(request, "cajero1");
 
-        org.mockito.ArgumentCaptor<BigDecimal> monto = org.mockito.ArgumentCaptor.forClass(BigDecimal.class);
-        org.mockito.ArgumentCaptor<String> concepto = org.mockito.ArgumentCaptor.forClass(String.class);
-        verify(movimientoCajaService).registrar(any(Turno.class),
-                org.mockito.ArgumentMatchers.eq(1),
-                org.mockito.ArgumentMatchers.eq(com.ignis.prestamil.model.TipoMovimientoCaja.SALIDA),
-                concepto.capture(), monto.capture(),
-                any(Usuario.class), any(MovimientoContrato.class));
-        assertThat(monto.getValue()).isEqualByComparingTo("50.00");
-        assertThat(concepto.getValue()).contains("PRÉSTAMO CONTRATO CTR-");
+        org.mockito.ArgumentCaptor<RegistroCaja> registro = org.mockito.ArgumentCaptor.forClass(RegistroCaja.class);
+        verify(movimientoCajaService).registrar(registro.capture());
+        RegistroCaja caja = registro.getValue();
+        assertThat(caja.concepto()).isEqualTo(com.ignis.prestamil.model.ConceptoCaja.EMPENO);
+        assertThat(caja.concepto().tipo()).isEqualTo(com.ignis.prestamil.model.TipoMovimientoCaja.SALIDA);
+        assertThat(caja.sucursalId()).isEqualTo(1);
+        // El préstamo sale completo en efectivo
+        assertThat(caja.importeEfectivo()).isEqualByComparingTo("50.00");
+        assertThat(caja.importeTarjeta()).isEqualByComparingTo("0");
+        assertThat(caja.origenTipo()).isEqualTo(com.ignis.prestamil.model.OrigenCaja.MOVIMIENTO_CONTRATO);
+        assertThat(caja.descripcion()).contains("PRÉSTAMO CONTRATO CTR-");
     }
 
     @Test

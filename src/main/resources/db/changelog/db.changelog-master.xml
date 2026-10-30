@@ -49,5 +49,15 @@
     <include file="db/changelog/changes/042-catalogo-prendas-clave-repetible-contiene-piedra.sql"/>
     <include file="db/changelog/changes/043-bolsa-codigo-barras.sql"/>
     <include file="db/changelog/changes/044-backfill-emp-snapshot-pre-contrato.sql"/>
+    <include file="db/changelog/changes/070-folio-secuencia.sql"/>
+    <include file="db/changelog/changes/071-movimiento-caja-concepto-importes.sql"/>
+    <include file="db/changelog/changes/072-backfill-movimiento-caja-concepto.sql"/>
+    <include file="db/changelog/changes/073-caja-denominacion-traspaso.sql"/>
+    <include file="db/changelog/changes/074-semilla-caja-denominacion.sql"/>
+    <include file="db/changelog/changes/075-roles-permitidos-pase-almoneda-otra-fecha.sql"/>
+    <include file="db/changelog/changes/076-pase-almoneda-detalle-snapshot.sql"/>
+    <include file="db/changelog/changes/077-backfill-pase-almoneda-detalle-snapshot.sql"/>
+    <include file="db/changelog/changes/078-movimiento-pv-sin-turno.sql"/>
+    <include file="db/changelog/changes/079-roles-permitidos-traspasos-caja.sql"/>
 
 </databaseChangeLog>

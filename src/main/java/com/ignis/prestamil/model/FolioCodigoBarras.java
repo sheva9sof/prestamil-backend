@@ -7,6 +7,8 @@ import lombok.Setter;
 /**
  * Último código de barras de partida emitido (D-10). Una sola fila ({@link #ID_UNICO}): el contador es
  * global para que el código no se repita entre sucursales.
+ * <p>Pendiente de migrar a {@code FolioService} (CAJ-01a); al ser global necesitaría una sucursal
+ * convencional en {@link FolioSecuencia}, por eso conserva su tabla.
  */
 @Entity
 @Table(name = "folio_codigo_barras")

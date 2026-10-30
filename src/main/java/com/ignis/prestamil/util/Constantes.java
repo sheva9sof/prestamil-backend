@@ -40,6 +40,19 @@ public class Constantes {
     // Roles que pueden dar de alta, editar y borrar el catálogo de prendas (D-09, Q6).
     // CSV de ids de rol; por defecto solo Sistemas (1). Las sucursales solo consultan → 403.
     public static final String ROLES_PERMITIDOS_CATALOGO_PRENDAS = "ROLES_PERMITIDOS_CATALOGO_PRENDAS";
+    // Roles que pueden consultar el pase de almoneda de otra fecha (OTR-01, Jorge 01:17:16).
+    // CSV de ids de rol; por defecto solo Sistemas (1). El resto ve siempre el pase de hoy.
+    public static final String ROLES_PERMITIDOS_PASE_ALMONEDA_OTRA_FECHA = "ROLES_PERMITIDOS_PASE_ALMONEDA_OTRA_FECHA";
+    // Roles que pueden registrar cada traspaso entre cajas (CAJ-02, RC-02, Q-06). CSV de ids de rol;
+    // por defecto ministración y concentración Gerente (5) y Sistemas (1); dotación y recolección
+    // también el Cajero (3). Cualquier otro rol → 403.
+    public static final String ROLES_PERMITIDOS_MINISTRACION = "ROLES_PERMITIDOS_MINISTRACION";
+    public static final String ROLES_PERMITIDOS_CONCENTRACION = "ROLES_PERMITIDOS_CONCENTRACION";
+    public static final String ROLES_PERMITIDOS_DOTACION = "ROLES_PERMITIDOS_DOTACION";
+    public static final String ROLES_PERMITIDOS_RECOLECCION = "ROLES_PERMITIDOS_RECOLECCION";
+    // Roles que pueden cancelar un traspaso entre cajas (CAJ-02). Por defecto solo Sistemas (1) hasta
+    // que exista la autorización con credenciales (A-05).
+    public static final String ROLES_PERMITIDOS_CANCELAR_TRASPASO = "ROLES_PERMITIDOS_CANCELAR_TRASPASO";
     public static final String NOMBRE_MENU_TURNO = "Turnos";
 
     // Contratos

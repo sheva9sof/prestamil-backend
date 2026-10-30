@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Ticket de traspaso entre cajas (CAJ-03, RC-04): ~80 mm (227 pt), una sola página que crece con el
+     contenido, igual que ticket-movimiento.jrxml. El detalle es la tabla Cantidad/Denominación/Importe con
+     todas las denominaciones del catálogo, aunque estén en 0. Los textos llegan ya armados desde
+     TicketTraspasoCajaService. -->
+<jasperReport xmlns="http://jasperreports.sourceforge.net/jasperreports" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://jasperreports.sourceforge.net/jasperreports http://jasperreports.sourceforge.net/xsd/jasperreport.xsd" name="ticket-traspaso-caja" pageWidth="227" pageHeight="842" whenNoDataType="AllSectionsNoDetail" columnWidth="211" leftMargin="8" rightMargin="8" topMargin="8" bottomMargin="8" isIgnorePagination="true">
+	<property name="net.sf.jasperreports.awt.ignore.missing.font" value="true"/>
+	<style name="Base" isDefault="true" fontName="Arial" fontSize="7"/>
+	<subDataset name="Lineas">
+		<field name="etiqueta" class="java.lang.String"/>
+		<field name="valor" class="java.lang.String"/>
+	</subDataset>
+	<parameter name="P_FECHA_IMPRESION" class="java.lang.String"/>
+	<parameter name="P_EMPRESA" class="java.lang.String"/>
+	<parameter name="P_EMPRESA_DATOS" class="java.lang.String"/>
+	<parameter name="P_SUCURSAL" class="java.lang.String"/>
+	<!-- "DOTACIÓN: 4355" -->
+	<parameter name="P_TITULO" class="java.lang.String"/>
+	<parameter name="P_CANCELADO" class="java.lang.Boolean"/>
+	<!-- Fecha, usuario y motivo de la cancelación; null si el traspaso está activo -->
+	<parameter name="P_CANCELACION" class="java.lang.String" isForPrompting="false"/>
+	<!-- Fecha de operación, cajas, usuario, puesto y referencia bancaria (si existe) -->
+	<parameter name="P_DATOS" class="net.sf.jasperreports.engine.JRDataSource"/>
+	<parameter name="P_TOTAL" class="java.lang.String"/>
+	<parameter name="P_CAJA_ORIGEN" class="java.lang.String"/>
+	<parameter name="P_CAJA_DESTINO" class="java.lang.String"/>
+	<field name="cantidad" class="java.lang.String"/>
+	<field name="denominacion" class="java.lang.String"/>
+	<field name="importe" class="java.lang.String"/>
+	<title>
+		<band height="121" splitType="Stretch">
+			<textField>
+				<reportElement x="0" y="0" width="211" height="9"/>
+				<textElement textAlignment="Right"><font size="6.5"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_FECHA_IMPRESION}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight">
+				<reportElement x="0" y="10" width="211" height="13"/>
+				<textElement textAlignment="Center"><font size="11" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_EMPRESA}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="0" y="23" width="211" height="9" isRemoveLineWhenBlank="true"/>
+				<textElement textAlignment="Center"><font size="6.5"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_EMPRESA_DATOS}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="0" y="33" width="211" height="9" isRemoveLineWhenBlank="true"/>
+				<textElement textAlignment="Center"><font size="6.5"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_SUCURSAL}]]></textFieldExpression>
+			</textField>
+			<line>
+				<reportElement positionType="Float" x="0" y="44" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<textField textAdjust="StretchHeight">
+				<reportElement positionType="Float" x="0" y="47" width="211" height="13"/>
+				<textElement textAlignment="Center"><font size="10" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_TITULO}]]></textFieldExpression>
+			</textField>
+			<staticText>
+				<reportElement positionType="Float" x="20" y="62" width="171" height="30" isRemoveLineWhenBlank="true">
+					<printWhenExpression><![CDATA[Boolean.TRUE.equals($P{P_CANCELADO})]]></printWhenExpression>
+				</reportElement>
+				<box><pen lineWidth="1.5"/></box>
+				<textElement textAlignment="Center" verticalAlignment="Middle"><font size="24" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[CANCELADO]]></text>
+			</staticText>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" x="0" y="93" width="211" height="9" isRemoveLineWhenBlank="true"/>
+				<textElement textAlignment="Center"><font size="6.5"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_CANCELACION}]]></textFieldExpression>
+			</textField>
+			<line>
+				<reportElement positionType="Float" x="0" y="104" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+			<componentElement>
+				<reportElement positionType="Float" x="0" y="107" width="211" height="10"/>
+				<jr:list xmlns:jr="http://jasperreports.sourceforge.net/jasperreports/components" xsi:schemaLocation="http://jasperreports.sourceforge.net/jasperreports/components http://jasperreports.sourceforge.net/xsd/components.xsd" printOrder="Vertical">
+					<datasetRun subDataset="Lineas">
+						<dataSourceExpression><![CDATA[$P{P_DATOS}]]></dataSourceExpression>
+					</datasetRun>
+					<jr:listContents height="10" width="211">
+						<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+							<reportElement x="0" y="0" width="80" height="10"/>
+							<textFieldExpression><![CDATA[$F{etiqueta}]]></textFieldExpression>
+						</textField>
+						<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+							<reportElement x="80" y="0" width="131" height="10"/>
+							<textElement textAlignment="Right"><font isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+							<textFieldExpression><![CDATA[$F{valor}]]></textFieldExpression>
+						</textField>
+					</jr:listContents>
+				</jr:list>
+			</componentElement>
+			<line>
+				<reportElement positionType="Float" x="0" y="119" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5" lineStyle="Dashed"/></graphicElement>
+			</line>
+		</band>
+	</title>
+	<columnHeader>
+		<band height="12" splitType="Stretch">
+			<staticText>
+				<reportElement x="0" y="0" width="45" height="10"/>
+				<textElement textAlignment="Center"><font isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[Cantidad]]></text>
+			</staticText>
+			<staticText>
+				<reportElement x="45" y="0" width="80" height="10"/>
+				<textElement textAlignment="Right"><font isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[Denominación]]></text>
+			</staticText>
+			<staticText>
+				<reportElement x="125" y="0" width="86" height="10"/>
+				<textElement textAlignment="Right"><font isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[Importe]]></text>
+			</staticText>
+			<line>
+				<reportElement x="0" y="10" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5"/></graphicElement>
+			</line>
+		</band>
+	</columnHeader>
+	<detail>
+		<band height="10" splitType="Stretch">
+			<textField>
+				<reportElement x="0" y="0" width="45" height="10"/>
+				<textElement textAlignment="Center"/>
+				<textFieldExpression><![CDATA[$F{cantidad}]]></textFieldExpression>
+			</textField>
+			<textField>
+				<reportElement x="45" y="0" width="80" height="10"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$F{denominacion}]]></textFieldExpression>
+			</textField>
+			<textField>
+				<reportElement x="125" y="0" width="86" height="10"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$F{importe}]]></textFieldExpression>
+			</textField>
+		</band>
+	</detail>
+	<summary>
+		<band height="80" splitType="Stretch">
+			<line>
+				<reportElement x="0" y="1" width="211" height="1"/>
+				<graphicElement><pen lineWidth="0.5"/></graphicElement>
+			</line>
+			<staticText>
+				<reportElement x="0" y="4" width="100" height="13"/>
+				<textElement><font size="10" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[TOTAL]]></text>
+			</staticText>
+			<textField>
+				<reportElement x="100" y="4" width="111" height="13"/>
+				<textElement textAlignment="Right"><font size="10" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_TOTAL}]]></textFieldExpression>
+			</textField>
+			<!-- Firmas: quien entrega el dinero (caja de origen) y quien lo recibe (caja de destino) -->
+			<line>
+				<reportElement x="5" y="52" width="95" height="1"/>
+				<graphicElement><pen lineWidth="0.5"/></graphicElement>
+			</line>
+			<line>
+				<reportElement x="111" y="52" width="95" height="1"/>
+				<graphicElement><pen lineWidth="0.5"/></graphicElement>
+			</line>
+			<staticText>
+				<reportElement x="0" y="54" width="105" height="10"/>
+				<textElement textAlignment="Center"><font isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[ENVÍA]]></text>
+			</staticText>
+			<staticText>
+				<reportElement x="106" y="54" width="105" height="10"/>
+				<textElement textAlignment="Center"><font isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<text><![CDATA[RECIBE]]></text>
+			</staticText>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement x="0" y="64" width="105" height="9"/>
+				<textElement textAlignment="Center"><font size="6.5"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_CAJA_ORIGEN}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement x="106" y="64" width="105" height="9"/>
+				<textElement textAlignment="Center"><font size="6.5"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_CAJA_DESTINO}]]></textFieldExpression>
+			</textField>
+		</band>
+	</summary>
+</jasperReport>

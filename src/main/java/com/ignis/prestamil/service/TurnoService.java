@@ -3,7 +3,6 @@ package com.ignis.prestamil.service;
 import com.ignis.prestamil.exception.ResourceNotFoundException;
 import com.ignis.prestamil.exception.ValidationException;
 import com.ignis.prestamil.mapper.TurnoMapper;
-import com.ignis.prestamil.model.Sucursal;
 import com.ignis.prestamil.model.Turno;
 import com.ignis.prestamil.model.Usuario;
 import com.ignis.prestamil.repository.TurnoRepository;
@@ -23,7 +22,6 @@ public class TurnoService {
     private final TurnoRepository turnoRepository;
     private final UsuarioRepository usuarioRepository;
     private final TurnoMapper turnoMapper;
-    private final SucursalService sucursalService;
     private final PaseAlmonedaService paseAlmonedaService;
 
     @Transactional
@@ -47,12 +45,10 @@ public class TurnoService {
 
         Turno turnoGuardado = turnoRepository.save(nuevoTurno);
 
-        // 4. Pase de almoneda diario (F11): se dispara automaticamente al abrir el primer turno
-        // del dia de la sucursal. Idempotente por (sucursal, fecha), asi que los turnos
-        // subsecuentes del mismo dia no vuelven a tocar los contratos. Corre en la misma
-        // transaccion para que el movimiento PV pueda referenciar el turno recien creado.
-        sucursalService.findUnique().map(Sucursal::getId).ifPresent(sucursalId ->
-                paseAlmonedaService.ejecutar(sucursalId, turnoGuardado));
+        // 4. Pase de almoneda (F11): pone al dia los dias que falten hasta hoy. Idempotente por
+        // (sucursal, fecha) y en transacciones propias, asi que no toca el turno ni lo hace
+        // fallar; tambien corre al arrancar, a las 00:05 y al consultar resultados.
+        paseAlmonedaService.ejecutarPendientes();
 
         return turnoMapper.toTurnoResponse(turnoGuardado);
     }

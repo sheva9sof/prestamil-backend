@@ -176,17 +176,16 @@ public class MovimientoContratoService {
         movimientoRepository.save(mov);
         contratoRepository.save(contrato);
 
-        // C-07: cada cobro deja huella en caja — base del corte de caja. El concepto marca la parte
-        // con tarjeta cuando aplica para que el corte distinga ingreso de efectivo real vs tarjeta.
+        // C-07/CAJ-01b: cada cobro deja huella en caja con el efectivo (neto del cambio) y la tarjeta
+        // por separado; el corte solo arquea el efectivo (RC-06).
         if (mov.getMonto() != null && mov.getMonto().signum() > 0) {
-            movimientoCajaService.registrar(
+            movimientoCajaService.registrar(RegistroCaja.deMovimientoContrato(
+                    mov,
+                    ConceptoCaja.deMovimiento(mov.getTipo()),
                     turno,
                     contrato.getSucursalId(),
-                    TipoMovimientoCaja.ENTRADA,
-                    conceptoCobro(mov, contrato),
-                    mov.getMonto(),
                     usuario,
-                    mov);
+                    conceptoCobro(mov, contrato)));
         }
 
         log.info("Movimiento {} contrato={} folioNota={} periodos={}+{} interes={} sancion={} iva={} total={}",
@@ -336,14 +335,13 @@ public class MovimientoContratoService {
 
         // C-07: la reposición cobrada entra a caja. La exenta ($0) no mueve caja.
         if (mov.getMonto() != null && mov.getMonto().signum() > 0) {
-            movimientoCajaService.registrar(
+            movimientoCajaService.registrar(RegistroCaja.deMovimientoContrato(
+                    mov,
+                    ConceptoCaja.deMovimiento(mov.getTipo()),
                     turno,
                     contrato.getSucursalId(),
-                    TipoMovimientoCaja.ENTRADA,
-                    conceptoCobro(mov, contrato),
-                    mov.getMonto(),
                     usuario,
-                    mov);
+                    conceptoCobro(mov, contrato)));
         }
 
         log.info("Reposición contrato={} folioNota={} total={} iva={} exenta={} usuario={}",
@@ -528,6 +526,12 @@ public class MovimientoContratoService {
         if (mov.getTipo() == TipoMovimiento.RE) {
             throw new BadRequestException("Las reposiciones de contrato no se pueden cancelar");
         }
+        // El PV lo registra el pase de almoneda diario. Cancelarlo regresaba el contrato a
+        // VIGENTE/VENCIDO pero dejaba su fila en "Pase a venta", y el pase del dia siguiente lo
+        // volvia a pasar a venta en otra fecha.
+        if (mov.getTipo() == TipoMovimiento.PV) {
+            throw new BadRequestException("El pase a venta es automático y no se puede cancelar");
+        }
 
         validarRolPuedeCancelar(usuario);
         validarMotivo(request.getMotivo());
@@ -575,31 +579,23 @@ public class MovimientoContratoService {
         movimientoRepository.save(mov);
         contratoRepository.save(contrato);
 
-        // C-06/C-07: toda cancelación mueve caja. EMP cancelado → ENTRADA (el cliente devuelve el
-        // préstamo); cobro cancelado → SALIDA por el total devuelto en efectivo. La devolución al
-        // cliente siempre sale de caja aunque el cobro original haya sido en tarjeta: el concepto
-        // deja constancia de la parte con tarjeta (últimos 4, autorización, importe) para el corte y
-        // la auditoría (TODO G-06: confirmar con Alejandro el formato de la devolución de tarjeta).
-        // La reposición no se revierte (C-03): si hubo RE, su propio movimiento sigue vigente y no
-        // se registra flujo de caja al cancelar.
-        if (mov.getTipo() == TipoMovimiento.EMP) {
-            movimientoCajaService.registrar(
+        // C-06/C-07/CAJ-01b: la cancelación mueve caja. EMP cancelado → CANCELACION_EMPENO (el
+        // cliente devuelve el préstamo); cobro cancelado → DEVOLUCION_COBRO con el mismo reparto
+        // efectivo/tarjeta que el cobro original: la parte con tarjeta se devuelve por la terminal y
+        // no sale de la gaveta (TODO G-06: confirmar con Alejandro el formato de la devolución de
+        // tarjeta). La reposición no se cancela (C-03) y el pase a venta (importe 0) no mueve caja.
+        if (!ConceptoCaja.TIPOS_SIN_CAJA.contains(mov.getTipo())
+                && mov.getMonto() != null && mov.getMonto().signum() > 0) {
+            String descripcion = mov.getTipo() == TipoMovimiento.EMP
+                    ? "CANCELACIÓN DE CONTRATO " + nz(contrato.getFolio()) + " - Préstamo devuelto"
+                    : conceptoDevolucion(mov, contrato);
+            movimientoCajaService.registrar(RegistroCaja.deMovimientoContrato(
+                    mov,
+                    ConceptoCaja.deCancelacion(mov.getTipo()),
                     turnoMov,
                     contrato.getSucursalId(),
-                    TipoMovimientoCaja.ENTRADA,
-                    "CANCELACIÓN DE CONTRATO " + nz(contrato.getFolio()) + " - Préstamo devuelto",
-                    mov.getMonto(),
                     usuario,
-                    mov);
-        } else if (mov.getTipo() != TipoMovimiento.RE) {
-            movimientoCajaService.registrar(
-                    turnoMov,
-                    contrato.getSucursalId(),
-                    TipoMovimientoCaja.SALIDA,
-                    conceptoDevolucion(mov, contrato),
-                    mov.getMonto(),
-                    usuario,
-                    mov);
+                    descripcion));
         }
 
         registrarBitacora(username, valorViejo, snapshotContrato(contrato), mov);
@@ -701,15 +697,14 @@ public class MovimientoContratoService {
         movimientoRepository.save(emp);
         contratoRepository.save(contrato);
 
-        // C-06/C-07: el cliente devuelve el préstamo en efectivo → ENTRADA de caja ligada al EMP
-        movimientoCajaService.registrar(
+        // C-06/C-07: el cliente devuelve el préstamo en efectivo → CANCELACION_EMPENO ligada al EMP
+        movimientoCajaService.registrar(RegistroCaja.deMovimientoContrato(
+                emp,
+                ConceptoCaja.deCancelacion(emp.getTipo()),
                 turnoEmp,
                 contrato.getSucursalId(),
-                TipoMovimientoCaja.ENTRADA,
-                "CANCELACIÓN DE CONTRATO " + nz(contrato.getFolio()) + " - Préstamo devuelto",
-                emp.getMonto(),
                 usuario,
-                emp);
+                "CANCELACIÓN DE CONTRATO " + nz(contrato.getFolio()) + " - Préstamo devuelto"));
 
         registrarBitacora(username, valorViejo, snapshotContrato(contrato), emp);
 
@@ -723,10 +718,9 @@ public class MovimientoContratoService {
     }
 
     /**
-     * Concepto del ENTRADA de caja al registrar un cobro (C-07). Para un cobro mixto deja constancia
-     * de la parte con tarjeta (últimos 4, autorización, importe) para que el corte de caja distinga
-     * efectivo real vs tarjeta sin tener que cruzar con el movimiento de contrato. Columna
-     * {@code concepto} tope 120 caracteres.
+     * Descripción del ENTRADA de caja al registrar un cobro (C-07). Los importes ya van separados en
+     * columnas (CAJ-01b); para un cobro mixto el texto además identifica la tarjeta (últimos 4,
+     * autorización, importe) para la auditoría. Columna {@code concepto} tope 120 caracteres.
      */
     private static String conceptoCobro(MovimientoContrato mov, Contrato contrato) {
         String tipo = mov.getTipo() != null ? mov.getTipo().getEtiqueta().toUpperCase() : "MOVIMIENTO";
@@ -744,10 +738,9 @@ public class MovimientoContratoService {
     }
 
     /**
-     * Concepto del SALIDA de caja al cancelar un cobro (C-07). Para un cobro mixto deja constancia
-     * de la parte pagada con tarjeta (últimos 4, autorización, importe) porque el cliente recibe
-     * efectivo pero el cobro original tocó dos medios; el corte y la auditoría necesitan separarlos.
-     * El límite de 120 caracteres de la columna {@code concepto} nos obliga a recortar.
+     * Descripción del SALIDA de caja al cancelar un cobro (C-07). Los importes devueltos ya van
+     * separados en columnas (CAJ-01b); para un cobro mixto el texto además identifica la tarjeta
+     * (últimos 4, autorización, importe) para la auditoría. Columna {@code concepto} tope 120 caracteres.
      */
     private static String conceptoDevolucion(MovimientoContrato mov, Contrato contrato) {
         String tipo = mov.getTipo() != null ? mov.getTipo().getEtiqueta().toUpperCase() : "MOVIMIENTO";

@@ -209,14 +209,13 @@ public class ContratoService extends BaseService<Contrato, Long, ContratoReposit
 
         // 12. C-07: el préstamo entregado al cliente sale de caja. Base del corte de caja.
         if (totalPrestamo != null && totalPrestamo.signum() > 0) {
-            movimientoCajaService.registrar(
+            movimientoCajaService.registrar(RegistroCaja.deMovimientoContrato(
+                    emp,
+                    ConceptoCaja.deMovimiento(emp.getTipo()),
                     turno,
                     guardado.getSucursalId(),
-                    TipoMovimientoCaja.SALIDA,
-                    "PRÉSTAMO CONTRATO " + guardado.getFolio(),
-                    totalPrestamo,
                     usuario,
-                    emp);
+                    "PRÉSTAMO CONTRATO " + guardado.getFolio()));
         }
 
         log.info("Contrato creado: {} | bolsa={} | cliente={} | monto={}", guardado.getFolio(),
