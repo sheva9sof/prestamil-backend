@@ -33,6 +33,8 @@ import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.TurnoRepository;
 import com.ignis.prestamil.repository.UsuarioRepository;
 import com.ignis.prestamil.model.Bitacora;
+import com.ignis.prestamil.model.ConceptoCaja;
+import com.ignis.prestamil.model.OrigenCaja;
 import com.ignis.prestamil.request.CancelarMovimientoRequest;
 import com.ignis.prestamil.request.CotizacionRequest;
 import com.ignis.prestamil.request.MovimientoRequest;
@@ -232,6 +234,28 @@ class MovimientoContratoServiceTest {
         ArgumentCaptor<MovimientoContrato> captor = ArgumentCaptor.forClass(MovimientoContrato.class);
         verify(movimientoRepository).save(captor.capture());
         return captor.getValue();
+    }
+
+    /** Flujos de caja registrados en la prueba (CAJ-01b), en orden. */
+    private List<RegistroCaja> registrosCaja() {
+        ArgumentCaptor<RegistroCaja> captor = ArgumentCaptor.forClass(RegistroCaja.class);
+        verify(movimientoCajaService, org.mockito.Mockito.atLeast(0)).registrar(captor.capture());
+        return captor.getAllValues();
+    }
+
+    /** Verifica el único flujo de caja con ese concepto: importes separados y origen en el movimiento. */
+    private RegistroCaja assertCaja(ConceptoCaja concepto, String efectivo, String tarjeta, MovimientoContrato origen) {
+        List<RegistroCaja> registros = registrosCaja().stream().filter(r -> r.concepto() == concepto).toList();
+        assertThat(registros).as("flujos de caja " + concepto).hasSize(1);
+        RegistroCaja r = registros.get(0);
+        assertThat(r.sucursalId()).isEqualTo(1);
+        assertThat(r.turno()).isNotNull();
+        assertThat(r.usuario()).isNotNull();
+        assertThat(r.importeEfectivo()).isEqualByComparingTo(efectivo);
+        assertThat(r.importeTarjeta()).isEqualByComparingTo(tarjeta);
+        assertThat(r.origenTipo()).isEqualTo(OrigenCaja.MOVIMIENTO_CONTRATO);
+        assertThat(r.origenId()).isEqualTo(origen.getId());
+        return r;
     }
 
     // =========================================================================
@@ -1924,12 +1948,8 @@ class MovimientoContratoServiceTest {
             // C-06: partidas devueltas al cliente → CAN; entrada de caja por el préstamo
             assertThat(c.getPartidas()).allSatisfy(
                     p -> assertThat(p.getEstatus()).isEqualTo(EstatusPartida.CAN));
-            verify(movimientoCajaService).registrar(any(Turno.class), eq(1),
-                    eq(com.ignis.prestamil.model.TipoMovimientoCaja.ENTRADA),
-                    org.mockito.ArgumentMatchers.contains("CANCELACIÓN DE CONTRATO"),
-                    org.mockito.ArgumentMatchers.argThat(
-                            (BigDecimal m) -> m != null && m.compareTo(new BigDecimal("1195.00")) == 0),
-                    any(Usuario.class), eq(emp));
+            assertThat(assertCaja(ConceptoCaja.CANCELACION_EMPENO, "1195.00", "0", emp).descripcion())
+                    .contains("CANCELACIÓN DE CONTRATO");
         }
 
         // ------------------------------------------------------------------
@@ -1960,12 +1980,8 @@ class MovimientoContratoServiceTest {
             assertThat(emp.getMotivoCancelacion()).isEqualTo("El cliente se arrepintió");
             assertThat(emp.getUsuarioCancela().getNombreUsuario()).isEqualTo("gerente1");
             assertThat(emp.getFechaCancelacion()).isEqualTo(LocalDateTime.of(2026, 8, 11, 12, 30));
-            verify(movimientoCajaService).registrar(any(Turno.class), eq(1),
-                    eq(com.ignis.prestamil.model.TipoMovimientoCaja.ENTRADA),
-                    org.mockito.ArgumentMatchers.contains("CANCELACIÓN DE CONTRATO 1493"),
-                    org.mockito.ArgumentMatchers.argThat(
-                            (BigDecimal m) -> m != null && m.compareTo(new BigDecimal("1195.00")) == 0),
-                    any(Usuario.class), eq(emp));
+            assertThat(assertCaja(ConceptoCaja.CANCELACION_EMPENO, "1195.00", "0", emp).descripcion())
+                    .contains("CANCELACIÓN DE CONTRATO 1493");
             verify(bitacoraRepository).save(any(Bitacora.class));
         }
 
@@ -1986,7 +2002,7 @@ class MovimientoContratoServiceTest {
             assertThat(emp.getCancelado()).isFalse();
             assertThat(c.getPartidas()).allSatisfy(
                     p -> assertThat(p.getEstatus()).isEqualTo(EstatusPartida.OP));
-            verify(movimientoCajaService, never()).registrar(any(), any(), any(), any(), any(), any(), any());
+            verify(movimientoCajaService, never()).registrar(any());
         }
 
         /** Criterio 3 de C-06: un cajero no puede cancelar un EMP → 403. */
@@ -2005,7 +2021,7 @@ class MovimientoContratoServiceTest {
             assertThat(emp.getCancelado()).isFalse();
             assertThat(c.getPartidas()).allSatisfy(
                     p -> assertThat(p.getEstatus()).isEqualTo(EstatusPartida.OP));
-            verify(movimientoCajaService, never()).registrar(any(), any(), any(), any(), any(), any(), any());
+            verify(movimientoCajaService, never()).registrar(any());
         }
 
         /** Criterio 4 de C-06: motivo obligatorio → 400 sin motivo (ni caja ni partidas tocadas). */
@@ -2024,7 +2040,7 @@ class MovimientoContratoServiceTest {
             assertThat(emp.getCancelado()).isFalse();
             assertThat(c.getPartidas()).allSatisfy(
                     p -> assertThat(p.getEstatus()).isEqualTo(EstatusPartida.OP));
-            verify(movimientoCajaService, never()).registrar(any(), any(), any(), any(), any(), any(), any());
+            verify(movimientoCajaService, never()).registrar(any());
         }
 
         // ------------------------------------------------------------------
@@ -2046,24 +2062,19 @@ class MovimientoContratoServiceTest {
 
             service.cancelar(301L, motivo("Se capturó el plazo equivocado"), "gerente1");
 
-            verify(movimientoCajaService).registrar(any(Turno.class), eq(1),
-                    eq(com.ignis.prestamil.model.TipoMovimientoCaja.SALIDA),
-                    org.mockito.ArgumentMatchers.argThat((String s) ->
-                            s != null && s.contains("DEVOLUCIÓN POR CANCELACIÓN")
-                                    && s.contains("27323")
-                                    && !s.contains("TARJETA")),
-                    org.mockito.ArgumentMatchers.argThat(
-                            (BigDecimal m) -> m != null && m.compareTo(new BigDecimal("95.92")) == 0),
-                    any(Usuario.class), eq(rf));
+            RegistroCaja devolucion = assertCaja(ConceptoCaja.DEVOLUCION_COBRO, "95.92", "0", rf);
+            assertThat(devolucion.descripcion())
+                    .contains("DEVOLUCIÓN POR CANCELACIÓN", "27323")
+                    .doesNotContain("TARJETA");
         }
 
         /**
-         * C-07, test 2 (mixto): un refrendo cobrado con efectivo + tarjeta se cancela con una SALIDA
-         * por el total devuelto en efectivo; el concepto deja constancia de la parte con tarjeta
-         * (últimos 4, autorización e importe) para el corte de caja y la auditoría.
+         * C-07 + CAJ-01b (mixto): un refrendo cobrado con efectivo + tarjeta se cancela con una
+         * DEVOLUCION_COBRO separada igual que el cobro original; la descripción deja constancia de la
+         * tarjeta (últimos 4, autorización e importe) para la auditoría.
          */
         @Test
-        void cancelarCobroMixto_registraSalidaPorElTotal_conceptoIncluyeTarjeta() {
+        void cancelarCobroMixto_devuelveConElMismoRepartoQueElCobro_descripcionIncluyeTarjeta() {
             contratoC2();
             gerentePorDefecto();
             MovimientoRequest r = new MovimientoRequest();
@@ -2079,17 +2090,18 @@ class MovimientoContratoServiceTest {
 
             service.cancelar(302L, motivo("Se cobró con tarjeta por error"), "gerente1");
 
-            verify(movimientoCajaService).registrar(any(Turno.class), eq(1),
-                    eq(com.ignis.prestamil.model.TipoMovimientoCaja.SALIDA),
-                    org.mockito.ArgumentMatchers.argThat((String s) ->
-                            s != null && s.contains("DEVOLUCIÓN POR CANCELACIÓN")
-                                    && s.contains("27324")
-                                    && s.contains("TARJETA ****1234")
-                                    && s.contains("A1B2C3")
-                                    && s.contains("45.92")),
-                    org.mockito.ArgumentMatchers.argThat(
-                            (BigDecimal m) -> m != null && m.compareTo(new BigDecimal("95.92")) == 0),
-                    any(Usuario.class), eq(rf));
+            // CAJ-01b: el cobro entró separado y la devolución sale con el mismo reparto; solo los
+            // $50 en efectivo salen de la gaveta, los $45.92 se devuelven por la terminal
+            // (el cobro se registró antes de que la prueba le pusiera id, así que aquí no se revisa el origen)
+            assertThat(registrosCaja()).filteredOn(caja -> caja.concepto() == ConceptoCaja.REFRENDO)
+                    .singleElement()
+                    .satisfies(cobro -> {
+                        assertThat(cobro.importeEfectivo()).isEqualByComparingTo("50.00");
+                        assertThat(cobro.importeTarjeta()).isEqualByComparingTo("45.92");
+                    });
+            RegistroCaja devolucion = assertCaja(ConceptoCaja.DEVOLUCION_COBRO, "50.00", "45.92", rf);
+            assertThat(devolucion.descripcion())
+                    .contains("DEVOLUCIÓN POR CANCELACIÓN", "27324", "TARJETA ****1234", "A1B2C3", "45.92");
         }
 
         /**
@@ -2280,12 +2292,8 @@ class MovimientoContratoServiceTest {
             assertThat(emp.getFechaCancelacion()).isEqualTo(LocalDateTime.of(2026, 8, 11, 12, 30));
             // ENTRADA de caja por el monto del préstamo, ligada al EMP → el saldo del turno queda
             // compensado respecto a la SALIDA de la creación (préstamo entregado): neto = 0.
-            verify(movimientoCajaService).registrar(any(Turno.class), eq(1),
-                    eq(com.ignis.prestamil.model.TipoMovimientoCaja.ENTRADA),
-                    org.mockito.ArgumentMatchers.contains("CANCELACIÓN DE CONTRATO 1493"),
-                    org.mockito.ArgumentMatchers.argThat(
-                            (BigDecimal m) -> m != null && m.compareTo(new BigDecimal("1195.00")) == 0),
-                    any(Usuario.class), eq(emp));
+            assertThat(assertCaja(ConceptoCaja.CANCELACION_EMPENO, "1195.00", "0", emp).descripcion())
+                    .contains("CANCELACIÓN DE CONTRATO 1493");
             // Bitácora obligatoria
             verify(bitacoraRepository).save(any(Bitacora.class));
             // El id devuelto es el EMP cancelado — el frontend lo usa para pedir el ticket
@@ -2319,16 +2327,10 @@ class MovimientoContratoServiceTest {
             // RE sigue vigente (C-03): no se cancela ni se devuelve
             assertThat(re.getCancelado()).isFalse();
             // Caja: solo la ENTRADA de la cancelación por los $1195; los $40 del RE se quedan
-            verify(movimientoCajaService, times(1)).registrar(any(Turno.class), eq(1),
-                    eq(com.ignis.prestamil.model.TipoMovimientoCaja.ENTRADA),
-                    org.mockito.ArgumentMatchers.contains("CANCELACIÓN DE CONTRATO"),
-                    org.mockito.ArgumentMatchers.argThat(
-                            (BigDecimal m) -> m != null && m.compareTo(new BigDecimal("1195.00")) == 0),
-                    any(Usuario.class), eq(emp));
-            // Y no hay ninguna salida ligada al RE
-            verify(movimientoCajaService, never()).registrar(any(), any(),
-                    eq(com.ignis.prestamil.model.TipoMovimientoCaja.SALIDA),
-                    any(), any(), any(), any());
+            assertThat(assertCaja(ConceptoCaja.CANCELACION_EMPENO, "1195.00", "0", emp).descripcion())
+                    .contains("CANCELACIÓN DE CONTRATO");
+            // Y no hay ningún otro flujo (ni salida ligada al RE)
+            assertThat(registrosCaja()).hasSize(1);
         }
 
         /** Test 3 de D-11: con un refrendo del día vigente → 400 "cancele primero el último". */
@@ -2357,7 +2359,7 @@ class MovimientoContratoServiceTest {
 
             assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
             assertThat(emp.getCancelado()).isFalse();
-            verify(movimientoCajaService, never()).registrar(any(), any(), any(), any(), any(), any(), any());
+            verify(movimientoCajaService, never()).registrar(any());
             verify(bitacoraRepository, never()).save(any(Bitacora.class));
         }
 
@@ -2380,7 +2382,7 @@ class MovimientoContratoServiceTest {
 
             assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
             assertThat(emp.getCancelado()).isFalse();
-            verify(movimientoCajaService, never()).registrar(any(), any(), any(), any(), any(), any(), any());
+            verify(movimientoCajaService, never()).registrar(any());
         }
 
         /** Test 5 de D-11: cajero → 403 (rol no permitido para cancelar). */
@@ -2398,7 +2400,7 @@ class MovimientoContratoServiceTest {
 
             assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
             assertThat(emp.getCancelado()).isFalse();
-            verify(movimientoCajaService, never()).registrar(any(), any(), any(), any(), any(), any(), any());
+            verify(movimientoCajaService, never()).registrar(any());
         }
 
         /** Test 6 de D-11: sin motivo → 400 "motivo obligatorio…" (texto libre, mínimo 10 caracteres). */
@@ -2439,9 +2441,8 @@ class MovimientoContratoServiceTest {
                     .hasMessageContaining("ya está cancelado");
 
             // La ENTRADA de caja se registró una sola vez
-            verify(movimientoCajaService, times(1)).registrar(any(), any(),
-                    eq(com.ignis.prestamil.model.TipoMovimientoCaja.ENTRADA),
-                    any(), any(), any(), any());
+            assertThat(registrosCaja()).extracting(RegistroCaja::concepto)
+                    .containsExactly(ConceptoCaja.CANCELACION_EMPENO);
         }
 
         /** Test 8 de D-11: contrato sin EMP → mensaje específico "contacte a Sistemas". */
@@ -2459,7 +2460,7 @@ class MovimientoContratoServiceTest {
                     .hasMessageContaining("Sistemas");
 
             assertThat(c.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
-            verify(movimientoCajaService, never()).registrar(any(), any(), any(), any(), any(), any(), any());
+            verify(movimientoCajaService, never()).registrar(any());
             verify(bitacoraRepository, never()).save(any(Bitacora.class));
         }
 
@@ -2493,7 +2494,7 @@ class MovimientoContratoServiceTest {
             assertThat(c.getPartidas()).allSatisfy(
                     p -> assertThat(p.getEstatus()).isEqualTo(EstatusPartida.OP));
             assertThat(emp.getCancelado()).isFalse();
-            verify(movimientoCajaService, never()).registrar(any(), any(), any(), any(), any(), any(), any());
+            verify(movimientoCajaService, never()).registrar(any());
             verify(bitacoraRepository, never()).save(any(Bitacora.class));
         }
 
