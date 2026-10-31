@@ -20,6 +20,7 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -67,12 +68,36 @@ public class ResolutorRenglonCorte {
      * @return todos los renglones del corte, en orden, con su efectivo y tarjeta (0 si no hubo flujos)
      */
     public Map<RenglonCorte, ParteCorte> totalesPorRenglon(List<MovimientoCaja> movimientos) {
-        Map<RenglonCorte, ParteCorte> totales = new EnumMap<>(RenglonCorte.class);
-        for (RenglonCorte renglon : RenglonCorte.values()) {
-            totales.put(renglon, ParteCorte.cero(renglon));
-        }
+        Map<RenglonCorte, ParteCorte> totales = ceros();
         partes(movimientos).forEach(parte -> totales.merge(parte.renglon(), parte, ParteCorte::mas));
         return totales;
+    }
+
+    /**
+     * Totales por renglón de cada día de un periodo, con una consulta para los flujos y otra para sus
+     * movimientos de contrato (corte mensual, CAJ-05). Cada flujo cuenta el día de su propia fecha, así
+     * que una cancelación resta el día en que se cancela (Q-C1).
+     *
+     * @param sucursalId sucursal del corte
+     * @param desde      primer día (inclusivo)
+     * @param hasta      último día (inclusivo)
+     * @return un mapa por día del periodo, en orden, con todos los renglones (0 si no hubo flujos)
+     */
+    public Map<LocalDate, Map<RenglonCorte, ParteCorte>> totalesPorDia(Integer sucursalId, LocalDate desde,
+                                                                      LocalDate hasta) {
+        List<MovimientoCaja> movimientos = movimientoCajaRepository.delPeriodo(
+                sucursalId, desde.atStartOfDay(), hasta.plusDays(1).atStartOfDay());
+        Map<Long, MovimientoContrato> origenes = origenes(movimientos);
+
+        Map<LocalDate, Map<RenglonCorte, ParteCorte>> porDia = new TreeMap<>();
+        for (LocalDate dia = desde; !dia.isAfter(hasta); dia = dia.plusDays(1)) {
+            porDia.put(dia, ceros());
+        }
+        for (MovimientoCaja m : movimientos) {
+            Map<RenglonCorte, ParteCorte> totales = porDia.get(m.getFecha().toLocalDate());
+            partes(m, origen(m, origenes)).forEach(parte -> totales.merge(parte.renglon(), parte, ParteCorte::mas));
+        }
+        return porDia;
     }
 
     /**
@@ -83,20 +108,35 @@ public class ResolutorRenglonCorte {
      * @throws IllegalStateException si un RC o una cancelación no tiene el origen que hace falta
      */
     public List<ParteCorte> partes(List<MovimientoCaja> movimientos) {
-        // Un solo SELECT para los movimientos de contrato que hacen falta: los de los RC y las cancelaciones
+        Map<Long, MovimientoContrato> origenes = origenes(movimientos);
+        List<ParteCorte> partes = new ArrayList<>();
+        for (MovimientoCaja m : movimientos) {
+            partes.addAll(partes(m, origen(m, origenes)));
+        }
+        return partes;
+    }
+
+    /** Un solo SELECT para los movimientos de contrato que hacen falta: los de los RC y las cancelaciones. */
+    private Map<Long, MovimientoContrato> origenes(List<MovimientoCaja> movimientos) {
         Set<Long> ids = movimientos.stream()
                 .filter(ResolutorRenglonCorte::requiereMovimientoContrato)
                 .map(MovimientoCaja::getOrigenId)
                 .collect(Collectors.toSet());
-        Map<Long, MovimientoContrato> origenes = ids.isEmpty() ? Map.of()
+        return ids.isEmpty() ? Map.of()
                 : movimientoContratoRepository.findAllById(ids).stream()
                         .collect(Collectors.toMap(MovimientoContrato::getId, Function.identity()));
+    }
 
-        List<ParteCorte> partes = new ArrayList<>();
-        for (MovimientoCaja m : movimientos) {
-            partes.addAll(partes(m, m.getOrigenId() != null ? origenes.get(m.getOrigenId()) : null));
+    private static MovimientoContrato origen(MovimientoCaja m, Map<Long, MovimientoContrato> origenes) {
+        return m.getOrigenId() != null ? origenes.get(m.getOrigenId()) : null;
+    }
+
+    private static Map<RenglonCorte, ParteCorte> ceros() {
+        Map<RenglonCorte, ParteCorte> totales = new EnumMap<>(RenglonCorte.class);
+        for (RenglonCorte renglon : RenglonCorte.values()) {
+            totales.put(renglon, ParteCorte.cero(renglon));
         }
-        return partes;
+        return totales;
     }
 
     /**

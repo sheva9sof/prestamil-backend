@@ -32,6 +32,8 @@ import com.ignis.prestamil.request.TraspasoCajaRequest;
 import com.ignis.prestamil.response.TraspasoCajaContextoResponse;
 import com.ignis.prestamil.response.TraspasoCajaDenominacionResponse;
 import com.ignis.prestamil.response.TraspasoCajaResponse;
+import com.ignis.prestamil.service.calculo.CorteCajaService;
+import com.ignis.prestamil.service.calculo.SaldoArranqueConfiguracionProvider;
 import com.ignis.prestamil.util.Constantes;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
@@ -66,6 +68,7 @@ import static org.assertj.core.groups.Tuple.tuple;
 @ActiveProfiles("test")
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import({TraspasoCajaService.class, SaldoCajaService.class, FolioService.class, CajaMapperImpl.class,
+        CorteCajaService.class, ResolutorRenglonCorte.class, SaldoArranqueConfiguracionProvider.class,
         TraspasoCajaServiceIT.Reloj.class})
 class TraspasoCajaServiceIT {
 
@@ -129,6 +132,9 @@ class TraspasoCajaServiceIT {
         configuracion(Constantes.ROLES_PERMITIDOS_DOTACION, "5,3,1");
         configuracion(Constantes.ROLES_PERMITIDOS_RECOLECCION, "5,3,1");
         configuracion(Constantes.ROLES_PERMITIDOS_CANCELAR_TRASPASO, "1");
+        // CAJ-05: el corte (y el saldo de las cajas) arranca ayer, con la bóveda vacía (084)
+        configuracion("CAJA_FECHA_ARRANQUE", HOY.minusDays(1).toString());
+        configuracion("CAJA_SALDO_ARRANQUE", "0.00");
     }
 
     @Test
@@ -250,6 +256,17 @@ class TraspasoCajaServiceIT {
         assertThat(ministracion.getFolio()).isEqualTo(1L);
         em.flush();
         assertThat(saldoCajaService.saldoActual(boveda)).isEqualByComparingTo("20000.00");
+    }
+
+    @Test
+    void sinSaldoDeArranque_noDejaSacarDeLaBoveda() {
+        configuracionRepository.findByConfiguracion("CAJA_FECHA_ARRANQUE").ifPresent(configuracionRepository::delete);
+        traspasoAnterior(TipoTraspasoCaja.MINISTRACION, concentradora, boveda, "5000.00");
+
+        assertThatThrownBy(() -> traspasoCajaService.registrar(SUCURSAL,
+                request(TipoTraspasoCaja.DOTACION, "1000", null, "1000", 1), "cajero"))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("saldo de arranque");
     }
 
     @Test
