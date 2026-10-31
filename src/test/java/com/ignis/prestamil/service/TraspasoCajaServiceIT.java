@@ -29,8 +29,11 @@ import com.ignis.prestamil.repository.UsuarioRepository;
 import com.ignis.prestamil.request.CancelarTraspasoCajaRequest;
 import com.ignis.prestamil.request.TraspasoCajaDenominacionRequest;
 import com.ignis.prestamil.request.TraspasoCajaRequest;
+import com.ignis.prestamil.response.TraspasoCajaContextoResponse;
 import com.ignis.prestamil.response.TraspasoCajaDenominacionResponse;
 import com.ignis.prestamil.response.TraspasoCajaResponse;
+import com.ignis.prestamil.service.calculo.CorteCajaService;
+import com.ignis.prestamil.service.calculo.SaldoArranqueConfiguracionProvider;
 import com.ignis.prestamil.util.Constantes;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
@@ -65,6 +68,7 @@ import static org.assertj.core.groups.Tuple.tuple;
 @ActiveProfiles("test")
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import({TraspasoCajaService.class, SaldoCajaService.class, FolioService.class, CajaMapperImpl.class,
+        CorteCajaService.class, ResolutorRenglonCorte.class, SaldoArranqueConfiguracionProvider.class,
         TraspasoCajaServiceIT.Reloj.class})
 class TraspasoCajaServiceIT {
 
@@ -108,13 +112,14 @@ class TraspasoCajaServiceIT {
         boveda = caja(TipoCaja.BOVEDA, "002", "BÓVEDA");
         ventanilla = caja(TipoCaja.VENTANILLA, "003", "VENTANILLA");
 
-        // Las 14 de COCAE (074)
-        String[] valores = {"1000", "500", "200", "100", "50", "20", "10", "5", "2", "1", "0.50", "0.20", "0.10", "0.01"};
+        // Las 14 de COCAE (074) con el ajuste de 081 (Q-10): 0.01 inactiva al final y 0.05 en el lugar 14
+        String[] valores = {"1000", "500", "200", "100", "50", "20", "10", "5", "2", "1", "0.50", "0.20", "0.10", "0.05", "0.01"};
         for (int i = 0; i < valores.length; i++) {
             Denominacion d = new Denominacion();
             d.setValor(new BigDecimal(valores[i]).setScale(2));
             d.setTipo(i < 6 ? TipoDenominacion.BILLETE : TipoDenominacion.MONEDA);
             d.setOrden(i + 1);
+            d.setActiva(!"0.01".equals(valores[i]));
             denominaciones.put(valores[i], denominacionRepository.save(d));
         }
 
@@ -122,11 +127,14 @@ class TraspasoCajaServiceIT {
         cajero = usuario("cajero", rol(3, "Cajero"));
         gerente = usuario("gerente", rol(5, "Gerente"));
 
-        configuracion(Constantes.ROLES_PERMITIDOS_MINISTRACION, "5,1");
+        configuracion(Constantes.ROLES_PERMITIDOS_MINISTRACION, "5,3,1");  // 080 (Q-06)
         configuracion(Constantes.ROLES_PERMITIDOS_CONCENTRACION, "5,1");
         configuracion(Constantes.ROLES_PERMITIDOS_DOTACION, "5,3,1");
         configuracion(Constantes.ROLES_PERMITIDOS_RECOLECCION, "5,3,1");
         configuracion(Constantes.ROLES_PERMITIDOS_CANCELAR_TRASPASO, "1");
+        // CAJ-05: el corte (y el saldo de las cajas) arranca ayer, con la bóveda vacía (084)
+        configuracion("CAJA_FECHA_ARRANQUE", HOY.minusDays(1).toString());
+        configuracion("CAJA_SALDO_ARRANQUE", "0.00");
     }
 
     @Test
@@ -251,13 +259,21 @@ class TraspasoCajaServiceIT {
     }
 
     @Test
+    void sinSaldoDeArranque_noDejaSacarDeLaBoveda() {
+        configuracionRepository.findByConfiguracion("CAJA_FECHA_ARRANQUE").ifPresent(configuracionRepository::delete);
+        traspasoAnterior(TipoTraspasoCaja.MINISTRACION, concentradora, boveda, "5000.00");
+
+        assertThatThrownBy(() -> traspasoCajaService.registrar(SUCURSAL,
+                request(TipoTraspasoCaja.DOTACION, "1000", null, "1000", 1), "cajero"))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("saldo de arranque");
+    }
+
+    @Test
     void rolNoPermitido_403() {
         traspasoAnterior(TipoTraspasoCaja.MINISTRACION, concentradora, boveda, "5000.00");
 
-        // El cajero no puede ministrar ni concentrar
-        assertThatThrownBy(() -> traspasoCajaService.registrar(SUCURSAL,
-                request(TipoTraspasoCaja.MINISTRACION, "1000", null, "1000", 1), "cajero"))
-                .isInstanceOf(ForbiddenException.class);
+        // El cajero no puede concentrar
         assertThatThrownBy(() -> traspasoCajaService.registrar(SUCURSAL,
                 request(TipoTraspasoCaja.CONCENTRACION, "1000", null, "1000", 1), "cajero"))
                 .isInstanceOf(ForbiddenException.class);
@@ -268,6 +284,56 @@ class TraspasoCajaServiceIT {
                 .isInstanceOf(ForbiddenException.class);
 
         assertThat(traspasoCajaService.listar(SUCURSAL, HOY, null)).isEmpty();
+    }
+
+    @Test
+    void ministracion_laRegistraElCajeroOElGerente_Q06() {
+        TraspasoCajaResponse delCajero = traspasoCajaService.registrar(SUCURSAL,
+                request(TipoTraspasoCaja.MINISTRACION, "1000", null, "1000", 1), "cajero");
+        TraspasoCajaResponse delGerente = traspasoCajaService.registrar(SUCURSAL,
+                request(TipoTraspasoCaja.MINISTRACION, "500", null, "500", 1), "gerente");
+
+        assertThat(delCajero.getNombreUsuario()).isEqualTo("cajero");
+        assertThat(delGerente.getNombreUsuario()).isEqualTo("gerente");
+        em.flush();
+        assertThat(saldoCajaService.saldoActual(boveda)).isEqualByComparingTo("1500.00");
+    }
+
+    @Test
+    void contexto_cajasDelTipoFechaDelServidorYPermisosPorRol() {
+        TraspasoCajaContextoResponse delCajero =
+                traspasoCajaService.contexto(SUCURSAL, TipoTraspasoCaja.CONCENTRACION, "cajero");
+        assertThat(delCajero.getFechaOperacion()).isEqualTo(HOY);
+        assertThat(delCajero.getCajaOrigen().getNombre()).isEqualTo("BÓVEDA");
+        assertThat(delCajero.getCajaDestino().getNombre()).isEqualTo("CUENTA CONCENTRADORA");
+        assertThat(delCajero.isPuedeRegistrar()).isFalse();
+        assertThat(delCajero.isPuedeCancelar()).isFalse();
+
+        assertThat(traspasoCajaService.contexto(SUCURSAL, TipoTraspasoCaja.MINISTRACION, "cajero")
+                .isPuedeRegistrar()).isTrue();
+        TraspasoCajaContextoResponse deSistemas =
+                traspasoCajaService.contexto(SUCURSAL, TipoTraspasoCaja.RECOLECCION, "sistemas");
+        assertThat(deSistemas.getCajaOrigen().getClave()).isEqualTo("003");
+        assertThat(deSistemas.getCajaDestino().getClave()).isEqualTo("002");
+        assertThat(deSistemas.isPuedeRegistrar()).isTrue();
+        assertThat(deSistemas.isPuedeCancelar()).isTrue();
+    }
+
+    @Test
+    void denominaciones_soloActivas_sinUnCentavoYConCincoCentavos_Q10() {
+        assertThat(traspasoCajaService.denominacionesActivas())
+                .hasSize(14)
+                .extracting(d -> d.getValor().toPlainString())
+                .startsWith("1000.00")
+                .endsWith("0.10", "0.05")
+                .doesNotContain("0.01");
+
+        assertThatThrownBy(() -> traspasoCajaService.registrar(SUCURSAL,
+                request(TipoTraspasoCaja.MINISTRACION, "1000.01", null, "1000", 1, "0.01", 1), "gerente"))
+                .isInstanceOf(BadRequestException.class);
+        assertThat(traspasoCajaService.registrar(SUCURSAL,
+                request(TipoTraspasoCaja.MINISTRACION, "1000.05", null, "1000", 1, "0.05", 1), "gerente")
+                .getImporte()).isEqualByComparingTo("1000.05");
     }
 
     @Test

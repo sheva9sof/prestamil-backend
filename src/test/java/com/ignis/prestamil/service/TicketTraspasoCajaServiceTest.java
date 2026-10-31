@@ -51,7 +51,7 @@ class TicketTraspasoCajaServiceTest {
 
     private static final ZoneId ZONA = ZoneId.of("America/Mexico_City");
     private static final String[] VALORES =
-            {"1000", "500", "200", "100", "50", "20", "10", "5", "2", "1", "0.50", "0.20", "0.10", "0.01"};
+            {"1000", "500", "200", "100", "50", "20", "10", "5", "2", "1", "0.50", "0.20", "0.10", "0.05"};
 
     @Mock TraspasoCajaRepository traspasoCajaRepository;
     @Mock DenominacionRepository denominacionRepository;
@@ -59,8 +59,10 @@ class TicketTraspasoCajaServiceTest {
 
     TicketTraspasoCajaService service;
 
-    /** Las 14 de COCAE (074), en orden; id = orden. */
+    /** Las 14 activas tras 081 (Q-10: sin 0.01, con 0.05), en orden; id = orden. */
     private final List<Denominacion> catalogo = new ArrayList<>();
+    /** 0.01: inactiva desde 081, al final del orden. No viene en el catálogo activo. */
+    private Denominacion unCentavo;
 
     @BeforeEach
     void setUp() {
@@ -86,6 +88,12 @@ class TicketTraspasoCajaServiceTest {
             d.setOrden(i + 1);
             catalogo.add(d);
         }
+        unCentavo = new Denominacion();
+        unCentavo.setId(15);
+        unCentavo.setValor(new BigDecimal("0.01"));
+        unCentavo.setTipo(TipoDenominacion.MONEDA);
+        unCentavo.setOrden(15);
+        unCentavo.setActiva(false);
         lenient().when(denominacionRepository.findByActivaTrueOrderByOrdenAsc()).thenReturn(catalogo);
     }
 
@@ -234,7 +242,21 @@ class TicketTraspasoCajaServiceTest {
                         tuple("2", "$200.00", "$400.00"),
                         tuple("0", "$100.00", "$0.00"),
                         tuple("2", "$50.00", "$100.00"))
-                .endsWith(tuple("0", "$0.01", "$0.00"));
+                .endsWith(tuple("0", "$0.10", "$0.00"), tuple("0", "$0.05", "$0.00"));
+        assertThat(renglones).extracting(DenominacionTicketRow::getDenominacion).doesNotContain("$0.01");
+    }
+
+    @Test
+    void renglones_traspasoAnteriorA081ConUnCentavo_loMuestraAlFinal() {
+        TraspasoCaja t = dotacion4355();
+        renglon(t, unCentavo, 3);
+
+        List<DenominacionTicketRow> renglones = service.renglones(t);
+
+        assertThat(renglones).hasSize(15);
+        assertThat(renglones.get(14)).extracting(DenominacionTicketRow::getCantidad,
+                DenominacionTicketRow::getDenominacion, DenominacionTicketRow::getImporte)
+                .containsExactly("3", "$0.01", "$0.03");
     }
 
     @Test

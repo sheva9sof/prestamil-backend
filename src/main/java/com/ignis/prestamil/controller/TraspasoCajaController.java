@@ -5,6 +5,7 @@ import com.ignis.prestamil.model.Sucursal;
 import com.ignis.prestamil.model.TipoTraspasoCaja;
 import com.ignis.prestamil.request.CancelarTraspasoCajaRequest;
 import com.ignis.prestamil.request.TraspasoCajaRequest;
+import com.ignis.prestamil.response.TraspasoCajaContextoResponse;
 import com.ignis.prestamil.response.TraspasoCajaResponse;
 import com.ignis.prestamil.service.SucursalService;
 import com.ignis.prestamil.service.TicketTraspasoCajaService;
@@ -62,6 +63,17 @@ public class TraspasoCajaController {
             @RequestParam(value = "fecha", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fecha,
             @RequestParam(value = "tipo", required = false) TipoTraspasoCaja tipo) {
         return ResponseEntity.ok(traspasoCajaService.listar(sucursalId(), fecha, tipo));
+    }
+
+    /**
+     * Cajas que fija el tipo, fecha de operación del servidor y permisos del usuario para la pantalla.
+     * GET /api/caja/traspasos/contexto?tipo=
+     */
+    @GetMapping("/contexto")
+    public ResponseEntity<TraspasoCajaContextoResponse> contexto(
+            @RequestParam("tipo") TipoTraspasoCaja tipo,
+            Authentication authentication) {
+        return ResponseEntity.ok(traspasoCajaService.contexto(sucursalId(), tipo, authentication.getName()));
     }
 
     /**

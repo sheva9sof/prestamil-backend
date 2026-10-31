@@ -46,18 +46,31 @@ public interface TraspasoCajaRepository extends BaseRepository<TraspasoCaja, Lon
             + "AND (t.cajaDestino.id = :cajaId OR t.cajaOrigen.id = :cajaId)")
     BigDecimal netoTraspasos(@Param("cajaId") Integer cajaId);
 
+    /** Importe de los traspasos activos de un día y un tipo (corte de caja, CAJ-05). */
+    interface TotalTraspasoDia {
+        LocalDate getFechaOperacion();
+
+        TipoTraspasoCaja getTipo();
+
+        BigDecimal getImporte();
+    }
+
     /**
-     * Neto de los traspasos activos de una caja en un día: lo que llegó menos lo que salió.
+     * Traspasos activos de la sucursal sumados por día y tipo, en una sola consulta. Los cancelados no
+     * cuentan: solo se cancelan el mismo día (CAJ-02), así que desaparecen de ese corte.
      *
-     * @param cajaId         identificador de la caja
-     * @param fechaOperacion día del corte
-     * @return neto de traspasos del día; 0 si no hubo
+     * @param sucursalId identificador de la sucursal
+     * @param desde      primer día (inclusivo)
+     * @param hasta      último día (inclusivo)
+     * @return un renglón por día y tipo con traspasos; los que no tuvieron no aparecen
      */
-    @Query("SELECT COALESCE(SUM(CASE WHEN t.cajaDestino.id = :cajaId THEN t.importe ELSE -t.importe END), 0) "
+    @Query("SELECT t.fechaOperacion AS fechaOperacion, t.tipo AS tipo, SUM(t.importe) AS importe "
             + "FROM TraspasoCaja t "
-            + "WHERE t.estatus = com.ignis.prestamil.model.EstatusTraspasoCaja.ACTIVO "
-            + "AND (t.cajaDestino.id = :cajaId OR t.cajaOrigen.id = :cajaId) "
-            + "AND t.fechaOperacion = :fechaOperacion")
-    BigDecimal netoTraspasosDelDia(@Param("cajaId") Integer cajaId,
-                                   @Param("fechaOperacion") LocalDate fechaOperacion);
+            + "WHERE t.sucursalId = :sucursalId "
+            + "AND t.estatus = com.ignis.prestamil.model.EstatusTraspasoCaja.ACTIVO "
+            + "AND t.fechaOperacion >= :desde AND t.fechaOperacion <= :hasta "
+            + "GROUP BY t.fechaOperacion, t.tipo")
+    List<TotalTraspasoDia> totalesPorDiaYTipo(@Param("sucursalId") Integer sucursalId,
+                                              @Param("desde") LocalDate desde,
+                                              @Param("hasta") LocalDate hasta);
 }
