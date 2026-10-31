@@ -144,6 +144,27 @@ class TurnoServiceTest {
     }
 
     @Test
+    void consultarApertura_devuelveElMotivoDelCierreDeCaja() {
+        Sucursal sucursal = new Sucursal();
+        sucursal.setId(1);
+        when(sucursalService.findUnique()).thenReturn(Optional.of(sucursal));
+        when(cierreCajaService.motivoBloqueoTurno(1))
+                .thenReturn(Optional.of("La caja del 30/10/2026 quedó pendiente de cierre."));
+
+        assertThat(turnoService.consultarApertura().motivoBloqueo()).contains("pendiente de cierre");
+    }
+
+    @Test
+    void consultarApertura_sinBloqueo_noTraeMotivo() {
+        Sucursal sucursal = new Sucursal();
+        sucursal.setId(1);
+        when(sucursalService.findUnique()).thenReturn(Optional.of(sucursal));
+        when(cierreCajaService.motivoBloqueoTurno(1)).thenReturn(Optional.empty());
+
+        assertThat(turnoService.consultarApertura().motivoBloqueo()).isNull();
+    }
+
+    @Test
     void iniciarTurno_poneAlDiaElPaseAlmoneda() {
         // Given — abrir turno es uno de los disparadores del pase de almoneda (F11)
         mockSecurityContext("admin");

@@ -94,13 +94,19 @@ public class CierreCajaService {
     /**
      * Estado del cierre de un día para la pantalla del corte.
      *
-     * @param cierre       el cierre del día; {@code null} si sigue abierto
-     * @param diaPendiente el día ya pasó, tuvo movimientos y nadie lo cerró
-     * @param puedeCerrar  el rol del usuario puede cerrar este día y el día no está cerrado
-     * @param avisoCierre  si {@code puedeCerrar}, lo que hoy impide cerrarlo; {@code null} si nada
+     * @param cierre               el cierre del día; {@code null} si sigue abierto o si lo congeló el cierre
+     *                             de un día posterior
+     * @param cerrado              el día ya no admite operaciones (tiene cierre o lo congeló uno posterior)
+     * @param diaPendiente         el día ya pasó, tuvo movimientos y nadie lo cerró
+     * @param puedeCerrar          el rol del usuario puede cerrar este día, el día no está cerrado y, si ya
+     *                             pasó, quedó pendiente
+     * @param avisoCierre          si {@code puedeCerrar}, lo que hoy impide cerrarlo; {@code null} si nada
+     * @param primerDiaPendiente   el día pendiente más antiguo de la sucursal, sea cual sea el día mostrado;
+     *                             {@code null} si no hay
+     * @param puedeCerrarPendiente el rol del usuario puede cerrar días pendientes (Sistemas)
      */
-    public record EstadoCierre(CierreCajaResponse cierre, boolean diaPendiente, boolean puedeCerrar,
-                               String avisoCierre) {
+    public record EstadoCierre(CierreCajaResponse cierre, boolean cerrado, boolean diaPendiente, boolean puedeCerrar,
+                               String avisoCierre, LocalDate primerDiaPendiente, boolean puedeCerrarPendiente) {
     }
 
     /**
@@ -214,21 +220,31 @@ public class CierreCajaService {
      */
     @Transactional(readOnly = true)
     public void validarAperturaTurno(Integer sucursalId) {
+        motivoBloqueoTurno(sucursalId).ifPresent(motivo -> {
+            throw new BadRequestException(motivo);
+        });
+    }
+
+    /**
+     * Lo que hoy impide abrir turno (B-04), sin lanzar: la pantalla de turnos lo muestra antes de intentarlo.
+     *
+     * @param sucursalId sucursal del turno
+     * @return el motivo si la caja de hoy ya se cerró o hay un día pendiente de cierre; vacío si se puede abrir
+     */
+    @Transactional(readOnly = true)
+    public Optional<String> motivoBloqueoTurno(Integer sucursalId) {
         Optional<CajaArranque> arranque = cajaArranqueRepository.findById(sucursalId)
                 .filter(a -> Boolean.TRUE.equals(a.getConfirmado()));
         if (arranque.isEmpty()) {
-            return;
+            return Optional.empty();
         }
         LocalDate hoy = LocalDate.now(clock);
         if (congelado(arranque.get(), hoy)) {
-            throw new BadRequestException("La caja de hoy (" + dia(hoy) + ") ya se cerró: no se puede abrir "
-                    + "turno hasta mañana.");
+            return Optional.of("La caja de hoy (" + dia(hoy) + ") ya se cerró: no se puede abrir turno hasta mañana.");
         }
-        Optional<LocalDate> pendiente = primerDiaPorCerrar(sucursalId, arranque.get(), hoy);
-        if (pendiente.isPresent()) {
-            throw new BadRequestException("La caja del " + dia(pendiente.get()) + " quedó pendiente de cierre. "
-                    + "Sistemas debe revisar el corte y cerrar ese día antes de abrir turno.");
-        }
+        return primerDiaPorCerrar(sucursalId, arranque.get(), hoy)
+                .map(pendiente -> "La caja del " + dia(pendiente) + " quedó pendiente de cierre. "
+                        + "Sistemas debe revisar el corte y cerrar ese día antes de abrir turno.");
     }
 
     /**
@@ -264,12 +280,18 @@ public class CierreCajaService {
 
         boolean diaPendiente = !cerrado && pendiente && confirmado && corte.valido()
                 && primerDiaConMovimientos(sucursalId, fecha, fecha.plusDays(1)).isPresent();
-        boolean puedeCerrar = !cerrado && corte.valido() && usuarioTieneRol(username, rolesParaCerrar(pendiente));
+        // Un día que ya pasó solo se cierra si quedó pendiente; uno sin movimientos no tiene nada que cerrar
+        boolean puedeCerrar = !cerrado && corte.valido() && (!pendiente || diaPendiente)
+                && usuarioTieneRol(username, rolesParaCerrar(pendiente));
         String aviso = null;
         if (puedeCerrar) {
             aviso = confirmado ? impedimento(sucursalId, arranque.get(), fecha).orElse(null) : SIN_ARRANQUE;
         }
-        return new EstadoCierre(cierre.map(this::toResponse).orElse(null), diaPendiente, puedeCerrar, aviso);
+        LocalDate primerDiaPendiente = arranque.filter(a -> Boolean.TRUE.equals(a.getConfirmado()))
+                .flatMap(a -> primerDiaPorCerrar(sucursalId, a, hoy))
+                .orElse(null);
+        return new EstadoCierre(cierre.map(this::toResponse).orElse(null), cerrado, diaPendiente, puedeCerrar, aviso,
+                primerDiaPendiente, usuarioTieneRol(username, Constantes.ROLES_PERMITIDOS_CIERRE_CAJA_PENDIENTE));
     }
 
     /** Lo que impide cerrar un día: otro anterior pendiente o un turno abierto. */
@@ -284,8 +306,7 @@ public class CierreCajaService {
             Turno t = turno.get();
             String de = t.getUsuario() != null ? " de " + t.getUsuario().getNombreUsuario() : "";
             String desde = t.getFechaInicio() != null ? ", abierto el " + t.getFechaInicio().format(DD_MM_YYYY_HH_MM) : "";
-            return Optional.of("Hay un turno abierto (#" + t.getId() + de + desde
-                    + "): primero hay que cerrar el turno y después el día.");
+            return Optional.of("Primero cierra el turno: hay un turno abierto (#" + t.getId() + de + desde + ").");
         }
         return Optional.empty();
     }
