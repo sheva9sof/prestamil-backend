@@ -29,6 +29,7 @@ import com.ignis.prestamil.repository.UsuarioRepository;
 import com.ignis.prestamil.request.CancelarTraspasoCajaRequest;
 import com.ignis.prestamil.request.TraspasoCajaDenominacionRequest;
 import com.ignis.prestamil.request.TraspasoCajaRequest;
+import com.ignis.prestamil.response.TraspasoCajaContextoResponse;
 import com.ignis.prestamil.response.TraspasoCajaDenominacionResponse;
 import com.ignis.prestamil.response.TraspasoCajaResponse;
 import com.ignis.prestamil.util.Constantes;
@@ -279,6 +280,26 @@ class TraspasoCajaServiceIT {
         assertThat(delGerente.getNombreUsuario()).isEqualTo("gerente");
         em.flush();
         assertThat(saldoCajaService.saldoActual(boveda)).isEqualByComparingTo("1500.00");
+    }
+
+    @Test
+    void contexto_cajasDelTipoFechaDelServidorYPermisosPorRol() {
+        TraspasoCajaContextoResponse delCajero =
+                traspasoCajaService.contexto(SUCURSAL, TipoTraspasoCaja.CONCENTRACION, "cajero");
+        assertThat(delCajero.getFechaOperacion()).isEqualTo(HOY);
+        assertThat(delCajero.getCajaOrigen().getNombre()).isEqualTo("BÓVEDA");
+        assertThat(delCajero.getCajaDestino().getNombre()).isEqualTo("CUENTA CONCENTRADORA");
+        assertThat(delCajero.isPuedeRegistrar()).isFalse();
+        assertThat(delCajero.isPuedeCancelar()).isFalse();
+
+        assertThat(traspasoCajaService.contexto(SUCURSAL, TipoTraspasoCaja.MINISTRACION, "cajero")
+                .isPuedeRegistrar()).isTrue();
+        TraspasoCajaContextoResponse deSistemas =
+                traspasoCajaService.contexto(SUCURSAL, TipoTraspasoCaja.RECOLECCION, "sistemas");
+        assertThat(deSistemas.getCajaOrigen().getClave()).isEqualTo("003");
+        assertThat(deSistemas.getCajaDestino().getClave()).isEqualTo("002");
+        assertThat(deSistemas.isPuedeRegistrar()).isTrue();
+        assertThat(deSistemas.isPuedeCancelar()).isTrue();
     }
 
     @Test

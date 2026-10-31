@@ -24,6 +24,7 @@ import com.ignis.prestamil.request.CancelarTraspasoCajaRequest;
 import com.ignis.prestamil.request.TraspasoCajaDenominacionRequest;
 import com.ignis.prestamil.request.TraspasoCajaRequest;
 import com.ignis.prestamil.response.DenominacionResponse;
+import com.ignis.prestamil.response.TraspasoCajaContextoResponse;
 import com.ignis.prestamil.response.TraspasoCajaResponse;
 import com.ignis.prestamil.util.Constantes;
 import lombok.extern.slf4j.Slf4j;
@@ -168,6 +169,31 @@ public class TraspasoCajaService {
     }
 
     /**
+     * Datos con los que la pantalla de un traspaso arranca (CAJ-04): cajas de origen y destino que fija
+     * el tipo, fecha de operación del servidor y permisos del usuario. No valida el rol: quien no puede
+     * registrar ve la pantalla en modo consulta.
+     *
+     * @param sucursalId identificador de la sucursal
+     * @param tipo       tipo de traspaso
+     * @param username   usuario de la sesión
+     * @return cajas, fecha y permisos
+     * @throws ResourceNotFoundException si el usuario o alguna de las cajas no existen
+     */
+    @Transactional(readOnly = true)
+    public TraspasoCajaContextoResponse contexto(Integer sucursalId, TipoTraspasoCaja tipo, String username) {
+        Usuario usuario = usuario(username);
+        TraspasoCajaContextoResponse contexto = new TraspasoCajaContextoResponse();
+        contexto.setTipo(tipo);
+        contexto.setFechaOperacion(LocalDate.now(clock));
+        contexto.setCajaOrigen(cajaMapper.toCajaResponse(caja(sucursalId, tipo.origen())));
+        contexto.setCajaDestino(cajaMapper.toCajaResponse(caja(sucursalId, tipo.destino())));
+        contexto.setPuedeRegistrar(tieneRol(usuario, configuracionRoles(tipo)));
+        // TODO A-05: con AutorizacionService cualquiera podrá pedir la cancelación con autorización
+        contexto.setPuedeCancelar(tieneRol(usuario, Constantes.ROLES_PERMITIDOS_CANCELAR_TRASPASO));
+        return contexto;
+    }
+
+    /**
      * Denominaciones que se capturan en el desglose de un traspaso y en el arqueo, de mayor a menor.
      * Las inactivas (0.01 desde Q-10) no salen: el registro las rechaza.
      *
@@ -287,10 +313,14 @@ public class TraspasoCajaService {
     }
 
     private void validarRol(Usuario usuario, String configuracion, String mensaje) {
-        Integer rolId = usuario.getRol() != null ? usuario.getRol().getId() : null;
-        if (rolId == null || !rolesPermitidos(configuracion).contains(rolId)) {
+        if (!tieneRol(usuario, configuracion)) {
             throw new ForbiddenException(mensaje);
         }
+    }
+
+    private boolean tieneRol(Usuario usuario, String configuracion) {
+        Integer rolId = usuario.getRol() != null ? usuario.getRol().getId() : null;
+        return rolId != null && rolesPermitidos(configuracion).contains(rolId);
     }
 
     /** CSV de ids de rol de la configuración; conjunto vacío = nadie puede. */

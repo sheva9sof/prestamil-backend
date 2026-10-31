@@ -62,5 +62,6 @@
     <include file="db/changelog/changes/080-roles-permitidos-ministracion-cajero.sql"/>
     <include file="db/changelog/changes/081-denominacion-quitar-001-agregar-005.sql"/>
     <include file="db/changelog/changes/082-movimiento-caja-rp-rpx-a-refrendos.sql"/>
+    <include file="db/changelog/changes/083-menu-caja-traspasos.sql"/>
 
 </databaseChangeLog>
