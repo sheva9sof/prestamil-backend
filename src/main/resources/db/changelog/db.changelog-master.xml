@@ -59,5 +59,8 @@
     <include file="db/changelog/changes/077-backfill-pase-almoneda-detalle-snapshot.sql"/>
     <include file="db/changelog/changes/078-movimiento-pv-sin-turno.sql"/>
     <include file="db/changelog/changes/079-roles-permitidos-traspasos-caja.sql"/>
+    <include file="db/changelog/changes/080-roles-permitidos-ministracion-cajero.sql"/>
+    <include file="db/changelog/changes/081-denominacion-quitar-001-agregar-005.sql"/>
+    <include file="db/changelog/changes/082-movimiento-caja-rp-rpx-a-refrendos.sql"/>
 
 </databaseChangeLog>

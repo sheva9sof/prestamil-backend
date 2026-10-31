@@ -7,6 +7,7 @@ import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Repository
 public interface MovimientoCajaRepository extends BaseRepository<MovimientoCaja, Long> {
@@ -27,4 +28,19 @@ public interface MovimientoCajaRepository extends BaseRepository<MovimientoCaja,
     BigDecimal efectivoNeto(@Param("sucursalId") Integer sucursalId,
                             @Param("desde") LocalDateTime desde,
                             @Param("hasta") LocalDateTime hasta);
+
+    /**
+     * Flujos de caja de la sucursal en un periodo, en el orden en que se registraron (corte de caja).
+     *
+     * @param sucursalId identificador de la sucursal
+     * @param desde      inicio del periodo (inclusivo)
+     * @param hasta      fin del periodo (exclusivo)
+     * @return flujos del periodo
+     */
+    @Query("SELECT m FROM MovimientoCaja m "
+            + "WHERE m.sucursalId = :sucursalId AND m.fecha >= :desde AND m.fecha < :hasta "
+            + "ORDER BY m.id")
+    List<MovimientoCaja> delPeriodo(@Param("sucursalId") Integer sucursalId,
+                                   @Param("desde") LocalDateTime desde,
+                                   @Param("hasta") LocalDateTime hasta);
 }

@@ -23,6 +23,7 @@ import com.ignis.prestamil.repository.UsuarioRepository;
 import com.ignis.prestamil.request.CancelarTraspasoCajaRequest;
 import com.ignis.prestamil.request.TraspasoCajaDenominacionRequest;
 import com.ignis.prestamil.request.TraspasoCajaRequest;
+import com.ignis.prestamil.response.DenominacionResponse;
 import com.ignis.prestamil.response.TraspasoCajaResponse;
 import com.ignis.prestamil.util.Constantes;
 import lombok.extern.slf4j.Slf4j;
@@ -164,6 +165,17 @@ public class TraspasoCajaService {
                 ? traspasoCajaRepository.findBySucursalIdAndFechaOperacionAndTipoOrderByFolioAsc(sucursalId, dia, tipo)
                 : traspasoCajaRepository.findBySucursalIdAndFechaOperacionOrderByFolioAsc(sucursalId, dia);
         return cajaMapper.toTraspasoResponses(traspasos);
+    }
+
+    /**
+     * Denominaciones que se capturan en el desglose de un traspaso y en el arqueo, de mayor a menor.
+     * Las inactivas (0.01 desde Q-10) no salen: el registro las rechaza.
+     *
+     * @return denominaciones activas en su orden
+     */
+    @Transactional(readOnly = true)
+    public List<DenominacionResponse> denominacionesActivas() {
+        return cajaMapper.toDenominacionResponses(denominacionRepository.findByActivaTrueOrderByOrdenAsc());
     }
 
     /**

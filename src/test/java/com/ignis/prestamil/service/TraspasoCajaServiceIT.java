@@ -108,13 +108,14 @@ class TraspasoCajaServiceIT {
         boveda = caja(TipoCaja.BOVEDA, "002", "BÓVEDA");
         ventanilla = caja(TipoCaja.VENTANILLA, "003", "VENTANILLA");
 
-        // Las 14 de COCAE (074)
-        String[] valores = {"1000", "500", "200", "100", "50", "20", "10", "5", "2", "1", "0.50", "0.20", "0.10", "0.01"};
+        // Las 14 de COCAE (074) con el ajuste de 081 (Q-10): 0.01 inactiva al final y 0.05 en el lugar 14
+        String[] valores = {"1000", "500", "200", "100", "50", "20", "10", "5", "2", "1", "0.50", "0.20", "0.10", "0.05", "0.01"};
         for (int i = 0; i < valores.length; i++) {
             Denominacion d = new Denominacion();
             d.setValor(new BigDecimal(valores[i]).setScale(2));
             d.setTipo(i < 6 ? TipoDenominacion.BILLETE : TipoDenominacion.MONEDA);
             d.setOrden(i + 1);
+            d.setActiva(!"0.01".equals(valores[i]));
             denominaciones.put(valores[i], denominacionRepository.save(d));
         }
 
@@ -122,7 +123,7 @@ class TraspasoCajaServiceIT {
         cajero = usuario("cajero", rol(3, "Cajero"));
         gerente = usuario("gerente", rol(5, "Gerente"));
 
-        configuracion(Constantes.ROLES_PERMITIDOS_MINISTRACION, "5,1");
+        configuracion(Constantes.ROLES_PERMITIDOS_MINISTRACION, "5,3,1");  // 080 (Q-06)
         configuracion(Constantes.ROLES_PERMITIDOS_CONCENTRACION, "5,1");
         configuracion(Constantes.ROLES_PERMITIDOS_DOTACION, "5,3,1");
         configuracion(Constantes.ROLES_PERMITIDOS_RECOLECCION, "5,3,1");
@@ -254,10 +255,7 @@ class TraspasoCajaServiceIT {
     void rolNoPermitido_403() {
         traspasoAnterior(TipoTraspasoCaja.MINISTRACION, concentradora, boveda, "5000.00");
 
-        // El cajero no puede ministrar ni concentrar
-        assertThatThrownBy(() -> traspasoCajaService.registrar(SUCURSAL,
-                request(TipoTraspasoCaja.MINISTRACION, "1000", null, "1000", 1), "cajero"))
-                .isInstanceOf(ForbiddenException.class);
+        // El cajero no puede concentrar
         assertThatThrownBy(() -> traspasoCajaService.registrar(SUCURSAL,
                 request(TipoTraspasoCaja.CONCENTRACION, "1000", null, "1000", 1), "cajero"))
                 .isInstanceOf(ForbiddenException.class);
@@ -268,6 +266,36 @@ class TraspasoCajaServiceIT {
                 .isInstanceOf(ForbiddenException.class);
 
         assertThat(traspasoCajaService.listar(SUCURSAL, HOY, null)).isEmpty();
+    }
+
+    @Test
+    void ministracion_laRegistraElCajeroOElGerente_Q06() {
+        TraspasoCajaResponse delCajero = traspasoCajaService.registrar(SUCURSAL,
+                request(TipoTraspasoCaja.MINISTRACION, "1000", null, "1000", 1), "cajero");
+        TraspasoCajaResponse delGerente = traspasoCajaService.registrar(SUCURSAL,
+                request(TipoTraspasoCaja.MINISTRACION, "500", null, "500", 1), "gerente");
+
+        assertThat(delCajero.getNombreUsuario()).isEqualTo("cajero");
+        assertThat(delGerente.getNombreUsuario()).isEqualTo("gerente");
+        em.flush();
+        assertThat(saldoCajaService.saldoActual(boveda)).isEqualByComparingTo("1500.00");
+    }
+
+    @Test
+    void denominaciones_soloActivas_sinUnCentavoYConCincoCentavos_Q10() {
+        assertThat(traspasoCajaService.denominacionesActivas())
+                .hasSize(14)
+                .extracting(d -> d.getValor().toPlainString())
+                .startsWith("1000.00")
+                .endsWith("0.10", "0.05")
+                .doesNotContain("0.01");
+
+        assertThatThrownBy(() -> traspasoCajaService.registrar(SUCURSAL,
+                request(TipoTraspasoCaja.MINISTRACION, "1000.01", null, "1000", 1, "0.01", 1), "gerente"))
+                .isInstanceOf(BadRequestException.class);
+        assertThat(traspasoCajaService.registrar(SUCURSAL,
+                request(TipoTraspasoCaja.MINISTRACION, "1000.05", null, "1000", 1, "0.05", 1), "gerente")
+                .getImporte()).isEqualByComparingTo("1000.05");
     }
 
     @Test
