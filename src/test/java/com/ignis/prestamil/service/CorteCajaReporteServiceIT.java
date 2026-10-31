@@ -8,7 +8,7 @@ import com.ignis.prestamil.repository.ConfiguracionRepository;
 import com.ignis.prestamil.request.ReporteFiltro;
 import com.ignis.prestamil.service.calculo.CorteCajaSemilla;
 import com.ignis.prestamil.service.calculo.CorteCajaService;
-import com.ignis.prestamil.service.calculo.SaldoArranqueConfiguracionProvider;
+import com.ignis.prestamil.service.calculo.SaldoArranqueCajaProvider;
 import com.lowagie.text.pdf.PdfReader;
 import com.lowagie.text.pdf.parser.PdfTextExtractor;
 import jakarta.persistence.EntityManager;
@@ -55,7 +55,7 @@ import static org.assertj.core.api.Assertions.within;
 @ActiveProfiles("test")
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import({CorteCajaReporteService.class, CorteCajaConsultaService.class, CorteCajaService.class,
-        ResolutorRenglonCorte.class, SaldoArranqueConfiguracionProvider.class,
+        ResolutorRenglonCorte.class, SaldoArranqueCajaProvider.class, CierreCajaService.class,
         CorteCajaReporteServiceIT.Reloj.class})
 class CorteCajaReporteServiceIT {
 

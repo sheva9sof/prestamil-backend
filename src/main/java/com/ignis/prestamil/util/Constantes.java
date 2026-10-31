@@ -1,6 +1,7 @@
 package com.ignis.prestamil.util;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 public class Constantes {
 
@@ -56,7 +57,17 @@ public class Constantes {
     // Roles que pueden consultar el corte de caja de otra fecha (CAJ-07a). CSV de ids de rol; por defecto
     // Gerente (5) y Sistemas (1). El cajero ve siempre el corte de hoy, igual que OTR-01.
     public static final String ROLES_PERMITIDOS_CORTE_CAJA_OTRA_FECHA = "ROLES_PERMITIDOS_CORTE_CAJA_OTRA_FECHA";
+    // Cierre de día de caja (CAJ-06, B-04). CSV de ids de rol: el día en curso lo cierran Gerente (5) y
+    // Sistemas (1); un día que quedó pendiente, solo Sistemas, después de revisar el corte. Otro rol → 403.
+    public static final String ROLES_PERMITIDOS_CIERRE_CAJA = "ROLES_PERMITIDOS_CIERRE_CAJA";
+    public static final String ROLES_PERMITIDOS_CIERRE_CAJA_PENDIENTE = "ROLES_PERMITIDOS_CIERRE_CAJA_PENDIENTE";
+    // Captura del saldo de arranque de caja y de los últimos folios de COCAE (CAJ-06, B-04). Por defecto solo
+    // Sistemas (1), una sola vez por sucursal.
+    public static final String ROLES_PERMITIDOS_ARRANQUE_CAJA = "ROLES_PERMITIDOS_ARRANQUE_CAJA";
     public static final String NOMBRE_MENU_TURNO = "Turnos";
+    // Menús que gerente y Sistemas conservan sin turno abierto: el día se cierra sin turno, y un día
+    // pendiente impide abrirlo hasta que Sistemas lo cierre (CAJ-06, B-04).
+    public static final List<String> NOMBRES_MENU_CIERRE_CAJA = List.of("Caja", "Corte de caja", "Arranque de caja");
 
     // Contratos
     // D-09 / Q4: mínimo de caracteres de la descripción específica de cada partida (supuesto: 10,

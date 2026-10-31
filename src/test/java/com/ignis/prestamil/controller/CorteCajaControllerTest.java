@@ -10,6 +10,7 @@ import com.ignis.prestamil.model.Usuario;
 import com.ignis.prestamil.repository.ConfiguracionRepository;
 import com.ignis.prestamil.repository.SucursalRepository;
 import com.ignis.prestamil.repository.UsuarioRepository;
+import com.ignis.prestamil.service.CierreCajaService;
 import com.ignis.prestamil.service.CorteCajaConsultaService;
 import com.ignis.prestamil.service.CorteCajaReporteService;
 import com.ignis.prestamil.service.SucursalService;
@@ -70,6 +71,7 @@ class CorteCajaControllerTest {
             new UsernamePasswordAuthenticationToken("gerente", null, List.of());
 
     @Mock CorteCajaService corteCajaService;
+    @Mock CierreCajaService cierreCajaService;
     @Mock UsuarioRepository usuarioRepository;
     @Mock ConfiguracionRepository configuracionRepository;
     @Mock SucursalService sucursalService;
@@ -80,8 +82,11 @@ class CorteCajaControllerTest {
     @BeforeEach
     void setUp() {
         Clock clock = Clock.fixed(HOY.atStartOfDay(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
-        CorteCajaConsultaService service = new CorteCajaConsultaService(corteCajaService, usuarioRepository,
-                configuracionRepository, clock);
+        CorteCajaConsultaService service = new CorteCajaConsultaService(corteCajaService, cierreCajaService,
+                usuarioRepository, configuracionRepository, clock);
+        // El estado del cierre (CAJ-06) se prueba en CierreCajaServiceIT
+        lenient().when(cierreCajaService.estado(any(), any(), any(), any()))
+                .thenReturn(new CierreCajaService.EstadoCierre(null, false, false, null));
         CorteCajaReporteService reporte = new CorteCajaReporteService(service, sucursalRepository, clock);
         CorteCajaController controller = new CorteCajaController(service, reporte, sucursalService);
         // Mismo ObjectMapper que Spring Boot: fechas como "yyyy-MM-dd", no como arreglo.

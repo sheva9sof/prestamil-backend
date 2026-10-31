@@ -73,4 +73,19 @@ public interface TraspasoCajaRepository extends BaseRepository<TraspasoCaja, Lon
     List<TotalTraspasoDia> totalesPorDiaYTipo(@Param("sucursalId") Integer sucursalId,
                                               @Param("desde") LocalDate desde,
                                               @Param("hasta") LocalDate hasta);
+
+    /**
+     * Primer día con traspasos de la sucursal en un periodo, de cualquier estatus (cierre de día, CAJ-06):
+     * un traspaso cancelado también fue una operación de ese día.
+     *
+     * @param sucursalId identificador de la sucursal
+     * @param desde      primer día (inclusivo)
+     * @param hasta      último día (exclusivo)
+     * @return el primer día con traspasos, o {@code null} si no hubo ninguno
+     */
+    @Query("SELECT MIN(t.fechaOperacion) FROM TraspasoCaja t "
+            + "WHERE t.sucursalId = :sucursalId AND t.fechaOperacion >= :desde AND t.fechaOperacion < :hasta")
+    LocalDate primerDiaConTraspasos(@Param("sucursalId") Integer sucursalId,
+                                    @Param("desde") LocalDate desde,
+                                    @Param("hasta") LocalDate hasta);
 }

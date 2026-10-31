@@ -1,8 +1,10 @@
 package com.ignis.prestamil.service;
 
+import com.ignis.prestamil.exception.BadRequestException;
 import com.ignis.prestamil.exception.ResourceNotFoundException;
 import com.ignis.prestamil.exception.ValidationException;
 import com.ignis.prestamil.mapper.TurnoMapper;
+import com.ignis.prestamil.model.Sucursal;
 import com.ignis.prestamil.model.Turno;
 import com.ignis.prestamil.model.Usuario;
 import com.ignis.prestamil.repository.TurnoRepository;
@@ -42,6 +44,12 @@ class TurnoServiceTest {
 
     @Mock
     PaseAlmonedaService paseAlmonedaService;
+
+    @Mock
+    SucursalService sucursalService;
+
+    @Mock
+    CierreCajaService cierreCajaService;
 
     @InjectMocks
     TurnoService turnoService;
@@ -113,6 +121,26 @@ class TurnoServiceTest {
         assertThat(capturedTurno.getActivo()).isTrue();
         assertThat(capturedTurno.getFechaInicio()).isNotNull();
         assertThat(capturedTurno.getUsuario()).isEqualTo(usuarioAdmin);
+    }
+
+    @Test
+    void iniciarTurno_conDiaPendienteDeCierre_rechazaSinCrearTurnoNiDispararElPaseDesdeAqui() {
+        // Given — CAJ-06 (B-04): un día anterior quedó pendiente de cierre
+        mockSecurityContext("admin");
+        when(usuarioRepository.findByNombreUsuario("admin")).thenReturn(Optional.of(usuarioAdmin));
+        when(turnoRepository.findByActivo(true)).thenReturn(Optional.empty());
+        Sucursal sucursal = new Sucursal();
+        sucursal.setId(1);
+        when(sucursalService.findUnique()).thenReturn(Optional.of(sucursal));
+        doThrow(new BadRequestException("La caja del 30/10/2026 quedó pendiente de cierre."))
+                .when(cierreCajaService).validarAperturaTurno(1);
+
+        // When / Then
+        BadRequestException ex = assertThrows(BadRequestException.class, () -> turnoService.iniciarTurno());
+        assertThat(ex.getMessage()).contains("pendiente de cierre");
+        verify(turnoRepository, never()).save(any());
+        // El pase no depende del turno: corre al arrancar y a las 00:05 (PaseAlmonedaProgramador)
+        verify(paseAlmonedaService, never()).ejecutarPendientes();
     }
 
     @Test

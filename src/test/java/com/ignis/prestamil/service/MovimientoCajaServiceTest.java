@@ -38,6 +38,7 @@ class MovimientoCajaServiceTest {
 
     @Mock MovimientoCajaRepository repository;
     @Mock MovimientoContratoRepository movimientoContratoRepository;
+    @Mock CandadoCierreCaja candadoCierreCaja;
 
     private final Clock clock = Clock.fixed(
             LocalDateTime.of(2026, 10, 30, 11, 0).atZone(ZoneId.systemDefault()).toInstant(),
@@ -49,7 +50,7 @@ class MovimientoCajaServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new MovimientoCajaService(repository, movimientoContratoRepository, clock);
+        service = new MovimientoCajaService(repository, movimientoContratoRepository, candadoCierreCaja, clock);
         lenient().when(repository.save(any(MovimientoCaja.class))).thenAnswer(inv -> inv.getArgument(0));
         turno = new Turno();
         turno.setId(7);

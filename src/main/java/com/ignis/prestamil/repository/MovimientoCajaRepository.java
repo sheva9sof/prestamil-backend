@@ -25,4 +25,19 @@ public interface MovimientoCajaRepository extends BaseRepository<MovimientoCaja,
     List<MovimientoCaja> delPeriodo(@Param("sucursalId") Integer sucursalId,
                                    @Param("desde") LocalDateTime desde,
                                    @Param("hasta") LocalDateTime hasta);
+
+    /**
+     * Primer flujo de caja de la sucursal en un periodo (cierre de día, CAJ-06): el día que lo tiene es el
+     * primero que debe cerrarse.
+     *
+     * @param sucursalId identificador de la sucursal
+     * @param desde      inicio del periodo (inclusivo)
+     * @param hasta      fin del periodo (exclusivo)
+     * @return fecha y hora del primer flujo, o {@code null} si no hubo ninguno
+     */
+    @Query("SELECT MIN(m.fecha) FROM MovimientoCaja m "
+            + "WHERE m.sucursalId = :sucursalId AND m.fecha >= :desde AND m.fecha < :hasta")
+    LocalDateTime primerFlujo(@Param("sucursalId") Integer sucursalId,
+                              @Param("desde") LocalDateTime desde,
+                              @Param("hasta") LocalDateTime hasta);
 }
