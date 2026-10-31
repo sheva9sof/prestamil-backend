@@ -1,11 +1,9 @@
 package com.ignis.prestamil.service;
 
-import com.ignis.prestamil.exception.BadRequestException;
 import com.ignis.prestamil.model.Cliente;
 import com.ignis.prestamil.model.Configuracion;
 import com.ignis.prestamil.model.Contrato;
 import com.ignis.prestamil.model.Direccion;
-import com.ignis.prestamil.model.Empresa;
 import com.ignis.prestamil.model.PartidaContrato;
 import com.ignis.prestamil.model.PaseAlmonedaDetalle;
 import com.ignis.prestamil.model.Rol;
@@ -20,23 +18,16 @@ import com.ignis.prestamil.response.CarteraVencidaRow;
 import com.ignis.prestamil.response.PaseAVentaRow;
 import com.ignis.prestamil.response.ResultadosPaseAlmonedaResponse;
 import com.ignis.prestamil.util.Constantes;
+import com.ignis.prestamil.util.CsvReporte;
+import com.ignis.prestamil.util.EncabezadoReporte;
 import com.ignis.prestamil.util.FormatoDocumento;
+import com.ignis.prestamil.util.ReporteJasper;
 import lombok.RequiredArgsConstructor;
-import net.sf.jasperreports.engine.JRException;
-import net.sf.jasperreports.engine.JasperCompileManager;
-import net.sf.jasperreports.engine.JasperExportManager;
-import net.sf.jasperreports.engine.JasperFillManager;
-import net.sf.jasperreports.engine.JasperPrint;
-import net.sf.jasperreports.engine.JasperReport;
 import net.sf.jasperreports.engine.data.JRMapCollectionDataSource;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -53,23 +44,22 @@ import java.util.stream.Collectors;
 
 /**
  * Pantalla "Resultados del pase de almoneda" (C-11). Consulta por sucursal + fecha; devuelve dos
- * listas (cartera vencida y pase a venta) y las exporta a CSV (Excel) y a PDF (Jasper).
+ * listas (cartera vencida y pase a venta) y las exporta a CSV (Excel) y a PDF (Jasper). Usa la
+ * infraestructura común de reportes (REP-00): encabezado estándar, {@link ReporteJasper} y {@link CsvReporte}.
  */
 @Service
 @RequiredArgsConstructor
 public class PaseAlmonedaReporteService {
 
     private static final DateTimeFormatter FECHA = DateTimeFormatter.ofPattern("dd/MM/yyyy");
-    private static final DateTimeFormatter FECHA_HORA = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
+    private static final String PLANTILLA_CARTERA_VENCIDA = "jasper/pase-almoneda-cartera-vencida.jrxml";
+    private static final String PLANTILLA_PASE_A_VENTA = "jasper/pase-almoneda-pase-a-venta.jrxml";
 
     private final PaseAlmonedaDetalleRepository detalleRepository;
     private final SucursalRepository sucursalRepository;
     private final UsuarioRepository usuarioRepository;
     private final ConfiguracionRepository configuracionRepository;
     private final Clock clock;
-
-    private JasperReport reporteCarteraVencida; // cacheado (la plantilla no cambia en runtime)
-    private JasperReport reportePaseAVenta; // cacheado
 
     /**
      * Resultados de un pase (C-11). Si no se encuentran filas se devuelven listas vacias; la UI
@@ -172,15 +162,15 @@ public class PaseAlmonedaReporteService {
         StringBuilder sb = new StringBuilder();
         sb.append("Contrato,Cliente,Direccion,Telefono,Vencimiento,Saldo\n");
         for (CarteraVencidaRow f : filas) {
-            sb.append(csv(f.folioContrato())).append(',')
-                    .append(csv(f.cliente())).append(',')
-                    .append(csv(f.direccion())).append(',')
-                    .append(csv(f.telefono())).append(',')
-                    .append(csv(f.fechaVencimiento() != null ? f.fechaVencimiento().toString() : "")).append(',')
-                    .append(csv(f.saldoCapital() != null ? f.saldoCapital().toPlainString() : ""))
+            sb.append(CsvReporte.campo(f.folioContrato())).append(',')
+                    .append(CsvReporte.campo(f.cliente())).append(',')
+                    .append(CsvReporte.campo(f.direccion())).append(',')
+                    .append(CsvReporte.campo(f.telefono())).append(',')
+                    .append(CsvReporte.campo(f.fechaVencimiento() != null ? f.fechaVencimiento().toString() : "")).append(',')
+                    .append(CsvReporte.campo(f.saldoCapital() != null ? f.saldoCapital().toPlainString() : ""))
                     .append('\n');
         }
-        return conBom(sb.toString());
+        return CsvReporte.conBom(sb.toString());
     }
 
     @Transactional(readOnly = true)
@@ -189,13 +179,13 @@ public class PaseAlmonedaReporteService {
         StringBuilder sb = new StringBuilder();
         sb.append("Contrato,Partida,Descripcion,Fecha de pase\n");
         for (PaseAVentaRow f : filas) {
-            sb.append(csv(f.folioContrato())).append(',')
-                    .append(csv(f.numPartida() != null ? f.numPartida().toString() : "")).append(',')
-                    .append(csv(f.descripcion())).append(',')
-                    .append(csv(f.fechaPase() != null ? f.fechaPase().toString() : ""))
+            sb.append(CsvReporte.campo(f.folioContrato())).append(',')
+                    .append(CsvReporte.campo(f.numPartida() != null ? f.numPartida().toString() : "")).append(',')
+                    .append(CsvReporte.campo(f.descripcion())).append(',')
+                    .append(CsvReporte.campo(f.fechaPase() != null ? f.fechaPase().toString() : ""))
                     .append('\n');
         }
-        return conBom(sb.toString());
+        return CsvReporte.conBom(sb.toString());
     }
 
     /**
@@ -219,7 +209,8 @@ public class PaseAlmonedaReporteService {
                         "vencimiento", f.fechaVencimiento() != null ? f.fechaVencimiento().format(FECHA) : null,
                         "saldo", FormatoDocumento.money(f.saldoCapital())))
                 .toList();
-        return generarPdf(getReporteCarteraVencida(), params, datos);
+        return ReporteJasper.pdf(ReporteJasper.plantilla(PLANTILLA_CARTERA_VENCIDA), params,
+                new JRMapCollectionDataSource(datos));
     }
 
     /**
@@ -241,7 +232,8 @@ public class PaseAlmonedaReporteService {
                         "descripcion", f.descripcion(),
                         "fechaPase", f.fechaPase() != null ? f.fechaPase().format(FECHA) : null))
                 .toList();
-        return generarPdf(getReportePaseAVenta(), params, datos);
+        return ReporteJasper.pdf(ReporteJasper.plantilla(PLANTILLA_PASE_A_VENTA), params,
+                new JRMapCollectionDataSource(datos));
     }
 
     /** Parámetros del PDF de cartera vencida. Package-private para verificar totales en tests. */
@@ -250,7 +242,8 @@ public class PaseAlmonedaReporteService {
                 .map(CarteraVencidaRow::saldoCapital)
                 .filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-        Map<String, Object> params = encabezado(sucursalId, fecha);
+        Map<String, Object> params = encabezado(sucursalId, fecha,
+                "RESULTADOS DEL PASE DE ALMONEDA - CARTERA VENCIDA");
         params.put("P_TOTALES", "Contratos: " + filas.size() + "     Saldo total: " + FormatoDocumento.money(saldoTotal));
         params.put("P_SIN_DATOS", filas.isEmpty());
         return params;
@@ -258,24 +251,26 @@ public class PaseAlmonedaReporteService {
 
     /** Parámetros del PDF de pase a venta. Package-private para verificar totales en tests. */
     Map<String, Object> parametrosPaseAVenta(Integer sucursalId, LocalDate fecha, List<PaseAVentaRow> filas) {
-        Map<String, Object> params = encabezado(sucursalId, fecha);
+        Map<String, Object> params = encabezado(sucursalId, fecha, "RESULTADOS DEL PASE DE ALMONEDA - PASE A VENTA");
         params.put("P_TOTALES", "Prendas: " + filas.size());
         params.put("P_SIN_DATOS", filas.isEmpty());
         return params;
     }
 
-    /** Encabezado común: empresa, sucursal, fecha del pase y fecha de impresión. */
-    private Map<String, Object> encabezado(Integer sucursalId, LocalDate fecha) {
+    /**
+     * Encabezado estándar (REP-00) con los textos de siempre del pase: la sucursal con su domicilio y
+     * "Fecha del pase: …" en la línea de fechas. Sin razón social ni código RPT, para no cambiar el PDF.
+     * {@code P_FECHA_PASE} repite la fecha para el pie de página.
+     */
+    private Map<String, Object> encabezado(Integer sucursalId, LocalDate fecha, String titulo) {
         Sucursal sucursal = sucursalRepository.findById(sucursalId).orElse(null);
-        Empresa empresa = sucursal != null ? sucursal.getEmpresa() : null;
-        Map<String, Object> params = new HashMap<>();
-        params.put("P_EMPRESA", empresa != null && empresa.getNombre() != null
-                ? empresa.getNombre().toUpperCase() : "PRESTAMIL");
-        params.put("P_SUCURSAL", sucursal == null ? "" : "Sucursal "
+        String lineaSucursal = sucursal == null ? "" : "Sucursal "
                 + (sucursal.getNumeroSucursal() != null ? sucursal.getNumeroSucursal() + " " : "")
-                + nullSafe(sucursal.getNombre()) + " - " + FormatoDocumento.domicilio(sucursal));
-        params.put("P_FECHA_PASE", "Fecha del pase: " + fecha.format(FECHA));
-        params.put("P_IMPRESO", "Impreso: " + LocalDateTime.now(clock).format(FECHA_HORA));
+                + nullSafe(sucursal.getNombre()) + " - " + FormatoDocumento.domicilio(sucursal);
+        String fechaPase = "Fecha del pase: " + fecha.format(FECHA);
+        Map<String, Object> params = new EncabezadoReporte(EncabezadoReporte.empresa(sucursal), null, lineaSucursal,
+                titulo, fechaPase, EncabezadoReporte.impreso(LocalDateTime.now(clock)), null).parametros();
+        params.put("P_FECHA_PASE", fechaPase);
         return params;
     }
 
@@ -286,37 +281,6 @@ public class PaseAlmonedaReporteService {
             fila.put(clavesYValores[i], clavesYValores[i + 1]);
         }
         return fila;
-    }
-
-    private byte[] generarPdf(JasperReport reporte, Map<String, Object> params, List<Map<String, ?>> datos) {
-        try {
-            JasperPrint print = JasperFillManager.fillReport(reporte, params, new JRMapCollectionDataSource(datos));
-            return JasperExportManager.exportReportToPdf(print);
-        } catch (JRException e) {
-            throw new BadRequestException("No se pudo generar el PDF del pase de almoneda: " + e.getMessage());
-        }
-    }
-
-    private synchronized JasperReport getReporteCarteraVencida() {
-        if (reporteCarteraVencida == null) {
-            reporteCarteraVencida = compilar("jasper/pase-almoneda-cartera-vencida.jrxml");
-        }
-        return reporteCarteraVencida;
-    }
-
-    private synchronized JasperReport getReportePaseAVenta() {
-        if (reportePaseAVenta == null) {
-            reportePaseAVenta = compilar("jasper/pase-almoneda-pase-a-venta.jrxml");
-        }
-        return reportePaseAVenta;
-    }
-
-    private JasperReport compilar(String ruta) {
-        try (InputStream is = new ClassPathResource(ruta).getInputStream()) {
-            return JasperCompileManager.compileReport(is);
-        } catch (IOException | JRException e) {
-            throw new BadRequestException("No se pudo cargar la plantilla del pase de almoneda: " + e.getMessage());
-        }
     }
 
     private CarteraVencidaRow toCarteraVencida(PaseAlmonedaDetalle detalle) {
@@ -385,25 +349,5 @@ public class PaseAlmonedaReporteService {
 
     private String nullSafe(String s) {
         return s == null ? "" : s;
-    }
-
-    /** Escapa un campo CSV: comillas dobles si contiene coma, comilla o salto de linea. */
-    private String csv(String s) {
-        if (s == null || s.isEmpty()) {
-            return "";
-        }
-        boolean needQuotes = s.indexOf(',') >= 0 || s.indexOf('"') >= 0 || s.indexOf('\n') >= 0;
-        String escaped = s.replace("\"", "\"\"");
-        return needQuotes ? "\"" + escaped + "\"" : escaped;
-    }
-
-    /** Antepone el BOM UTF-8 para que Excel detecte el encoding al abrir el .csv. */
-    private byte[] conBom(String contenido) {
-        byte[] bom = new byte[]{(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
-        byte[] body = contenido.getBytes(StandardCharsets.UTF_8);
-        byte[] out = new byte[bom.length + body.length];
-        System.arraycopy(bom, 0, out, 0, bom.length);
-        System.arraycopy(body, 0, out, bom.length, body.length);
-        return out;
     }
 }
