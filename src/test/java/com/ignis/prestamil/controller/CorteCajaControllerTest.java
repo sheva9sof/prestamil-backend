@@ -86,7 +86,7 @@ class CorteCajaControllerTest {
                 usuarioRepository, configuracionRepository, clock);
         // El estado del cierre (CAJ-06) se prueba en CierreCajaServiceIT
         lenient().when(cierreCajaService.estado(any(), any(), any(), any()))
-                .thenReturn(new CierreCajaService.EstadoCierre(null, false, false, null));
+                .thenReturn(new CierreCajaService.EstadoCierre(null, false, false, false, null, null, false));
         CorteCajaReporteService reporte = new CorteCajaReporteService(service, sucursalRepository, clock);
         CorteCajaController controller = new CorteCajaController(service, reporte, sucursalService);
         // Mismo ObjectMapper que Spring Boot: fechas como "yyyy-MM-dd", no como arreglo.

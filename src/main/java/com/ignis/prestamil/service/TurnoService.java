@@ -8,6 +8,7 @@ import com.ignis.prestamil.model.Turno;
 import com.ignis.prestamil.model.Usuario;
 import com.ignis.prestamil.repository.TurnoRepository;
 import com.ignis.prestamil.repository.UsuarioRepository;
+import com.ignis.prestamil.response.AperturaTurnoResponse;
 import com.ignis.prestamil.response.TurnoResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -26,6 +27,18 @@ public class TurnoService {
     private final PaseAlmonedaService paseAlmonedaService;
     private final SucursalService sucursalService;
     private final CierreCajaService cierreCajaService;
+
+    /**
+     * Revisa si el cierre de caja impide abrir turno hoy (CAJ-06, B-04), para avisarlo antes de intentarlo.
+     *
+     * @return la respuesta con el motivo del bloqueo; sin motivo si nada lo impide
+     */
+    @Transactional(readOnly = true)
+    public AperturaTurnoResponse consultarApertura() {
+        return new AperturaTurnoResponse(sucursalService.findUnique().map(Sucursal::getId)
+                .flatMap(cierreCajaService::motivoBloqueoTurno)
+                .orElse(null));
+    }
 
     @Transactional
     public TurnoResponse iniciarTurno() {

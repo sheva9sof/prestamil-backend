@@ -65,8 +65,9 @@ public class CorteCajaConsultaService {
         }
         CorteCajaResultado corte = corteCajaService.calcular(sucursalId, fecha);
         CierreCajaService.EstadoCierre cierre = cierreCajaService.estado(sucursalId, fecha, corte, username);
-        return new CorteCajaResponse(fecha, hoy, puedeElegirFecha, corte, cierre.cierre(), cierre.diaPendiente(),
-                cierre.puedeCerrar(), cierre.avisoCierre());
+        return new CorteCajaResponse(fecha, hoy, puedeElegirFecha, corte, cierre.cierre(), cierre.cerrado(),
+                cierre.diaPendiente(), cierre.puedeCerrar(), cierre.avisoCierre(), cierre.primerDiaPendiente(),
+                cierre.puedeCerrarPendiente());
     }
 
     /**

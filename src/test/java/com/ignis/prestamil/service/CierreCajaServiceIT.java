@@ -170,14 +170,76 @@ class CierreCajaServiceIT {
 
         assertThatThrownBy(() -> cierreCajaService.cerrar(SUCURSAL, HOY, "gerente"))
                 .isInstanceOf(BadRequestException.class)
-                .hasMessageContaining("turno abierto")
-                .hasMessageContaining("primero hay que cerrar el turno");
+                .hasMessageStartingWith("Primero cierra el turno")
+                .hasMessageContaining("turno abierto");
         assertThat(cierreCajaDiarioRepository.count()).isZero();
 
         // La pantalla deja el botón, pero dice por qué no se puede todavía
         var pantalla = corteCajaConsultaService.consultar(SUCURSAL, HOY, "gerente");
         assertThat(pantalla.puedeCerrar()).isTrue();
-        assertThat(pantalla.avisoCierre()).contains("turno abierto");
+        assertThat(pantalla.avisoCierre()).startsWith("Primero cierra el turno");
+    }
+
+    @Test
+    void pantalla_elCajeroNuncaPuedeCerrar() {
+        semilla.arranque(HOY, "10000.00");
+
+        var pantalla = corteCajaConsultaService.consultar(SUCURSAL, HOY, cajero.getNombreUsuario());
+
+        assertThat(pantalla.puedeCerrar()).isFalse();
+        assertThat(pantalla.puedeCerrarPendiente()).isFalse();
+    }
+
+    @Test
+    void pantalla_unDiaPasadoSinMovimientosNoOfreceCerrar_niASistemas() {
+        semilla.arranque(AYER, "10000.00");
+
+        var pantalla = corteCajaConsultaService.consultar(SUCURSAL, AYER, "sistemas");
+
+        assertThat(pantalla.diaPendiente()).isFalse();
+        assertThat(pantalla.puedeCerrar()).isFalse();
+        assertThat(pantalla.primerDiaPendiente()).isNull();
+    }
+
+    @Test
+    void pantalla_avisaDelDiaPendienteAunqueSeVeaHoy_ySoloSistemasPuedeIrACerrarlo() {
+        semilla.arranque(AYER.minusDays(1), "10000.00");
+        semilla.traspaso(TipoTraspasoCaja.DOTACION, "500.00", AYER);
+        em.flush();
+
+        var gerente = corteCajaConsultaService.consultar(SUCURSAL, HOY, "gerente");
+        assertThat(gerente.primerDiaPendiente()).isEqualTo(AYER);
+        assertThat(gerente.puedeCerrarPendiente()).isFalse();
+        // Hoy sigue con su botón, pero no se cierra antes que el pendiente
+        assertThat(gerente.puedeCerrar()).isTrue();
+        assertThat(gerente.avisoCierre()).contains("Primero hay que cerrar el 30/10/2026");
+
+        var sistemas = corteCajaConsultaService.consultar(SUCURSAL, HOY, "sistemas");
+        assertThat(sistemas.primerDiaPendiente()).isEqualTo(AYER);
+        assertThat(sistemas.puedeCerrarPendiente()).isTrue();
+
+        var pendiente = corteCajaConsultaService.consultar(SUCURSAL, AYER, "sistemas");
+        assertThat(pendiente.diaPendiente()).isTrue();
+        assertThat(pendiente.puedeCerrar()).isTrue();
+        assertThat(pendiente.avisoCierre()).isNull();
+    }
+
+    @Test
+    void pantalla_unDiaCongeladoPorUnCierrePosteriorSeVeCerrado() {
+        semilla.arranque(AYER.minusDays(1), "10000.00");
+        semilla.traspaso(TipoTraspasoCaja.DOTACION, "500.00", HOY);
+        em.flush();
+        cierreCajaService.cerrar(SUCURSAL, HOY, "gerente");
+
+        // Ayer no tuvo movimientos ni cierre propio, pero ya quedó congelado
+        var pantalla = corteCajaConsultaService.consultar(SUCURSAL, AYER, "sistemas");
+        assertThat(pantalla.cierre()).isNull();
+        assertThat(pantalla.cerrado()).isTrue();
+        assertThat(pantalla.puedeCerrar()).isFalse();
+
+        var hoy = corteCajaConsultaService.consultar(SUCURSAL, HOY, "gerente");
+        assertThat(hoy.cerrado()).isTrue();
+        assertThat(hoy.cierre().usuario()).isEqualTo("gerente");
     }
 
     @Test
@@ -187,6 +249,8 @@ class CierreCajaServiceIT {
         em.flush();
 
         assertThat(cierreCajaService.diaPendiente(SUCURSAL)).contains(AYER);
+        assertThat(cierreCajaService.motivoBloqueoTurno(SUCURSAL)).hasValueSatisfying(motivo ->
+                assertThat(motivo).contains("30/10/2026 quedó pendiente de cierre"));
         assertThatThrownBy(() -> cierreCajaService.validarAperturaTurno(SUCURSAL))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("La caja del 30/10/2026 quedó pendiente de cierre")
@@ -198,6 +262,7 @@ class CierreCajaServiceIT {
         semilla.arranque(AYER.minusDays(1), "10000.00");
 
         assertThat(cierreCajaService.diaPendiente(SUCURSAL)).isEmpty();
+        assertThat(cierreCajaService.motivoBloqueoTurno(SUCURSAL)).isEmpty();
         assertThatCode(() -> cierreCajaService.validarAperturaTurno(SUCURSAL)).doesNotThrowAnyException();
     }
 

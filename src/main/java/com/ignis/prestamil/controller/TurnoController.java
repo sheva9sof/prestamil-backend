@@ -1,5 +1,6 @@
 package com.ignis.prestamil.controller;
 
+import com.ignis.prestamil.response.AperturaTurnoResponse;
 import com.ignis.prestamil.response.TurnoResponse;
 import com.ignis.prestamil.service.TurnoService;
 import lombok.RequiredArgsConstructor;
@@ -48,5 +49,14 @@ public class TurnoController {
         log.info("Petición recibida: Obtener Turno Activo");
         TurnoResponse turnoResponse = turnoService.obtenerTurnoActivo();
         return ResponseEntity.ok(turnoResponse);
+    }
+
+    /**
+     * Si el cierre de caja impide abrir turno hoy (CAJ-06): la pantalla de turnos avisa antes de intentarlo.
+     * GET /api/turnos/apertura
+     */
+    @GetMapping("/apertura")
+    public ResponseEntity<AperturaTurnoResponse> consultarApertura() {
+        return ResponseEntity.ok(turnoService.consultarApertura());
     }
 }
