@@ -6,9 +6,9 @@ import com.ignis.prestamil.response.ResultadosPaseAlmonedaResponse;
 import com.ignis.prestamil.service.PaseAlmonedaReporteService;
 import com.ignis.prestamil.service.PaseAlmonedaService;
 import com.ignis.prestamil.service.SucursalService;
+import com.ignis.prestamil.util.RespuestaReporte;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -55,7 +55,7 @@ public class PaseAlmonedaController {
             Authentication authentication) {
         LocalDate fechaPase = reporteService.fechaPermitida(authentication.getName(), fecha);
         byte[] body = reporteService.exportarCarteraVencidaCsv(sucursalId(), fechaPase);
-        return csvResponse(body, "cartera-vencida-" + fechaPase + ".csv");
+        return RespuestaReporte.csv(body, "cartera-vencida-" + fechaPase + ".csv");
     }
 
     /** Exportacion CSV (UTF-8 BOM) de la pestaña "Pase a venta". */
@@ -65,7 +65,7 @@ public class PaseAlmonedaController {
             Authentication authentication) {
         LocalDate fechaPase = reporteService.fechaPermitida(authentication.getName(), fecha);
         byte[] body = reporteService.exportarPaseAVentaCsv(sucursalId(), fechaPase);
-        return csvResponse(body, "pase-a-venta-" + fechaPase + ".csv");
+        return RespuestaReporte.csv(body, "pase-a-venta-" + fechaPase + ".csv");
     }
 
     /** Reporte PDF de la pestaña "Cartera vencida" (reemplaza la impresion del navegador). */
@@ -75,7 +75,7 @@ public class PaseAlmonedaController {
             Authentication authentication) {
         LocalDate fechaPase = reporteService.fechaPermitida(authentication.getName(), fecha);
         byte[] body = reporteService.exportarCarteraVencidaPdf(sucursalId(), fechaPase);
-        return pdfResponse(body, "cartera-vencida-" + fechaPase + ".pdf");
+        return RespuestaReporte.pdf(body, "cartera-vencida-" + fechaPase + ".pdf");
     }
 
     /** Reporte PDF de la pestaña "Pase a venta". */
@@ -85,25 +85,11 @@ public class PaseAlmonedaController {
             Authentication authentication) {
         LocalDate fechaPase = reporteService.fechaPermitida(authentication.getName(), fecha);
         byte[] body = reporteService.exportarPaseAVentaPdf(sucursalId(), fechaPase);
-        return pdfResponse(body, "pase-a-venta-" + fechaPase + ".pdf");
+        return RespuestaReporte.pdf(body, "pase-a-venta-" + fechaPase + ".pdf");
     }
 
     private Integer sucursalId() {
         return sucursalService.findUnique().map(Sucursal::getId)
                 .orElseThrow(() -> new ResourceNotFoundException("Sucursal no configurada"));
-    }
-
-    private ResponseEntity<byte[]> csvResponse(byte[] body, String filename) {
-        return ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType("text/csv; charset=UTF-8"))
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
-                .body(body);
-    }
-
-    private ResponseEntity<byte[]> pdfResponse(byte[] body, String filename) {
-        return ResponseEntity.ok()
-                .contentType(MediaType.APPLICATION_PDF)
-                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + filename + "\"")
-                .body(body);
     }
 }

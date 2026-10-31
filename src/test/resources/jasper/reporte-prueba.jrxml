@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Reporte mínimo para probar la infraestructura de REP-00 (ReporteJasperTest): encabezado estándar en
+     carta horizontal, una columna de texto y una numérica. Sirve también de ejemplo para los reportes nuevos. -->
+<jasperReport xmlns="http://jasperreports.sourceforge.net/jasperreports" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://jasperreports.sourceforge.net/jasperreports http://jasperreports.sourceforge.net/xsd/jasperreport.xsd" name="reporte-prueba" pageWidth="792" pageHeight="612" orientation="Landscape" whenNoDataType="AllSectionsNoDetail" columnWidth="736" leftMargin="28" rightMargin="28" topMargin="28" bottomMargin="28">
+	<property name="net.sf.jasperreports.awt.ignore.missing.font" value="true"/>
+	<style name="Base" isDefault="true" fontName="Arial" fontSize="8"/>
+	<parameter name="P_ENCABEZADO" class="net.sf.jasperreports.engine.JasperReport"/>
+	<parameter name="P_EMPRESA" class="java.lang.String"/>
+	<parameter name="P_RAZON_SOCIAL" class="java.lang.String"/>
+	<parameter name="P_SUCURSAL" class="java.lang.String"/>
+	<parameter name="P_TITULO" class="java.lang.String"/>
+	<parameter name="P_FECHAS" class="java.lang.String"/>
+	<parameter name="P_IMPRESO" class="java.lang.String"/>
+	<parameter name="P_CODIGO_RPT" class="java.lang.String"/>
+	<field name="concepto" class="java.lang.String"/>
+	<field name="importe" class="java.math.BigDecimal"/>
+	<title>
+		<band height="81" splitType="Stretch">
+			<subreport>
+				<reportElement x="0" y="0" width="736" height="81"/>
+				<parametersMapExpression><![CDATA[$P{REPORT_PARAMETERS_MAP}]]></parametersMapExpression>
+				<dataSourceExpression><![CDATA[new net.sf.jasperreports.engine.JREmptyDataSource(1)]]></dataSourceExpression>
+				<subreportExpression><![CDATA[$P{P_ENCABEZADO}]]></subreportExpression>
+			</subreport>
+		</band>
+	</title>
+	<detail>
+		<band height="14" splitType="Stretch">
+			<textField isBlankWhenNull="true">
+				<reportElement x="0" y="0" width="600" height="14"/>
+				<textFieldExpression><![CDATA[$F{concepto}]]></textFieldExpression>
+			</textField>
+			<textField pattern="#,##0.00" isBlankWhenNull="true">
+				<reportElement x="600" y="0" width="136" height="14"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$F{importe}]]></textFieldExpression>
+			</textField>
+		</band>
+	</detail>
+</jasperReport>

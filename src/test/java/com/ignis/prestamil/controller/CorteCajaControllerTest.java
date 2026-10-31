@@ -8,8 +8,10 @@ import com.ignis.prestamil.model.Rol;
 import com.ignis.prestamil.model.Sucursal;
 import com.ignis.prestamil.model.Usuario;
 import com.ignis.prestamil.repository.ConfiguracionRepository;
+import com.ignis.prestamil.repository.SucursalRepository;
 import com.ignis.prestamil.repository.UsuarioRepository;
 import com.ignis.prestamil.service.CorteCajaConsultaService;
+import com.ignis.prestamil.service.CorteCajaReporteService;
 import com.ignis.prestamil.service.SucursalService;
 import com.ignis.prestamil.service.calculo.CorteCajaResultado;
 import com.ignis.prestamil.service.calculo.CorteCajaService;
@@ -19,6 +21,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.converter.ByteArrayHttpMessageConverter;
 import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -41,13 +46,16 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * CAJ-07a: el cajero solo ve el corte de hoy; gerente y Sistemas pueden pedir otro día (como OTR-01).
- * Controlador y servicio de consulta reales; el motor del corte es mock: aquí se prueba qué día se
- * calcula y cómo llega al frontend, no las cifras (eso es {@code CorteCajaServiceIT}).
+ * CAJ-07a y REP-04: el cajero solo ve y saca el corte de hoy; gerente y Sistemas pueden pedir otro día
+ * (como OTR-01). Controlador, servicio de consulta y reporte reales; el motor del corte es mock: aquí se
+ * prueba qué día se calcula y cómo llega al frontend, no las cifras (eso es {@code CorteCajaServiceIT} y
+ * {@code CorteCajaReporteServiceIT}).
  */
 @ExtendWith(MockitoExtension.class)
 class CorteCajaControllerTest {
@@ -65,6 +73,7 @@ class CorteCajaControllerTest {
     @Mock UsuarioRepository usuarioRepository;
     @Mock ConfiguracionRepository configuracionRepository;
     @Mock SucursalService sucursalService;
+    @Mock SucursalRepository sucursalRepository;
 
     MockMvc mockMvc;
 
@@ -73,14 +82,15 @@ class CorteCajaControllerTest {
         Clock clock = Clock.fixed(HOY.atStartOfDay(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
         CorteCajaConsultaService service = new CorteCajaConsultaService(corteCajaService, usuarioRepository,
                 configuracionRepository, clock);
-        CorteCajaController controller = new CorteCajaController(service, sucursalService);
+        CorteCajaReporteService reporte = new CorteCajaReporteService(service, sucursalRepository, clock);
+        CorteCajaController controller = new CorteCajaController(service, reporte, sucursalService);
         // Mismo ObjectMapper que Spring Boot: fechas como "yyyy-MM-dd", no como arreglo.
         MappingJackson2HttpMessageConverter json = new MappingJackson2HttpMessageConverter(
                 Jackson2ObjectMapperBuilder.json()
                         .featuresToDisable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS).build());
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
-                .setMessageConverters(json)
+                .setMessageConverters(new ByteArrayHttpMessageConverter(), json)
                 .build();
 
         Sucursal sucursal = new Sucursal();
@@ -164,6 +174,65 @@ class CorteCajaControllerTest {
                 .andExpect(jsonPath("$.corte.renglones", hasSize(0)))
                 .andExpect(jsonPath("$.corte.diferencia").doesNotExist())
                 .andExpect(jsonPath("$.corte.saldoFinal").doesNotExist());
+    }
+
+    @Test
+    void pdf_cajeroPideOtraFecha_saleElDeHoy() throws Exception {
+        mockMvc.perform(get("/api/caja/corte/pdf").param("desde", OTRA_FECHA.toString()).principal(CAJERO))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_PDF))
+                .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION,
+                        "inline; filename=\"corte-caja-" + HOY + ".pdf\""));
+
+        verify(corteCajaService).calcular(SUCURSAL, HOY);
+        verify(corteCajaService, never()).calcular(SUCURSAL, OTRA_FECHA);
+    }
+
+    @Test
+    void excel_gerentePideOtraFecha_saleEsaFecha() throws Exception {
+        mockMvc.perform(get("/api/caja/corte/excel").param("desde", OTRA_FECHA.toString()).principal(GERENTE))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"corte-caja-" + OTRA_FECHA + ".xlsx\""));
+
+        verify(corteCajaService).calcular(SUCURSAL, OTRA_FECHA);
+    }
+
+    @Test
+    void pdf_sinArranque_200ConElAviso() throws Exception {
+        lenient().when(corteCajaService.calcular(SUCURSAL, HOY))
+                .thenReturn(CorteCajaResultado.sinCifras(SUCURSAL, HOY, "Sin saldo de arranque."));
+
+        mockMvc.perform(get("/api/caja/corte/pdf").principal(CAJERO))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_PDF));
+    }
+
+    @Test
+    void pdf_rango_400() throws Exception {
+        mockMvc.perform(get("/api/caja/corte/pdf").principal(GERENTE)
+                        .param("desde", OTRA_FECHA.minusDays(1).toString()).param("hasta", OTRA_FECHA.toString()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", containsString("un solo día")));
+
+        verify(corteCajaService, never()).calcular(any(), any());
+    }
+
+    @Test
+    void excel_conRamo_400() throws Exception {
+        mockMvc.perform(get("/api/caja/corte/excel").principal(GERENTE).param("ramo", "1"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", containsString("ramo")));
+    }
+
+    @Test
+    void pdf_gerentePideDiaFuturo_400() throws Exception {
+        mockMvc.perform(get("/api/caja/corte/pdf").param("desde", HOY.plusDays(1).toString()).principal(GERENTE))
+                .andExpect(status().isBadRequest());
+
+        verify(corteCajaService, never()).calcular(any(), any());
     }
 
     /** Dotación de 5,000, un empeño de 1,000 y un refrendo de 200 con tarjeta: quedan 4,000 en la gaveta. */
