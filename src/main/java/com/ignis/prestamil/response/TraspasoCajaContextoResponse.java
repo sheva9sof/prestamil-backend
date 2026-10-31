@@ -22,4 +22,6 @@ public class TraspasoCajaContextoResponse {
     private boolean puedeRegistrar;
     /** El rol del usuario está en {@code ROLES_PERMITIDOS_CANCELAR_TRASPASO}. */
     private boolean puedeCancelar;
+    /** La caja de hoy ya se cerró (CAJ-06): no se registra ni se cancela nada. */
+    private boolean diaCerrado;
 }

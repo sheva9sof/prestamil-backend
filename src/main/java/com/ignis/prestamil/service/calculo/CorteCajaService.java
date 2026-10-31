@@ -1,7 +1,9 @@
 package com.ignis.prestamil.service.calculo;
 
+import com.ignis.prestamil.model.CierreCajaDiario;
 import com.ignis.prestamil.model.RenglonCorte;
 import com.ignis.prestamil.model.TipoTraspasoCaja;
+import com.ignis.prestamil.repository.CierreCajaDiarioRepository;
 import com.ignis.prestamil.repository.TraspasoCajaRepository;
 import com.ignis.prestamil.repository.TraspasoCajaRepository.TotalTraspasoDia;
 import com.ignis.prestamil.service.ParteCorte;
@@ -31,10 +33,11 @@ import java.util.Optional;
  *       efectivo entra al arqueo; la tarjeta es informativa (RC-06).</li>
  * </ul>
  *
- * <p>El corte empieza en el día de arranque ({@link SaldoArranqueProvider}). Como el saldo de la bóveda
- * solo cambia con traspasos (RC-08), el saldo anterior de cualquier día es el saldo de arranque más el
- * neto de los traspasos de la bóveda desde el arranque: lo mismo que arrastrar el saldo final día por
- * día, en una sola consulta.</p>
+ * <p>El corte empieza en el día de arranque ({@link SaldoArranqueProvider}). Un día cerrado (CAJ-06) es
+ * el corte congelado de su {@code cierre_caja_diario}, no un cálculo nuevo. El saldo anterior sale del
+ * saldo final del último cierre; solo los días posteriores a ese cierre se calculan al momento. Como el
+ * saldo de la bóveda solo cambia con traspasos (RC-08), para llegar al primer día del periodo basta sumar
+ * el neto de los traspasos de la bóveda desde el último cierre (o desde el arranque, si no hay cierres).</p>
  */
 @Service
 @Transactional(readOnly = true)
@@ -47,6 +50,7 @@ public class CorteCajaService {
     private final ResolutorRenglonCorte resolutorRenglonCorte;
     private final TraspasoCajaRepository traspasoCajaRepository;
     private final SaldoArranqueProvider saldoArranqueProvider;
+    private final CierreCajaDiarioRepository cierreCajaDiarioRepository;
 
     /**
      * Corte de caja de un día.
@@ -62,8 +66,9 @@ public class CorteCajaService {
 
     /**
      * Cortes de caja de cada día de un periodo, para el mensual (REP-06). El saldo final de un día es el
-     * saldo anterior del siguiente (RC-08). Usa una consulta para los flujos de caja del periodo, una
-     * para sus movimientos de contrato y una para los traspasos desde el arranque.
+     * saldo anterior del siguiente (RC-08). Los días cerrados salen congelados de su cierre; el resto usa
+     * una consulta para los flujos de caja del periodo, una para sus movimientos de contrato y una para
+     * los traspasos desde el último cierre anterior al periodo.
      *
      * @param sucursalId sucursal del corte
      * @param desde      primer día (inclusivo)
@@ -100,17 +105,30 @@ public class CorteCajaService {
             return cortes;
         }
 
-        // Traspasos desde el arranque: los anteriores al periodo dan el saldo anterior del primer día
-        Map<LocalDate, Map<TipoTraspasoCaja, BigDecimal>> traspasos = traspasosPorDia(sucursalId, fechaArranque, hasta);
-        BigDecimal saldoAnterior = arranque.get().saldo();
-        for (LocalDate dia = fechaArranque; dia.isBefore(inicio); dia = dia.plusDays(1)) {
+        // Punto de partida: el saldo final del último cierre antes del periodo; sin cierres, el arranque
+        Optional<CierreCajaDiario> cierreAnterior = cierreCajaDiarioRepository
+                .findFirstBySucursalIdAndFechaLessThanOrderByFechaDesc(sucursalId, inicio);
+        LocalDate partida = cierreAnterior.map(c -> c.getFecha().plusDays(1)).orElse(fechaArranque);
+        BigDecimal saldoAnterior = cierreAnterior.map(CierreCajaDiario::getSaldoFinal).orElse(arranque.get().saldo());
+
+        // Los traspasos entre el punto de partida y el periodo llevan el saldo al primer día
+        Map<LocalDate, Map<TipoTraspasoCaja, BigDecimal>> traspasos = traspasosPorDia(sucursalId, partida, hasta);
+        for (LocalDate dia = partida; dia.isBefore(inicio); dia = dia.plusDays(1)) {
             saldoAnterior = saldoAnterior.add(netoBoveda(traspasos.getOrDefault(dia, Map.of())));
         }
 
+        Map<LocalDate, CierreCajaDiario> cierres = new HashMap<>();
+        for (CierreCajaDiario cierre : cierreCajaDiarioRepository
+                .findBySucursalIdAndFechaBetweenOrderByFechaAsc(sucursalId, inicio, hasta)) {
+            cierres.put(cierre.getFecha(), cierre);
+        }
         Map<LocalDate, Map<RenglonCorte, ParteCorte>> flujos = resolutorRenglonCorte.totalesPorDia(sucursalId, inicio, hasta);
         for (LocalDate dia = inicio; !dia.isAfter(hasta); dia = dia.plusDays(1)) {
-            CorteCajaResultado corte = dia(sucursalId, dia, saldoAnterior, flujos.get(dia),
-                    traspasos.getOrDefault(dia, Map.of()));
+            // Un día cerrado se queda como estaba al cerrar (CAJ-06)
+            CierreCajaDiario cierre = cierres.get(dia);
+            CorteCajaResultado corte = cierre != null
+                    ? CorteCajaJson.leer(cierre.getCorteJson())
+                    : dia(sucursalId, dia, saldoAnterior, flujos.get(dia), traspasos.getOrDefault(dia, Map.of()));
             cortes.add(corte);
             saldoAnterior = corte.saldoFinal();
         }

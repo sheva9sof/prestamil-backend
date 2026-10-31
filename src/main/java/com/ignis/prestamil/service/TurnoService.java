@@ -3,6 +3,7 @@ package com.ignis.prestamil.service;
 import com.ignis.prestamil.exception.ResourceNotFoundException;
 import com.ignis.prestamil.exception.ValidationException;
 import com.ignis.prestamil.mapper.TurnoMapper;
+import com.ignis.prestamil.model.Sucursal;
 import com.ignis.prestamil.model.Turno;
 import com.ignis.prestamil.model.Usuario;
 import com.ignis.prestamil.repository.TurnoRepository;
@@ -23,6 +24,8 @@ public class TurnoService {
     private final UsuarioRepository usuarioRepository;
     private final TurnoMapper turnoMapper;
     private final PaseAlmonedaService paseAlmonedaService;
+    private final SucursalService sucursalService;
+    private final CierreCajaService cierreCajaService;
 
     @Transactional
     public TurnoResponse iniciarTurno() {
@@ -36,6 +39,11 @@ public class TurnoService {
                 .ifPresent(t -> {
                     throw new ValidationException("Ya existe un turno activo en el sistema con ID: " + t.getId());
                 });
+
+        // 2.b CAJ-06 (B-04): no se abre turno si la caja de hoy ya se cerró o si un día anterior quedó
+        // pendiente de cierre. Va antes de crear el turno, así que una apertura rechazada no deja turno ni
+        // dispara el pase de almoneda desde aquí; el pase no depende del turno (corre al arrancar y a las 00:05).
+        sucursalService.findUnique().map(Sucursal::getId).ifPresent(cierreCajaService::validarAperturaTurno);
 
         // 3. Crear, configurar y guardar el nuevo turno
         Turno nuevoTurno = new Turno();

@@ -69,6 +69,8 @@ public class TraspasoCajaService {
     private final ConfiguracionRepository configuracionRepository;
     private final FolioService folioService;
     private final SaldoCajaService saldoCajaService;
+    private final CandadoCierreCaja candadoCierreCaja;
+    private final CierreCajaService cierreCajaService;
     private final CajaMapper cajaMapper;
     private final Clock clock;
 
@@ -80,6 +82,8 @@ public class TraspasoCajaService {
                                ConfiguracionRepository configuracionRepository,
                                FolioService folioService,
                                SaldoCajaService saldoCajaService,
+                               CandadoCierreCaja candadoCierreCaja,
+                               CierreCajaService cierreCajaService,
                                CajaMapper cajaMapper,
                                Clock clock) {
         this.traspasoCajaRepository = traspasoCajaRepository;
@@ -90,6 +94,8 @@ public class TraspasoCajaService {
         this.configuracionRepository = configuracionRepository;
         this.folioService = folioService;
         this.saldoCajaService = saldoCajaService;
+        this.candadoCierreCaja = candadoCierreCaja;
+        this.cierreCajaService = cierreCajaService;
         this.cajaMapper = cajaMapper;
         this.clock = clock;
     }
@@ -102,8 +108,9 @@ public class TraspasoCajaService {
      * @param username   usuario que registra
      * @return el traspaso guardado, con folio y desglose
      * @throws ForbiddenException        si el rol del usuario no puede registrar ese tipo de traspaso
-     * @throws BadRequestException       si el desglose no suma el importe, trae una denominación repetida
-     *                                   o inactiva, o el traspaso deja la caja de origen en negativo
+     * @throws BadRequestException       si la caja de hoy ya se cerró, el desglose no suma el importe, trae
+     *                                   una denominación repetida o inactiva, o el traspaso deja la caja de
+     *                                   origen en negativo
      * @throws ResourceNotFoundException si el usuario o alguna de las cajas no existen
      */
     public TraspasoCajaResponse registrar(Integer sucursalId, TraspasoCajaRequest request, String username) {
@@ -111,6 +118,9 @@ public class TraspasoCajaService {
         Usuario usuario = usuario(username);
         validarRol(usuario, configuracionRoles(tipo),
                 "El usuario no tiene permiso para registrar " + nombre(tipo));
+        // CAJ-06: el traspaso es del día de hoy, que no debe estar cerrado
+        LocalDateTime ahora = LocalDateTime.now(clock);
+        candadoCierreCaja.validarDiaAbierto(sucursalId, ahora.toLocalDate());
 
         // RC-02: el tipo fija las cajas
         Caja origen = caja(sucursalId, tipo.origen());
@@ -130,7 +140,6 @@ public class TraspasoCajaService {
         validarSaldoSuficiente(origen, importe, "El traspaso");
         Long folio = folioService.siguiente(sucursalId, SerieFolio.TRASPASO_CAJA);
 
-        LocalDateTime ahora = LocalDateTime.now(clock);
         traspaso.setSucursalId(sucursalId);
         traspaso.setFolio(folio);
         traspaso.setTipo(tipo);
@@ -190,6 +199,7 @@ public class TraspasoCajaService {
         contexto.setPuedeRegistrar(tieneRol(usuario, configuracionRoles(tipo)));
         // TODO A-05: con AutorizacionService cualquiera podrá pedir la cancelación con autorización
         contexto.setPuedeCancelar(tieneRol(usuario, Constantes.ROLES_PERMITIDOS_CANCELAR_TRASPASO));
+        contexto.setDiaCerrado(cierreCajaService.diaCerrado(sucursalId, contexto.getFechaOperacion()));
         return contexto;
     }
 
@@ -214,8 +224,8 @@ public class TraspasoCajaService {
      * @return el traspaso cancelado
      * @throws ResourceNotFoundException si el traspaso o el usuario no existen
      * @throws ForbiddenException        si el rol del usuario no puede cancelar traspasos
-     * @throws BadRequestException       si ya está cancelado, es de otro día, el motivo no es válido o la
-     *                                   caja de destino ya no tiene el dinero
+     * @throws BadRequestException       si ya está cancelado, es de otro día, la caja de hoy ya se cerró, el
+     *                                   motivo no es válido o la caja de destino ya no tiene el dinero
      */
     public TraspasoCajaResponse cancelar(Long traspasoId, CancelarTraspasoCajaRequest request, String username) {
         TraspasoCaja traspaso = traspasoCajaRepository.findByIdParaActualizar(traspasoId)
@@ -240,6 +250,8 @@ public class TraspasoCajaService {
         if (!traspaso.getFechaOperacion().equals(ahora.toLocalDate())) {
             throw new BadRequestException("Solo se pueden cancelar traspasos del día en curso");
         }
+        // CAJ-06: después del cierre del día tampoco se cancela
+        candadoCierreCaja.validarDiaAbierto(traspaso.getSucursalId(), ahora.toLocalDate());
 
         // El dinero regresa al origen: el destino todavía debe tenerlo
         validarSaldoSuficiente(traspaso.getCajaDestino(), traspaso.getImporte(), "La cancelación");

@@ -4,6 +4,7 @@ import com.ignis.prestamil.exception.BadRequestException;
 import com.ignis.prestamil.exception.ForbiddenException;
 import com.ignis.prestamil.mapper.CajaMapperImpl;
 import com.ignis.prestamil.model.Caja;
+import com.ignis.prestamil.model.CajaArranque;
 import com.ignis.prestamil.model.ConceptoCaja;
 import com.ignis.prestamil.model.Configuracion;
 import com.ignis.prestamil.model.Denominacion;
@@ -18,6 +19,7 @@ import com.ignis.prestamil.model.TipoTraspasoCaja;
 import com.ignis.prestamil.model.TraspasoCaja;
 import com.ignis.prestamil.model.Turno;
 import com.ignis.prestamil.model.Usuario;
+import com.ignis.prestamil.repository.CajaArranqueRepository;
 import com.ignis.prestamil.repository.CajaRepository;
 import com.ignis.prestamil.repository.ConfiguracionRepository;
 import com.ignis.prestamil.repository.DenominacionRepository;
@@ -33,7 +35,7 @@ import com.ignis.prestamil.response.TraspasoCajaContextoResponse;
 import com.ignis.prestamil.response.TraspasoCajaDenominacionResponse;
 import com.ignis.prestamil.response.TraspasoCajaResponse;
 import com.ignis.prestamil.service.calculo.CorteCajaService;
-import com.ignis.prestamil.service.calculo.SaldoArranqueConfiguracionProvider;
+import com.ignis.prestamil.service.calculo.SaldoArranqueCajaProvider;
 import com.ignis.prestamil.util.Constantes;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
@@ -68,7 +70,8 @@ import static org.assertj.core.groups.Tuple.tuple;
 @ActiveProfiles("test")
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import({TraspasoCajaService.class, SaldoCajaService.class, FolioService.class, CajaMapperImpl.class,
-        CorteCajaService.class, ResolutorRenglonCorte.class, SaldoArranqueConfiguracionProvider.class,
+        CorteCajaService.class, ResolutorRenglonCorte.class, SaldoArranqueCajaProvider.class,
+        CandadoCierreCaja.class, CierreCajaService.class,
         TraspasoCajaServiceIT.Reloj.class})
 class TraspasoCajaServiceIT {
 
@@ -91,6 +94,7 @@ class TraspasoCajaServiceIT {
     @Autowired CajaRepository cajaRepository;
     @Autowired DenominacionRepository denominacionRepository;
     @Autowired ConfiguracionRepository configuracionRepository;
+    @Autowired CajaArranqueRepository cajaArranqueRepository;
     @Autowired FolioSecuenciaRepository folioSecuenciaRepository;
     @Autowired MovimientoCajaRepository movimientoCajaRepository;
     @Autowired TurnoRepository turnoRepository;
@@ -132,9 +136,12 @@ class TraspasoCajaServiceIT {
         configuracion(Constantes.ROLES_PERMITIDOS_DOTACION, "5,3,1");
         configuracion(Constantes.ROLES_PERMITIDOS_RECOLECCION, "5,3,1");
         configuracion(Constantes.ROLES_PERMITIDOS_CANCELAR_TRASPASO, "1");
-        // CAJ-05: el corte (y el saldo de las cajas) arranca ayer, con la bóveda vacía (084)
-        configuracion("CAJA_FECHA_ARRANQUE", HOY.minusDays(1).toString());
-        configuracion("CAJA_SALDO_ARRANQUE", "0.00");
+        // CAJ-05: el corte (y el saldo de las cajas) arranca ayer, con la bóveda vacía (caja_arranque, CAJ-06)
+        CajaArranque arranque = new CajaArranque();
+        arranque.setSucursalId(SUCURSAL);
+        arranque.setFechaArranque(HOY.minusDays(1));
+        arranque.setSaldoBoveda(new BigDecimal("0.00"));
+        cajaArranqueRepository.save(arranque);
     }
 
     @Test
@@ -260,7 +267,7 @@ class TraspasoCajaServiceIT {
 
     @Test
     void sinSaldoDeArranque_noDejaSacarDeLaBoveda() {
-        configuracionRepository.findByConfiguracion("CAJA_FECHA_ARRANQUE").ifPresent(configuracionRepository::delete);
+        cajaArranqueRepository.deleteById(SUCURSAL);
         traspasoAnterior(TipoTraspasoCaja.MINISTRACION, concentradora, boveda, "5000.00");
 
         assertThatThrownBy(() -> traspasoCajaService.registrar(SUCURSAL,

@@ -1,6 +1,7 @@
 package com.ignis.prestamil.service.calculo;
 
 import com.ignis.prestamil.model.Caja;
+import com.ignis.prestamil.model.CajaArranque;
 import com.ignis.prestamil.model.Cliente;
 import com.ignis.prestamil.model.ConceptoCaja;
 import com.ignis.prestamil.model.Configuracion;
@@ -111,10 +112,15 @@ public class CorteCajaSemilla {
         em.flush();
     }
 
-    /** Fecha y saldo de arranque de caja (implementación temporal en {@code configuraciones}). */
-    public void arranque(LocalDate fecha, String saldo) {
-        configuracion(SaldoArranqueConfiguracionProvider.CAJA_FECHA_ARRANQUE, fecha.toString());
-        configuracion(SaldoArranqueConfiguracionProvider.CAJA_SALDO_ARRANQUE, saldo);
+    /** Fecha y saldo de arranque de caja ({@code caja_arranque}), ya capturados por Sistemas (CAJ-06). */
+    public CajaArranque arranque(LocalDate fecha, String saldo) {
+        CajaArranque a = new CajaArranque();
+        a.setSucursalId(SUCURSAL);
+        a.setFechaArranque(fecha);
+        a.setSaldoBoveda(new BigDecimal(saldo));
+        a.setConfirmado(true);
+        em.persist(a);
+        return a;
     }
 
     /** Traspaso activo; el tipo fija las cajas (RC-02). */
@@ -161,7 +167,8 @@ public class CorteCajaSemilla {
         em.persist(m);
     }
 
-    private void configuracion(String clave, String valor) {
+    /** Renglón de {@code configuraciones}, p. ej. los roles de un permiso. */
+    public void configuracion(String clave, String valor) {
         Configuracion c = new Configuracion();
         c.setConfiguracion(clave);
         c.setValorCadena(valor);

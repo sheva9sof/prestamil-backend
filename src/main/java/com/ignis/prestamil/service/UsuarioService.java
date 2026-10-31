@@ -25,6 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.stream.Stream;
 
 @Service
 @Transactional
@@ -224,19 +225,21 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
         if (turnoActivo == null) {
             // No hay turno activo, verificar si el usuario tiene permiso para abrir uno
             Optional<Configuracion> configRolesOpt = configuracionService.findByConfiguracion(Constantes.ROLES_PERMITIDOS_APERTURA_TURNOS);
-            
+
             if (configRolesOpt.isPresent() && usuario.getRol() != null) {
-                String rolesPermitidosStr = configRolesOpt.get().getValorCadena();
-                List<Integer> rolesPermitidos = Arrays.stream(rolesPermitidosStr.split(","))
-                                                    .map(String::trim)
-                                                    .map(Integer::parseInt)
-                                                    .toList();
-                
-                if (rolesPermitidos.contains(usuario.getRol().getId())) {
-                    // El usuario tiene un rol permitido, mostrar solo el menú "Turno"
-                    return opcionesOriginales.stream()
-                                    .filter(opcion -> Constantes.NOMBRE_MENU_TURNO.equals(opcion.getOpcion()))
-                                    .toList();
+                boolean puedeAbrirTurno = rolesDe(configRolesOpt.get()).contains(usuario.getRol().getId());
+                // CAJ-06 (B-04): el día se cierra sin turno abierto, y un día pendiente impide abrirlo hasta
+                // que Sistemas lo cierre. Quien puede cerrar caja (gerente y Sistemas) conserva el corte y el
+                // arranque aunque no haya turno.
+                boolean puedeCerrarCaja = puedeCerrarCaja(usuario.getRol().getId());
+                List<Opcion> sinTurno = opcionesOriginales.stream()
+                                .filter(opcion -> (puedeAbrirTurno && Constantes.NOMBRE_MENU_TURNO.equals(opcion.getOpcion()))
+                                        || (puedeCerrarCaja && Constantes.NOMBRES_MENU_CIERRE_CAJA.contains(opcion.getOpcion())))
+                                .toList();
+
+                if (!sinTurno.isEmpty()) {
+                    // El usuario tiene un rol permitido, mostrar solo el menú "Turno" (y el de cierre de caja)
+                    return sinTurno;
                 } else {
                     // El usuario no tiene un rol permitido, no puede hacer nada
                     throw new ResourceNotFoundException("No hay un turno activo y no tiene permiso para abrir uno.");
@@ -248,6 +251,27 @@ public class UsuarioService extends BaseService<Usuario, Integer, UsuarioReposit
         }
         // Si hay un turno activo, devolver la lista de opciones original sin cambios
         return opcionesOriginales;
+    }
+
+    /** El rol está en {@code ROLES_PERMITIDOS_CIERRE_CAJA} o en {@code ROLES_PERMITIDOS_CIERRE_CAJA_PENDIENTE}. */
+    private boolean puedeCerrarCaja(Integer rolId) {
+        return Stream.of(Constantes.ROLES_PERMITIDOS_CIERRE_CAJA, Constantes.ROLES_PERMITIDOS_CIERRE_CAJA_PENDIENTE)
+                .map(configuracionService::findByConfiguracion)
+                .flatMap(Optional::stream)
+                .anyMatch(c -> rolesDe(c).contains(rolId));
+    }
+
+    /** CSV de ids de rol de una configuración. */
+    private static List<Integer> rolesDe(Configuracion configuracion) {
+        String csv = configuracion.getValorCadena();
+        if (csv == null || csv.isBlank()) {
+            return List.of();
+        }
+        return Arrays.stream(csv.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .map(Integer::parseInt)
+                .toList();
     }
 
     /**

@@ -7,6 +7,7 @@ import com.ignis.prestamil.model.Usuario;
 import com.ignis.prestamil.repository.ConfiguracionRepository;
 import com.ignis.prestamil.repository.UsuarioRepository;
 import com.ignis.prestamil.response.CorteCajaResponse;
+import com.ignis.prestamil.service.calculo.CorteCajaResultado;
 import com.ignis.prestamil.service.calculo.CorteCajaService;
 import com.ignis.prestamil.util.Constantes;
 import lombok.RequiredArgsConstructor;
@@ -37,6 +38,7 @@ public class CorteCajaConsultaService {
     private static final DateTimeFormatter DD_MM_YYYY = DateTimeFormatter.ofPattern("dd/MM/yyyy");
 
     private final CorteCajaService corteCajaService;
+    private final CierreCajaService cierreCajaService;
     private final UsuarioRepository usuarioRepository;
     private final ConfiguracionRepository configuracionRepository;
     private final Clock clock;
@@ -47,7 +49,8 @@ public class CorteCajaConsultaService {
      * @param sucursalId      sucursal
      * @param fechaSolicitada fecha del selector de la pantalla (puede ser nula = hoy)
      * @param username        usuario que consulta
-     * @return el corte de la fecha efectiva, si el usuario puede cambiarla y la fecha de hoy
+     * @return el corte de la fecha efectiva, si el usuario puede cambiarla, la fecha de hoy y el estado del
+     *         cierre de ese día (CAJ-06)
      * @throws BadRequestException si quien puede elegir fecha pide un día futuro
      */
     public CorteCajaResponse consultar(Integer sucursalId, LocalDate fechaSolicitada, String username) {
@@ -60,7 +63,10 @@ public class CorteCajaConsultaService {
             throw new BadRequestException("No hay corte de caja del " + fecha.format(DD_MM_YYYY)
                     + ": es un día futuro.");
         }
-        return new CorteCajaResponse(fecha, hoy, puedeElegirFecha, corteCajaService.calcular(sucursalId, fecha));
+        CorteCajaResultado corte = corteCajaService.calcular(sucursalId, fecha);
+        CierreCajaService.EstadoCierre cierre = cierreCajaService.estado(sucursalId, fecha, corte, username);
+        return new CorteCajaResponse(fecha, hoy, puedeElegirFecha, corte, cierre.cierre(), cierre.diaPendiente(),
+                cierre.puedeCerrar(), cierre.avisoCierre());
     }
 
     /**

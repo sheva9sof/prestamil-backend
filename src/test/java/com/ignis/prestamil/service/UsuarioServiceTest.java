@@ -2,11 +2,16 @@ package com.ignis.prestamil.service;
 
 import com.ignis.prestamil.exception.ResourceNotFoundException;
 import com.ignis.prestamil.mapper.UsuarioMapper;
+import com.ignis.prestamil.model.Configuracion;
+import com.ignis.prestamil.model.Opcion;
 import com.ignis.prestamil.model.Rol;
+import com.ignis.prestamil.model.RolOpcion;
 import com.ignis.prestamil.model.Usuario;
 import com.ignis.prestamil.repository.ParametrosSistemaRepository;
 import com.ignis.prestamil.repository.RolRepository;
 import com.ignis.prestamil.repository.UsuarioRepository;
+import com.ignis.prestamil.response.LoginResponse;
+import com.ignis.prestamil.util.Constantes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -16,11 +21,13 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -195,5 +202,75 @@ class UsuarioServiceTest {
         // Then
         assertThat(result).isEqualTo("BCRYPT_RESULT");
         verify(passwordEncoder).encode("MyPassword");
+    }
+
+    // -----------------------------------------------------------------------
+    // Menú sin turno abierto (CAJ-06)
+    // -----------------------------------------------------------------------
+
+    @Test
+    void sinTurno_gerenteVeTurnosYElCorteDeCaja() {
+        Usuario gerente = usuarioConMenus("gerente", 5, "Turnos", "Caja", "Corte de caja", "Dotación", "Avaluos");
+
+        assertThat(menuSinTurno(gerente)).containsExactly("Turnos", "Caja", "Corte de caja");
+    }
+
+    @Test
+    void sinTurno_sistemasEntraConElCorteYElArranqueParaCerrarUnDiaPendiente() {
+        // Sistemas no abre turno (ROLES_PERMITIDOS_APERTURA_TURNOS = 5), pero cierra los días pendientes
+        Usuario sistemas = usuarioConMenus("sistemas", 1, "Caja", "Corte de caja", "Arranque de caja", "Usuarios");
+
+        assertThat(menuSinTurno(sistemas)).containsExactly("Caja", "Corte de caja", "Arranque de caja");
+    }
+
+    @Test
+    void sinTurno_elCajeroSigueSinMenu() {
+        Usuario cajero = usuarioConMenus("cajero", 3, "Caja", "Corte de caja", "Dotación");
+
+        assertThat(menuSinTurno(cajero)).isEmpty();
+    }
+
+    /** Nombres de los menús del perfil sin turno activo, con la configuración de 086. */
+    private List<String> menuSinTurno(Usuario usuario) {
+        when(repository.findByNombreUsuario(usuario.getNombreUsuario())).thenReturn(Optional.of(usuario));
+        when(repository.findWithRolAndOpcionesByNombreUsuario(usuario.getNombreUsuario())).thenReturn(Optional.of(usuario));
+        when(turnoService.obtenerTurnoActivo()).thenReturn(null);
+        lenient().when(configuracionService.findByConfiguracion(Constantes.ROLES_PERMITIDOS_APERTURA_TURNOS))
+                .thenReturn(Optional.of(configuracion("5")));
+        lenient().when(configuracionService.findByConfiguracion(Constantes.ROLES_PERMITIDOS_CIERRE_CAJA))
+                .thenReturn(Optional.of(configuracion("5,1")));
+        lenient().when(configuracionService.findByConfiguracion(Constantes.ROLES_PERMITIDOS_CIERRE_CAJA_PENDIENTE))
+                .thenReturn(Optional.of(configuracion("1")));
+        when(usuarioMapper.toLoginResponse(any(), any())).thenReturn(new LoginResponse());
+
+        usuarioService.obtenerMiPerfil(usuario.getNombreUsuario());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Opcion>> opciones = ArgumentCaptor.forClass(List.class);
+        verify(usuarioMapper).toLoginResponse(eq(usuario), opciones.capture());
+        return opciones.getValue().stream().map(Opcion::getOpcion).toList();
+    }
+
+    private Usuario usuarioConMenus(String nombreUsuario, int rolId, String... menus) {
+        Rol rol = buildRol(rolId);
+        int id = 1;
+        for (String menu : menus) {
+            Opcion opcion = new Opcion();
+            opcion.setId(id++);
+            opcion.setOpcion(menu);
+            RolOpcion rolOpcion = new RolOpcion();
+            rolOpcion.setRol(rol);
+            rolOpcion.setOpcion(opcion);
+            rol.getRolOpciones().add(rolOpcion);
+        }
+        Usuario usuario = buildUsuario(nombreUsuario, "x");
+        usuario.setRol(rol);
+        return usuario;
+    }
+
+    private static Configuracion configuracion(String csv) {
+        Configuracion c = new Configuracion();
+        c.setValorCadena(csv);
+        return c;
     }
 }

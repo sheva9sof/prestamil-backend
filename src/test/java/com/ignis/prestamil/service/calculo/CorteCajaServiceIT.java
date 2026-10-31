@@ -30,7 +30,7 @@ import static org.assertj.core.api.Assertions.within;
 @DataJpaTest
 @ActiveProfiles("test")
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
-@Import({CorteCajaService.class, ResolutorRenglonCorte.class, SaldoArranqueConfiguracionProvider.class})
+@Import({CorteCajaService.class, ResolutorRenglonCorte.class, SaldoArranqueCajaProvider.class})
 class CorteCajaServiceIT {
 
     private static final int SUCURSAL = CorteCajaSemilla.SUCURSAL;

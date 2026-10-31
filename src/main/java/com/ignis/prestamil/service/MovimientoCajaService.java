@@ -29,13 +29,16 @@ public class MovimientoCajaService {
 
     private final MovimientoCajaRepository repository;
     private final MovimientoContratoRepository movimientoContratoRepository;
+    private final CandadoCierreCaja candadoCierreCaja;
     private final Clock clock;
 
     public MovimientoCajaService(MovimientoCajaRepository repository,
                                  MovimientoContratoRepository movimientoContratoRepository,
+                                 CandadoCierreCaja candadoCierreCaja,
                                  Clock clock) {
         this.repository = repository;
         this.movimientoContratoRepository = movimientoContratoRepository;
+        this.candadoCierreCaja = candadoCierreCaja;
         this.clock = clock;
     }
 
@@ -47,12 +50,18 @@ public class MovimientoCajaService {
      * @param registro turno, sucursal, concepto, importes, origen, usuario y descripción del flujo
      * @return el movimiento de caja persistido
      * @throws IllegalArgumentException si el origen viene incompleto
+     * @throws com.ignis.prestamil.exception.BadRequestException si la caja de hoy ya se cerró (CAJ-06); la
+     *         operación que llama se revierte completa
      */
     public MovimientoCaja registrar(RegistroCaja registro) {
         if ((registro.origenTipo() == null) != (registro.origenId() == null)) {
             throw new IllegalArgumentException("El origen del flujo de caja debe traer tipo e id: "
                     + registro.origenTipo() + "/" + registro.origenId());
         }
+        // CAJ-06: un día cerrado queda congelado. Validarlo aquí cubre empeños, cobros, cancelaciones y
+        // ventas sin que cada servicio lo repita
+        LocalDateTime ahora = LocalDateTime.now(clock);
+        candadoCierreCaja.validarDiaAbierto(registro.sucursalId(), ahora.toLocalDate());
 
         MovimientoCaja m = new MovimientoCaja();
         m.setTurno(registro.turno());
@@ -70,7 +79,7 @@ public class MovimientoCajaService {
             m.setMovimientoContrato(movimientoContratoRepository.getReferenceById(registro.origenId()));
         }
         m.setUsuario(registro.usuario());
-        m.setFecha(LocalDateTime.now(clock));
+        m.setFecha(ahora);
         MovimientoCaja guardado = repository.save(m);
         log.info("Caja {} {} sucursal={} turno={} usuario={} efectivo={} tarjeta={} origen={}:{} concepto={}",
                 m.getTipo(), registro.concepto(), registro.sucursalId(), registro.turno().getId(),
