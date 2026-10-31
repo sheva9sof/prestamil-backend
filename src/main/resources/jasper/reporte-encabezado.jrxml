@@ -3,7 +3,8 @@
      rango de fechas / fecha y hora de impresión / código RPT. Va como subreporte en el título de cada
      reporte; ReporteJasper lo escala al ancho de columna del reporte que lo usa, así que se diseña a
      556 (carta vertical) y sirve también para carta horizontal (736).
-     Razón social y código RPT son opcionales: si llegan vacíos no ocupan lugar. -->
+     Razón social y código RPT son opcionales: si llegan vacíos no ocupan lugar.
+     Ningún elemento se encima con otro: el Excel (JRXlsxExporter) descarta los que se enciman. -->
 <jasperReport xmlns="http://jasperreports.sourceforge.net/jasperreports" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://jasperreports.sourceforge.net/jasperreports http://jasperreports.sourceforge.net/xsd/jasperreport.xsd" name="reporte-encabezado" pageWidth="556" pageHeight="200" whenNoDataType="AllSectionsNoDetail" columnWidth="556" leftMargin="0" rightMargin="0" topMargin="0" bottomMargin="0">
 	<property name="net.sf.jasperreports.awt.ignore.missing.font" value="true"/>
 	<style name="Base" isDefault="true" fontName="Arial" fontSize="8"/>
@@ -16,8 +17,9 @@
 	<parameter name="P_CODIGO_RPT" class="java.lang.String"/>
 	<title>
 		<band height="81" splitType="Stretch">
+			<!-- Centrado en 139–417 para no encimarse con el código RPT: en Excel se pierde lo encimado -->
 			<textField isBlankWhenNull="true">
-				<reportElement x="0" y="0" width="556" height="16"/>
+				<reportElement x="139" y="0" width="278" height="16"/>
 				<textElement textAlignment="Center"><font size="12" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
 				<textFieldExpression><![CDATA[$P{P_EMPRESA}]]></textFieldExpression>
 			</textField>
