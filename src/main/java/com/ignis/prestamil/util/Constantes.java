@@ -53,6 +53,9 @@ public class Constantes {
     // Roles que pueden cancelar un traspaso entre cajas (CAJ-02). Por defecto solo Sistemas (1) hasta
     // que exista la autorización con credenciales (A-05).
     public static final String ROLES_PERMITIDOS_CANCELAR_TRASPASO = "ROLES_PERMITIDOS_CANCELAR_TRASPASO";
+    // Roles que pueden consultar el corte de caja de otra fecha (CAJ-07a). CSV de ids de rol; por defecto
+    // Gerente (5) y Sistemas (1). El cajero ve siempre el corte de hoy, igual que OTR-01.
+    public static final String ROLES_PERMITIDOS_CORTE_CAJA_OTRA_FECHA = "ROLES_PERMITIDOS_CORTE_CAJA_OTRA_FECHA";
     public static final String NOMBRE_MENU_TURNO = "Turnos";
 
     // Contratos
