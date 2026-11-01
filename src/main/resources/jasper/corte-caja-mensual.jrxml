@@ -1,0 +1,314 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Reporte mensual de corte de caja (REP-06, ROD-1.0), formato del "REPORTE MENSUAL DE CORTE DE CAJA" de
+     COCAE. Carta horizontal. Las filas llegan ya armadas desde CorteCajaMensualReporteService con los cortes de
+     CorteCajaService.calcularRango (RC-09): la plantilla no suma nada. Cada tipo de fila es una banda del detalle:
+       DIA    un día: saldo inicial … diferencia F/S, saldo final y "PENDIENTE" si no se ha cerrado
+       TOTAL  la suma de cada columna de flujos y de las diferencias (FALTANTE / SOBRANTE)
+       NOTA   texto aclaratorio al pie
+     Los importes son BigDecimal para que el Excel (misma plantilla) los tome como números.
+     Sin cifras (todo el mes antes del arranque o sin saldo de arranque) no hay filas: solo encabezado y aviso. -->
+<jasperReport xmlns="http://jasperreports.sourceforge.net/jasperreports" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://jasperreports.sourceforge.net/jasperreports http://jasperreports.sourceforge.net/xsd/jasperreport.xsd" name="corte-caja-mensual" pageWidth="792" pageHeight="612" orientation="Landscape" whenNoDataType="AllSectionsNoDetail" columnWidth="752" leftMargin="20" rightMargin="20" topMargin="20" bottomMargin="20">
+	<property name="net.sf.jasperreports.awt.ignore.missing.font" value="true"/>
+	<style name="Base" isDefault="true" fontName="Arial" fontSize="8"/>
+	<style name="Titulo" mode="Opaque" backcolor="#E9ECEF" fontSize="7.5" isBold="true" pdfFontName="Helvetica-Bold">
+		<box topPadding="2" leftPadding="2" bottomPadding="2" rightPadding="2">
+			<topPen lineWidth="0.75"/>
+			<bottomPen lineWidth="0.75"/>
+		</box>
+	</style>
+	<style name="Celda">
+		<box topPadding="1" leftPadding="2" bottomPadding="1" rightPadding="2">
+			<bottomPen lineWidth="0.25" lineColor="#BBBBBB"/>
+		</box>
+	</style>
+	<style name="Total" isBold="true" pdfFontName="Helvetica-Bold">
+		<box topPadding="2" leftPadding="2" bottomPadding="2" rightPadding="2">
+			<topPen lineWidth="0.75"/>
+			<bottomPen lineWidth="0.75"/>
+		</box>
+	</style>
+	<!-- Encabezado estándar (REP-00): subreporte y sus parámetros, ver EncabezadoReporte -->
+	<parameter name="P_ENCABEZADO" class="net.sf.jasperreports.engine.JasperReport"/>
+	<parameter name="P_EMPRESA" class="java.lang.String"/>
+	<parameter name="P_RAZON_SOCIAL" class="java.lang.String"/>
+	<parameter name="P_SUCURSAL" class="java.lang.String"/>
+	<parameter name="P_TITULO" class="java.lang.String"/>
+	<parameter name="P_FECHAS" class="java.lang.String"/>
+	<parameter name="P_IMPRESO" class="java.lang.String"/>
+	<parameter name="P_CODIGO_RPT" class="java.lang.String"/>
+	<parameter name="P_MES" class="java.lang.String"/>
+	<!-- Solo cuando el mes no tiene cifras -->
+	<parameter name="P_AVISO_TITULO" class="java.lang.String"/>
+	<parameter name="P_AVISO" class="java.lang.String"/>
+	<field name="tipo" class="java.lang.String"/>
+	<field name="concepto" class="java.lang.String"/>
+	<field name="saldoInicial" class="java.math.BigDecimal"/>
+	<field name="ministraciones" class="java.math.BigDecimal"/>
+	<field name="concentraciones" class="java.math.BigDecimal"/>
+	<field name="boveda" class="java.math.BigDecimal"/>
+	<field name="dotaciones" class="java.math.BigDecimal"/>
+	<field name="ingresos" class="java.math.BigDecimal"/>
+	<field name="egresos" class="java.math.BigDecimal"/>
+	<field name="recolecciones" class="java.math.BigDecimal"/>
+	<field name="diferencia" class="java.math.BigDecimal"/>
+	<field name="marca" class="java.lang.String"/>
+	<field name="saldoFinal" class="java.math.BigDecimal"/>
+	<field name="estado" class="java.lang.String"/>
+	<title>
+		<band height="70" splitType="Stretch">
+			<subreport>
+				<reportElement x="0" y="0" width="752" height="70"/>
+				<parametersMapExpression><![CDATA[$P{REPORT_PARAMETERS_MAP}]]></parametersMapExpression>
+				<dataSourceExpression><![CDATA[new net.sf.jasperreports.engine.JREmptyDataSource(1)]]></dataSourceExpression>
+				<subreportExpression><![CDATA[$P{P_ENCABEZADO}]]></subreportExpression>
+			</subreport>
+		</band>
+	</title>
+	<columnHeader>
+		<band height="24" splitType="Stretch">
+			<printWhenExpression><![CDATA[$P{P_AVISO} == null]]></printWhenExpression>
+			<staticText>
+				<reportElement style="Titulo" x="0" y="8" width="56" height="16"/>
+				<text><![CDATA[Fecha]]></text>
+			</staticText>
+			<staticText>
+				<reportElement style="Titulo" x="56" y="8" width="66" height="16"/>
+				<textElement textAlignment="Right"/>
+				<text><![CDATA[Saldo inicial]]></text>
+			</staticText>
+			<staticText>
+				<reportElement style="Titulo" x="122" y="8" width="62" height="16"/>
+				<textElement textAlignment="Right"/>
+				<text><![CDATA[Ministraciones]]></text>
+			</staticText>
+			<staticText>
+				<reportElement style="Titulo" x="184" y="8" width="68" height="16"/>
+				<textElement textAlignment="Right"/>
+				<text><![CDATA[Concentraciones]]></text>
+			</staticText>
+			<staticText>
+				<reportElement style="Titulo" x="252" y="8" width="66" height="16"/>
+				<textElement textAlignment="Right"/>
+				<text><![CDATA[Bóveda]]></text>
+			</staticText>
+			<staticText>
+				<reportElement style="Titulo" x="318" y="8" width="62" height="16"/>
+				<textElement textAlignment="Right"/>
+				<text><![CDATA[Dotaciones]]></text>
+			</staticText>
+			<staticText>
+				<reportElement style="Titulo" x="380" y="8" width="64" height="16"/>
+				<textElement textAlignment="Right"/>
+				<text><![CDATA[Ingresos]]></text>
+			</staticText>
+			<staticText>
+				<reportElement style="Titulo" x="444" y="8" width="62" height="16"/>
+				<textElement textAlignment="Right"/>
+				<text><![CDATA[Egresos]]></text>
+			</staticText>
+			<staticText>
+				<reportElement style="Titulo" x="506" y="8" width="64" height="16"/>
+				<textElement textAlignment="Right"/>
+				<text><![CDATA[Recolección]]></text>
+			</staticText>
+			<staticText>
+				<reportElement style="Titulo" x="570" y="8" width="50" height="16"/>
+				<textElement textAlignment="Right"/>
+				<text><![CDATA[Diferencia]]></text>
+			</staticText>
+			<staticText>
+				<reportElement style="Titulo" x="620" y="8" width="14" height="16"/>
+				<text><![CDATA[]]></text>
+			</staticText>
+			<staticText>
+				<reportElement style="Titulo" x="634" y="8" width="66" height="16"/>
+				<textElement textAlignment="Right"/>
+				<text><![CDATA[Saldo final]]></text>
+			</staticText>
+			<staticText>
+				<reportElement style="Titulo" x="700" y="8" width="52" height="16"/>
+				<textElement textAlignment="Center"/>
+				<text><![CDATA[Estado]]></text>
+			</staticText>
+		</band>
+	</columnHeader>
+	<detail>
+		<band height="13" splitType="Prevent">
+			<printWhenExpression><![CDATA["DIA".equals($F{tipo})]]></printWhenExpression>
+			<textField isBlankWhenNull="true">
+				<reportElement style="Celda" x="0" y="0" width="56" height="13"/>
+				<textFieldExpression><![CDATA[$F{concepto}]]></textFieldExpression>
+			</textField>
+			<textField pattern="#,##0.00;-#,##0.00" isBlankWhenNull="true">
+				<reportElement style="Celda" x="56" y="0" width="66" height="13"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$F{saldoInicial}]]></textFieldExpression>
+			</textField>
+			<textField pattern="#,##0.00;-#,##0.00" isBlankWhenNull="true">
+				<reportElement style="Celda" x="122" y="0" width="62" height="13"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$F{ministraciones}]]></textFieldExpression>
+			</textField>
+			<textField pattern="#,##0.00;-#,##0.00" isBlankWhenNull="true">
+				<reportElement style="Celda" x="184" y="0" width="68" height="13"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$F{concentraciones}]]></textFieldExpression>
+			</textField>
+			<textField pattern="#,##0.00;-#,##0.00" isBlankWhenNull="true">
+				<reportElement style="Celda" x="252" y="0" width="66" height="13"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$F{boveda}]]></textFieldExpression>
+			</textField>
+			<textField pattern="#,##0.00;-#,##0.00" isBlankWhenNull="true">
+				<reportElement style="Celda" x="318" y="0" width="62" height="13"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$F{dotaciones}]]></textFieldExpression>
+			</textField>
+			<textField pattern="#,##0.00;-#,##0.00" isBlankWhenNull="true">
+				<reportElement style="Celda" x="380" y="0" width="64" height="13"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$F{ingresos}]]></textFieldExpression>
+			</textField>
+			<textField pattern="#,##0.00;-#,##0.00" isBlankWhenNull="true">
+				<reportElement style="Celda" x="444" y="0" width="62" height="13"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$F{egresos}]]></textFieldExpression>
+			</textField>
+			<textField pattern="#,##0.00;-#,##0.00" isBlankWhenNull="true">
+				<reportElement style="Celda" x="506" y="0" width="64" height="13"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$F{recolecciones}]]></textFieldExpression>
+			</textField>
+			<textField pattern="#,##0.00;-#,##0.00" isBlankWhenNull="true">
+				<reportElement style="Celda" x="570" y="0" width="50" height="13"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$F{diferencia}]]></textFieldExpression>
+			</textField>
+			<textField isBlankWhenNull="true">
+				<reportElement style="Celda" x="620" y="0" width="14" height="13"/>
+				<textElement textAlignment="Center"/>
+				<textFieldExpression><![CDATA[$F{marca}]]></textFieldExpression>
+			</textField>
+			<textField pattern="#,##0.00;-#,##0.00" isBlankWhenNull="true">
+				<reportElement style="Celda" x="634" y="0" width="66" height="13"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$F{saldoFinal}]]></textFieldExpression>
+			</textField>
+			<textField isBlankWhenNull="true">
+				<reportElement style="Celda" x="700" y="0" width="52" height="13" forecolor="#B35C00"/>
+				<textElement textAlignment="Center"><font size="7" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$F{estado}]]></textFieldExpression>
+			</textField>
+		</band>
+		<band height="16" splitType="Prevent">
+			<printWhenExpression><![CDATA["TOTAL".equals($F{tipo})]]></printWhenExpression>
+			<textField isBlankWhenNull="true">
+				<reportElement style="Total" x="0" y="0" width="56" height="16"/>
+				<textFieldExpression><![CDATA[$F{concepto}]]></textFieldExpression>
+			</textField>
+			<staticText>
+				<reportElement style="Total" x="56" y="0" width="66" height="16"/>
+				<text><![CDATA[]]></text>
+			</staticText>
+			<textField pattern="#,##0.00;-#,##0.00" isBlankWhenNull="true">
+				<reportElement style="Total" x="122" y="0" width="62" height="16"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$F{ministraciones}]]></textFieldExpression>
+			</textField>
+			<textField pattern="#,##0.00;-#,##0.00" isBlankWhenNull="true">
+				<reportElement style="Total" x="184" y="0" width="68" height="16"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$F{concentraciones}]]></textFieldExpression>
+			</textField>
+			<staticText>
+				<reportElement style="Total" x="252" y="0" width="66" height="16"/>
+				<text><![CDATA[]]></text>
+			</staticText>
+			<textField pattern="#,##0.00;-#,##0.00" isBlankWhenNull="true">
+				<reportElement style="Total" x="318" y="0" width="62" height="16"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$F{dotaciones}]]></textFieldExpression>
+			</textField>
+			<textField pattern="#,##0.00;-#,##0.00" isBlankWhenNull="true">
+				<reportElement style="Total" x="380" y="0" width="64" height="16"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$F{ingresos}]]></textFieldExpression>
+			</textField>
+			<textField pattern="#,##0.00;-#,##0.00" isBlankWhenNull="true">
+				<reportElement style="Total" x="444" y="0" width="62" height="16"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$F{egresos}]]></textFieldExpression>
+			</textField>
+			<textField pattern="#,##0.00;-#,##0.00" isBlankWhenNull="true">
+				<reportElement style="Total" x="506" y="0" width="64" height="16"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$F{recolecciones}]]></textFieldExpression>
+			</textField>
+			<textField pattern="#,##0.00;-#,##0.00" isBlankWhenNull="true">
+				<reportElement style="Total" x="570" y="0" width="50" height="16"/>
+				<textElement textAlignment="Right"/>
+				<textFieldExpression><![CDATA[$F{diferencia}]]></textFieldExpression>
+			</textField>
+			<textField isBlankWhenNull="true">
+				<reportElement style="Total" x="620" y="0" width="80" height="16"/>
+				<textFieldExpression><![CDATA[$F{marca}]]></textFieldExpression>
+			</textField>
+			<staticText>
+				<reportElement style="Total" x="700" y="0" width="52" height="16"/>
+				<text><![CDATA[]]></text>
+			</staticText>
+		</band>
+		<band height="12" splitType="Prevent">
+			<printWhenExpression><![CDATA["NOTA".equals($F{tipo})]]></printWhenExpression>
+			<textField isBlankWhenNull="true">
+				<reportElement x="0" y="1" width="752" height="11" forecolor="#6C757D"/>
+				<box leftPadding="2"/>
+				<textElement><font size="7" isItalic="true" pdfFontName="Helvetica-Oblique"/></textElement>
+				<textFieldExpression><![CDATA[$F{concepto}]]></textFieldExpression>
+			</textField>
+		</band>
+	</detail>
+	<pageFooter>
+		<band height="16" splitType="Stretch">
+			<textField isBlankWhenNull="true">
+				<reportElement x="0" y="4" width="600" height="12"/>
+				<textElement><font size="7"/></textElement>
+				<textFieldExpression><![CDATA["Reporte mensual de corte de caja - " + $P{P_MES}]]></textFieldExpression>
+			</textField>
+			<textField>
+				<reportElement x="600" y="4" width="122" height="12"/>
+				<textElement textAlignment="Right"><font size="7"/></textElement>
+				<textFieldExpression><![CDATA["Página " + $V{PAGE_NUMBER} + " de"]]></textFieldExpression>
+			</textField>
+			<textField evaluationTime="Report">
+				<reportElement x="722" y="4" width="30" height="12"/>
+				<textElement><font size="7"/></textElement>
+				<textFieldExpression><![CDATA[" " + $V{PAGE_NUMBER}]]></textFieldExpression>
+			</textField>
+		</band>
+	</pageFooter>
+	<summary>
+		<band height="52" splitType="Stretch">
+			<printWhenExpression><![CDATA[$P{P_AVISO} != null]]></printWhenExpression>
+			<textField isBlankWhenNull="true">
+				<reportElement mode="Opaque" x="0" y="12" width="752" height="18" backcolor="#FFF8E6"/>
+				<box topPadding="3" leftPadding="6" rightPadding="6">
+					<topPen lineWidth="0.75" lineColor="#F0C36D"/>
+					<leftPen lineWidth="3" lineColor="#F0C36D"/>
+					<rightPen lineWidth="0.75" lineColor="#F0C36D"/>
+				</box>
+				<textElement><font size="10" isBold="true" pdfFontName="Helvetica-Bold"/></textElement>
+				<textFieldExpression><![CDATA[$P{P_AVISO_TITULO}]]></textFieldExpression>
+			</textField>
+			<textField textAdjust="StretchHeight" isBlankWhenNull="true">
+				<reportElement positionType="Float" mode="Opaque" x="0" y="30" width="752" height="20" backcolor="#FFF8E6"/>
+				<box topPadding="2" leftPadding="6" bottomPadding="5" rightPadding="6">
+					<leftPen lineWidth="3" lineColor="#F0C36D"/>
+					<bottomPen lineWidth="0.75" lineColor="#F0C36D"/>
+					<rightPen lineWidth="0.75" lineColor="#F0C36D"/>
+				</box>
+				<textFieldExpression><![CDATA[$P{P_AVISO}]]></textFieldExpression>
+			</textField>
+		</band>
+	</summary>
+</jasperReport>

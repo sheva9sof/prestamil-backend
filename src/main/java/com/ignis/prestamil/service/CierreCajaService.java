@@ -34,6 +34,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.stream.Collectors;
 
 /**
@@ -212,6 +213,39 @@ public class CierreCajaService {
     }
 
     /**
+     * Días pendientes de cierre de un periodo, para marcarlos en el mensual (REP-06). Es la misma regla que
+     * {@link #diaPendiente}: ya pasaron, tuvieron movimientos de caja o traspasos y no los congeló ningún
+     * cierre. Sin arranque capturado por Sistemas no hay días pendientes.
+     *
+     * @param sucursalId sucursal
+     * @param desde      primer día del periodo (inclusivo)
+     * @param hasta      último día del periodo (inclusivo)
+     * @return los días pendientes del periodo, en orden
+     */
+    @Transactional(readOnly = true)
+    public Set<LocalDate> diasPendientes(Integer sucursalId, LocalDate desde, LocalDate hasta) {
+        Optional<CajaArranque> arranque = cajaArranqueRepository.findById(sucursalId)
+                .filter(a -> Boolean.TRUE.equals(a.getConfirmado()));
+        if (arranque.isEmpty()) {
+            return Set.of();
+        }
+        // Del primer día sin congelar hasta ayer: hoy sigue abierto
+        LocalDate inicio = primerDiaSinCongelar(arranque.get());
+        if (inicio.isBefore(desde)) {
+            inicio = desde;
+        }
+        LocalDate ayer = LocalDate.now(clock).minusDays(1);
+        LocalDate fin = hasta.isBefore(ayer) ? hasta : ayer;
+        if (inicio.isAfter(fin)) {
+            return Set.of();
+        }
+        Set<LocalDate> pendientes = new TreeSet<>(movimientoCajaRepository.diasConFlujos(sucursalId,
+                inicio.atStartOfDay(), fin.plusDays(1).atStartOfDay()));
+        pendientes.addAll(traspasoCajaRepository.diasConTraspasos(sucursalId, inicio, fin.plusDays(1)));
+        return pendientes;
+    }
+
+    /**
      * Valida que se pueda abrir turno (B-04): ni hoy está cerrado ni hay un día pendiente. Se llama antes
      * de abrir el turno; el pase de almoneda no depende de esto (corre al arrancar y a las 00:05).
      *
@@ -313,11 +347,15 @@ public class CierreCajaService {
 
     /** Primer día con movimientos sin cerrar antes de {@code hasta} (exclusivo). */
     private Optional<LocalDate> primerDiaPorCerrar(Integer sucursalId, CajaArranque arranque, LocalDate hasta) {
-        LocalDate desde = arranque.getFechaUltimoCierre() != null
+        return primerDiaConMovimientos(sucursalId, primerDiaSinCongelar(arranque), hasta);
+    }
+
+    /** El día siguiente al último cierre o, si todavía no hay cierres, el de arranque. */
+    private static LocalDate primerDiaSinCongelar(CajaArranque arranque) {
+        return arranque.getFechaUltimoCierre() != null
                 && !arranque.getFechaUltimoCierre().isBefore(arranque.getFechaArranque())
                 ? arranque.getFechaUltimoCierre().plusDays(1)
                 : arranque.getFechaArranque();
-        return primerDiaConMovimientos(sucursalId, desde, hasta);
     }
 
     /** Primer día del periodo con flujos de caja o traspasos; {@code hasta} es exclusivo. */

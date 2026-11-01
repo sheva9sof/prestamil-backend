@@ -88,4 +88,19 @@ public interface TraspasoCajaRepository extends BaseRepository<TraspasoCaja, Lon
     LocalDate primerDiaConTraspasos(@Param("sucursalId") Integer sucursalId,
                                     @Param("desde") LocalDate desde,
                                     @Param("hasta") LocalDate hasta);
+
+    /**
+     * Días de un periodo con traspasos de la sucursal, de cualquier estatus (días pendientes del mensual,
+     * REP-06), con el mismo criterio que {@link #primerDiaConTraspasos}.
+     *
+     * @param sucursalId identificador de la sucursal
+     * @param desde      primer día (inclusivo)
+     * @param hasta      último día (exclusivo)
+     * @return los días con al menos un traspaso, sin repetir
+     */
+    @Query("SELECT DISTINCT t.fechaOperacion FROM TraspasoCaja t "
+            + "WHERE t.sucursalId = :sucursalId AND t.fechaOperacion >= :desde AND t.fechaOperacion < :hasta")
+    List<LocalDate> diasConTraspasos(@Param("sucursalId") Integer sucursalId,
+                                     @Param("desde") LocalDate desde,
+                                     @Param("hasta") LocalDate hasta);
 }
