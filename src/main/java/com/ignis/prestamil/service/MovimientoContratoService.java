@@ -31,6 +31,7 @@ import com.ignis.prestamil.service.calculo.SituacionPeriodos;
 import com.ignis.prestamil.util.NumeroALetras;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -512,7 +513,17 @@ public class MovimientoContratoService {
      * @throws ForbiddenException        si el rol del usuario no puede cancelar
      * @throws ResourceNotFoundException si el movimiento o el usuario no existen
      */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public MovimientoResponse cancelar(Long movimientoId, CancelarMovimientoRequest request, String username) {
+        // Bloqueo del contrato antes de validar y revertir, como en los cobros y el pase de almoneda:
+        // si otro cobro o cancelación del mismo contrato está en curso, se espera a su commit y se
+        // valida contra lo que dejó. READ COMMITTED porque para saber qué contrato bloquear hay que
+        // leer antes; en REPEATABLE READ esa lectura fijaría la foto de la transacción y el
+        // movimiento y "el último del contrato" se leerían de antes del otro commit.
+        Long contratoId = movimientoRepository.findContratoIdById(movimientoId)
+                .orElseThrow(() -> new ResourceNotFoundException("Movimiento no encontrado: " + movimientoId));
+        Contrato contrato = contratoRepository.findWithLockById(contratoId)
+                .orElseThrow(() -> new ResourceNotFoundException("Contrato no encontrado: " + contratoId));
         MovimientoContrato mov = movimientoRepository.findById(movimientoId)
                 .orElseThrow(() -> new ResourceNotFoundException("Movimiento no encontrado: " + movimientoId));
 
@@ -542,7 +553,6 @@ public class MovimientoContratoService {
 
         // RN-26 + C-03: solo el último no cancelado del contrato, ignorando los RE (una reposición
         // posterior no debe bloquear la cancelación del EMP u otro movimiento previo).
-        Contrato contrato = mov.getContrato();
         MovimientoContrato ultimo = movimientoRepository
                 .findFirstByContratoIdAndCanceladoFalseAndTipoNotOrderByFechaDescIdDesc(
                         contrato.getId(), TipoMovimiento.RE)

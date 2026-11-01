@@ -122,6 +122,9 @@ class MovimientoContratoServiceTest {
         lenient().when(parametrosSistemaCache.isReposicionIncluyeIva()).thenReturn(true);
         lenient().when(movimientoRepository.save(any(MovimientoContrato.class))).thenAnswer(inv -> inv.getArgument(0));
         lenient().when(movimientoRepository.findByRequestId(any())).thenReturn(Optional.empty());
+        // cancelar() bloquea el contrato antes de leer el movimiento: el contrato sale del movimiento sembrado
+        lenient().when(movimientoRepository.findContratoIdById(any())).thenAnswer(inv ->
+                movimientoRepository.findById(inv.getArgument(0)).map(m -> m.getContrato().getId()));
 
         // La sucursal ya emitió notas: la siguiente es la 27323 (numeración de COCAE)
         folio = new FolioNota();
@@ -2179,6 +2182,24 @@ class MovimientoContratoServiceTest {
 
             assertThatThrownBy(() -> service.cancelar(203L, motivo("Motivo suficiente aquí"), "gerente1"))
                     .isInstanceOf(BadRequestException.class);
+        }
+
+        /** C-10: el contrato se bloquea antes de leer el movimiento, así se valida contra lo ya confirmado. */
+        @Test
+        void cancelar_bloqueaElContratoAntesDeLeerElMovimiento() {
+            contratoC2();
+            gerentePorDefecto();
+            MovimientoContrato rf = registrarMovimiento(TipoOperacion.REFRENDO, "95.92", "req-rf-lock");
+            rf.setId(205L);
+            ultimoMovimiento(42L, rf);
+            org.mockito.Mockito.clearInvocations(contratoRepository, movimientoRepository);
+
+            service.cancelar(205L, motivo("Se capturó el plazo equivocado"), "gerente1");
+
+            org.mockito.InOrder orden = org.mockito.Mockito.inOrder(movimientoRepository, contratoRepository);
+            orden.verify(movimientoRepository).findContratoIdById(205L);
+            orden.verify(contratoRepository).findWithLockById(42L);
+            orden.verify(movimientoRepository).findById(205L);
         }
 
         @Test
