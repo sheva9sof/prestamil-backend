@@ -16,6 +16,7 @@ import com.ignis.prestamil.repository.PaseAlmonedaDetalleRepository;
 import com.ignis.prestamil.repository.PaseAlmonedaRepository;
 import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.SucursalRepository;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -31,7 +32,9 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -62,18 +65,23 @@ class PaseAlmonedaServiceTest {
     @Mock SucursalRepository sucursalRepository;
     @Mock SucursalService sucursalService;
     @Mock PlatformTransactionManager transactionManager;
+    @Mock EntityManager entityManager;
 
     PaseAlmonedaService service;
+    // Lo que devuelve la relectura con bloqueo: por defecto, el mismo contrato de la preseleccion
+    private final Map<Long, Contrato> enBaseDeDatos = new HashMap<>();
 
     @BeforeEach
     void setUp() {
         Clock clock = Clock.fixed(AHORA.atZone(ZONA).toInstant(), ZONA);
         service = new PaseAlmonedaService(contratoRepository, movimientoContratoRepository,
                 paseAlmonedaRepository, paseAlmonedaDetalleRepository, plazoParametroRepository,
-                sucursalRepository, sucursalService, clock, transactionManager);
+                sucursalRepository, sucursalService, entityManager, clock, transactionManager);
         // El servicio toma la bitacora recien guardada y la usa para FK en pase_almoneda_detalle
         lenient().when(paseAlmonedaRepository.save(any(PaseAlmoneda.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
+        lenient().when(contratoRepository.findWithLockById(any()))
+                .thenAnswer(inv -> Optional.ofNullable(enBaseDeDatos.get(inv.<Long>getArgument(0))));
     }
 
     private PartidaContrato partida(long id, int num, String descripcion) {
@@ -103,6 +111,7 @@ class PaseAlmonedaServiceTest {
         c.setNumRefrendos(0);
         c.setSnapDiasGraciaSancion(DIAS_GRACIA);
         c.setPartidas(new ArrayList<>());
+        enBaseDeDatos.put(id, c);
         return c;
     }
 
@@ -271,6 +280,42 @@ class PaseAlmonedaServiceTest {
         verify(contratoRepository, never()).findByEstatusOrderByFechaVencimientoAsc(EstatusContrato.FINIQUITADO);
         verify(contratoRepository, never()).save(any());
         verify(movimientoContratoRepository, never()).save(any());
+    }
+
+    // =========================================================================
+    // Relectura con bloqueo (C-10)
+    // =========================================================================
+
+    @Test
+    void ejecutar_releeBloqueadoAntesDeCambiar_ySoloLosQueLasFechasMandanMover() {
+        Contrato enGracia = contrato(110L, EstatusContrato.VIGENTE, 1);
+        Contrato aVenta = contrato(111L, EstatusContrato.VENCIDO, DIAS_A_COMERCIALIZACION);
+        mockCandidatos(List.of(enGracia), List.of(aVenta));
+
+        service.ejecutar(SUCURSAL, HOY);
+
+        // La preseleccion se saca del contexto de persistencia antes de releer; el que no cambia ni se relee
+        InOrder orden = inOrder(entityManager, contratoRepository);
+        orden.verify(entityManager).detach(aVenta);
+        orden.verify(contratoRepository).findWithLockById(111L);
+        orden.verify(contratoRepository).save(aVenta);
+        verify(contratoRepository, never()).findWithLockById(110L);
+    }
+
+    @Test
+    void ejecutar_contratoRefrendadoDuranteElPase_seOmiteSinPvNiDetalle() {
+        // La preseleccion lo ve VENCIDO y en fecha de venta; al releerlo ya lo refrendaron
+        Contrato preseleccion = contrato(112L, EstatusContrato.VENCIDO, DIAS_A_COMERCIALIZACION);
+        Contrato refrendado = contrato(112L, EstatusContrato.VIGENTE, -28);
+        mockCandidatos(List.of(), List.of(preseleccion));
+
+        service.ejecutar(SUCURSAL, HOY);
+
+        assertThat(refrendado.getEstatus()).isEqualTo(EstatusContrato.VIGENTE);
+        verify(contratoRepository, never()).save(any());
+        verify(movimientoContratoRepository, never()).save(any());
+        verify(paseAlmonedaDetalleRepository, never()).save(any());
+        assertThat(ultimaBitacora().getContratosAVenta()).isZero();
     }
 
     // =========================================================================

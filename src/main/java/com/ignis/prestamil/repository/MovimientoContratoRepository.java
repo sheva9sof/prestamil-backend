@@ -2,6 +2,8 @@ package com.ignis.prestamil.repository;
 
 import com.ignis.prestamil.model.MovimientoContrato;
 import com.ignis.prestamil.model.TipoMovimiento;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
@@ -19,6 +21,16 @@ public interface MovimientoContratoRepository extends BaseRepository<MovimientoC
      * @return lista de movimientos del más antiguo al más reciente
      */
     List<MovimientoContrato> findByContratoIdOrderByFechaAsc(Long contratoId);
+
+    /**
+     * Contrato al que pertenece un movimiento, sin cargar el movimiento. La cancelación lo usa para
+     * bloquear el contrato antes de leer el movimiento.
+     *
+     * @param id identificador del movimiento
+     * @return el id del contrato, o vacío si el movimiento no existe
+     */
+    @Query("select m.contrato.id from MovimientoContrato m where m.id = :id")
+    Optional<Long> findContratoIdById(@Param("id") Long id);
 
     /**
      * Último movimiento vigente (no cancelado) de un contrato.

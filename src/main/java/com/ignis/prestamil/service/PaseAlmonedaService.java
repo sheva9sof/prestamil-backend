@@ -20,6 +20,7 @@ import com.ignis.prestamil.repository.PlazoParametroRepository;
 import com.ignis.prestamil.repository.SucursalRepository;
 import com.ignis.prestamil.service.calculo.EstatusContratoResolver;
 import com.ignis.prestamil.util.Constantes;
+import jakarta.persistence.EntityManager;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -65,6 +66,7 @@ public class PaseAlmonedaService {
     private final PlazoParametroRepository plazoParametroRepository;
     private final SucursalRepository sucursalRepository;
     private final SucursalService sucursalService;
+    private final EntityManager entityManager;
     private final Clock clock;
     // Un dia = una transaccion propia (REQUIRES_NEW): si un dia falla, los anteriores quedan
     // guardados, y abrir turno no se cae por un error del pase.
@@ -77,6 +79,7 @@ public class PaseAlmonedaService {
                                PlazoParametroRepository plazoParametroRepository,
                                SucursalRepository sucursalRepository,
                                SucursalService sucursalService,
+                               EntityManager entityManager,
                                Clock clock,
                                PlatformTransactionManager transactionManager) {
         this.contratoRepository = contratoRepository;
@@ -86,6 +89,7 @@ public class PaseAlmonedaService {
         this.plazoParametroRepository = plazoParametroRepository;
         this.sucursalRepository = sucursalRepository;
         this.sucursalService = sucursalService;
+        this.entityManager = entityManager;
         this.clock = clock;
         this.transaccionPorDia = new TransactionTemplate(transactionManager);
         this.transaccionPorDia.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
@@ -141,6 +145,11 @@ public class PaseAlmonedaService {
      * Debe correr dentro de una transaccion: bloquea la fila de la sucursal hasta el commit para que
      * una segunda ejecucion simultanea espere y luego vea el dia ya registrado.
      *
+     * <p>La operacion no se detiene mientras corre: los cobros validan el estatus por fechas, asi que
+     * da igual si el pase del dia ya se aplico. Lo que si se cuida es no pisar un cobro que se hizo a
+     * mitad del pase: cada contrato que las fechas mandan cambiar se relee bloqueado antes de tocarlo
+     * (ver {@link #releerConBloqueo}).</p>
+     *
      * @param sucursalId sucursal donde se corre
      * @param fecha      dia del pase; el estatus de cada contrato se calcula contra esta fecha
      * @return {@code true} si corrio, {@code false} si ese dia ya tenia pase
@@ -171,11 +180,19 @@ public class PaseAlmonedaService {
         int aVenta = 0;
         BigDecimal montoPasadoAVenta = BigDecimal.ZERO;
 
-        for (Contrato contrato : candidatos) {
-            if (!sucursalId.equals(contrato.getSucursalId())) {
+        for (Contrato candidato : candidatos) {
+            if (!sucursalId.equals(candidato.getSucursalId())) {
                 continue;
             }
-            if (!ESTATUS_CANDIDATOS.contains(contrato.getEstatus())) {
+            if (!requiereCambio(candidato, fecha)) {
+                continue;
+            }
+            // La lista de arriba es solo preseleccion: se leyo sin bloqueo y un cobro pudo cambiar el
+            // contrato despues. Se relee bloqueado y se vuelve a decidir con los datos frescos.
+            Contrato contrato = releerConBloqueo(candidato);
+            if (contrato == null || !requiereCambio(contrato, fecha)) {
+                log.info("Pase de almoneda del {}: el contrato {} cambio durante el pase; se omite",
+                        fecha, candidato.getFolio());
                 continue;
             }
             EstatusOperativo deseado = estatusDerivadoPorFecha(contrato, fecha);
@@ -209,6 +226,38 @@ public class PaseAlmonedaService {
         bitacora.setMontoPasadoAVenta(montoPasadoAVenta);
         paseAlmonedaRepository.save(bitacora);
         return true;
+    }
+
+    /**
+     * ¿Las fechas piden mover hoy el contrato? VIGENTE a VENCIDO, o VIGENTE/VENCIDO a EN_VENTA. Un
+     * contrato en cualquier otro estatus (finiquitado, cancelado, ya en venta) no se toca.
+     */
+    private boolean requiereCambio(Contrato contrato, LocalDate fecha) {
+        EstatusContrato origen = contrato.getEstatus();
+        if (!ESTATUS_CANDIDATOS.contains(origen)) {
+            return false;
+        }
+        EstatusOperativo deseado = estatusDerivadoPorFecha(contrato, fecha);
+        return deseado == EstatusOperativo.EN_VENTA
+                || (origen == EstatusContrato.VIGENTE && deseado == EstatusOperativo.VENCIDO);
+    }
+
+    /**
+     * Relee el contrato con {@code SELECT ... FOR UPDATE}, el mismo bloqueo que toman los cobros y las
+     * cancelaciones. La preseleccion se lee sin bloqueo, y si en ese lapso un cajero refrenda,
+     * finiquita o cancela, guardar la copia vieja pisaria el cobro: Hibernate actualiza todas las
+     * columnas y regresaria el vencimiento y el saldo anteriores, ademas de poner EN_VENTA y un PV.
+     * Con el bloqueo, un cobro en curso termina antes de que el pase decida, y uno que llega despues
+     * espera al commit del pase y valida contra el estatus ya persistido.
+     *
+     * <p>El candidato se saca del contexto de persistencia antes de releer: si siguiera ahi, Hibernate
+     * bloquearia la fila pero devolveria la misma instancia con los datos de la preseleccion.</p>
+     *
+     * @return el contrato fresco y bloqueado hasta el commit del dia, o {@code null} si ya no existe
+     */
+    private Contrato releerConBloqueo(Contrato candidato) {
+        entityManager.detach(candidato);
+        return contratoRepository.findWithLockById(candidato.getId()).orElse(null);
     }
 
     /**
