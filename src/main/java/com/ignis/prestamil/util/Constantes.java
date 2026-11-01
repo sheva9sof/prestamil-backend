@@ -64,10 +64,15 @@ public class Constantes {
     // Captura del saldo de arranque de caja y de los últimos folios de COCAE (CAJ-06, B-04). Por defecto solo
     // Sistemas (1), una sola vez por sucursal.
     public static final String ROLES_PERMITIDOS_ARRANQUE_CAJA = "ROLES_PERMITIDOS_ARRANQUE_CAJA";
+    // Reporte mensual de corte de caja (REP-06). CSV de ids de rol; por defecto Gerente (5) y Sistemas (1).
+    // El cajero no lo ve (403).
+    public static final String ROLES_PERMITIDOS_CORTE_CAJA_MENSUAL = "ROLES_PERMITIDOS_CORTE_CAJA_MENSUAL";
     public static final String NOMBRE_MENU_TURNO = "Turnos";
     // Menús que gerente y Sistemas conservan sin turno abierto: el día se cierra sin turno, y un día
-    // pendiente impide abrirlo hasta que Sistemas lo cierre (CAJ-06, B-04).
-    public static final List<String> NOMBRES_MENU_CIERRE_CAJA = List.of("Caja", "Corte de caja", "Arranque de caja");
+    // pendiente impide abrirlo hasta que Sistemas lo cierre (CAJ-06, B-04). El mensual (REP-06) se revisa
+    // igual sin turno.
+    public static final List<String> NOMBRES_MENU_CIERRE_CAJA = List.of("Caja", "Corte de caja", "Arranque de caja",
+            "Corte de caja mensual");
 
     // Contratos
     // D-09 / Q4: mínimo de caracteres de la descripción específica de cada partida (supuesto: 10,

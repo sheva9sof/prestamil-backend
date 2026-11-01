@@ -66,5 +66,6 @@
     <include file="db/changelog/changes/084-saldo-arranque-caja.sql"/>
     <include file="db/changelog/changes/085-corte-caja-pantalla.sql"/>
     <include file="db/changelog/changes/086-caja-arranque-cierre-diario.sql"/>
+    <include file="db/changelog/changes/087-corte-caja-mensual.sql"/>
 
 </databaseChangeLog>

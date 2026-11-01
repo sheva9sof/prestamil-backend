@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -40,4 +41,18 @@ public interface MovimientoCajaRepository extends BaseRepository<MovimientoCaja,
     LocalDateTime primerFlujo(@Param("sucursalId") Integer sucursalId,
                               @Param("desde") LocalDateTime desde,
                               @Param("hasta") LocalDateTime hasta);
+
+    /**
+     * Días de un periodo con flujos de caja de la sucursal (días pendientes del mensual, REP-06).
+     *
+     * @param sucursalId identificador de la sucursal
+     * @param desde      inicio del periodo (inclusivo)
+     * @param hasta      fin del periodo (exclusivo)
+     * @return los días con al menos un flujo, sin repetir
+     */
+    @Query("SELECT DISTINCT CAST(m.fecha AS LocalDate) FROM MovimientoCaja m "
+            + "WHERE m.sucursalId = :sucursalId AND m.fecha >= :desde AND m.fecha < :hasta")
+    List<LocalDate> diasConFlujos(@Param("sucursalId") Integer sucursalId,
+                                  @Param("desde") LocalDateTime desde,
+                                  @Param("hasta") LocalDateTime hasta);
 }
